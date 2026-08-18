@@ -38,6 +38,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   >('L5_DESC');
   const [maxMatchDate, setMaxMatchDate] = useState<string>('');
   const [minWinProb, setMinWinProb] = useState<number>(0);
+  const [minProjectedScore, setMinProjectedScore] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -102,9 +103,15 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         matchesStars = getPlayerStars(card) === Number(selectedStarsFilter);
       }
 
-      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars;
+      let matchesScore = true;
+      if (minProjectedScore > 0) {
+        const { projectedScore } = calculatePlayerProjectedScore(card);
+        matchesScore = projectedScore >= minProjectedScore;
+      }
+
+      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore;
     });
-  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb]);
+  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
@@ -395,8 +402,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               type="date"
               value={maxMatchDate}
               onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 pr-8 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
-              title="Match jusqu'à cette date (incluse)"
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
+              title="Match inclus jusqu'à cette date"
             />
             {maxMatchDate && (
               <button
@@ -423,6 +430,22 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <option value="3" className="text-amber-400">★★★☆☆ (3 Étoiles)</option>
               <option value="2" className="text-amber-400">★★☆☆☆ (2 Étoiles)</option>
               <option value="1" className="text-amber-400">★☆☆☆☆ (1 Étoile)</option>
+            </select>
+          </div>
+
+          {/* Projected Score Filter */}
+          <div>
+            <select
+              value={minProjectedScore}
+              onChange={(e) => { setMinProjectedScore(Number(e.target.value)); setCurrentPage(1); }}
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
+            >
+              <option value={0}>Tous les scores</option>
+              <option value={30}>&ge; 30 pts projetés</option>
+              <option value={40}>&ge; 40 pts projetés</option>
+              <option value={50}>&ge; 50 pts projetés</option>
+              <option value={60}>&ge; 60 pts projetés</option>
+              <option value={70}>&ge; 70 pts projetés</option>
             </select>
           </div>
 
@@ -502,7 +525,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
 
         {/* Filter Badges Active */}
-        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL') && (
+        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0) && (
           <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/60">
             <span className="text-[11px] text-slate-400">Filtres actifs :</span>
             {maxMatchDate && (
@@ -514,6 +537,11 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400 flex items-center gap-1">
                 <Star className="h-2.5 w-2.5 text-amber-400 fill-amber-400" />
                 {selectedStarsFilter} Étoile{Number(selectedStarsFilter) > 1 ? 's' : ''}
+              </span>
+            )}
+            {minProjectedScore > 0 && (
+              <span className="rounded-md bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
+                Score &ge; {minProjectedScore}
               </span>
             )}
             {selectedBonusTier !== 'ALL' && (
@@ -537,6 +565,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 setSelectedRarity('ALL');
                 setSelectedBonusTier('ALL');
                 setSelectedStarsFilter('ALL');
+                setMinProjectedScore(0);
               }}
               className="text-[10px] font-bold text-slate-400 hover:text-white underline ml-auto"
             >

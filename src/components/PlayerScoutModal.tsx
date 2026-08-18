@@ -446,7 +446,17 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
         {/* Bookmaker & Live Projections Section */}
         {card.upcomingFixture && (() => {
           const bm = card.upcomingFixture.bookmaker;
-          const winProbValue = bm?.win ? (bm.win > 1 ? Math.round((1 / bm.win) * 100) : Math.round(bm.win)) : 50;
+          
+          // Calculate normalized probabilities
+          const invWin = bm?.win ? (1 / bm.win) : 0;
+          const invDraw = bm?.draw ? (1 / bm.draw) : 0;
+          const invLoss = bm?.loss ? (1 / bm.loss) : 0;
+          const sumInv = invWin + invDraw + invLoss;
+          
+          const winProb = sumInv > 0 ? Math.round((invWin / sumInv) * 100) : 0;
+          const drawProb = sumInv > 0 ? Math.round((invDraw / sumInv) * 100) : 0;
+          const lossProb = sumInv > 0 ? Math.round((invLoss / sumInv) * 100) : 0;
+
           const cleanSheetValue = bm?.cleanSheetProb || (card.positionCode === 'GK' || card.positionCode === 'DEF' ? 35 : 25);
           const goalExpValue = bm?.goalExpectancy || 1.45;
           const concededExpValue = Math.max(0.4, Math.round((1.8 - (cleanSheetValue / 45)) * 10) / 10);
@@ -468,9 +478,11 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs text-slate-200 font-medium">
                 {/* Victoire Odds */}
                 <div className="rounded-xl bg-slate-900 p-2.5 border border-slate-800/80 text-center">
-                  <span className="block text-[10px] font-bold text-slate-400 uppercase">Cote Victoire (1N2)</span>
-                  <span className="text-base font-black text-emerald-400 mt-0.5 font-mono">@{bm?.win?.toFixed(2) || '1.95'}</span>
-                  <span className="block text-[9px] text-slate-500 font-semibold">{winProbValue}% prob.</span>
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase">Probas 1N2</span>
+                  <span className="text-base font-black text-emerald-400 mt-0.5 font-mono">
+                    {winProb}% / {drawProb}% / {lossProb}%
+                  </span>
+                  <span className="block text-[9px] text-slate-500 font-semibold">V / N / D</span>
                 </div>
 
                 {/* Goal expectancy / buts marqués */}
