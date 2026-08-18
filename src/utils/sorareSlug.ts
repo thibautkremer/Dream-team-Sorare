@@ -176,3 +176,16 @@ export function getCardTotalBonus(card: SorareCard): number {
   return 0;
 }
 
+/**
+ * Calcule dynamiquement les étoiles d'un joueur (de 1 à 5) selon sa note L15.
+ * Représente la qualité/tier réel du joueur sur Sorare.
+ */
+export function getPlayerStars(card: SorareCard): number {
+  const l15 = card.scores?.l15 || card.scores?.l5 || 0;
+  if (l15 >= 60) return 5;
+  if (l15 >= 50) return 4;
+  if (l15 >= 40) return 3;
+  if (l15 >= 30) return 2;
+  return 1;
+}
+

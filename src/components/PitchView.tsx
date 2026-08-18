@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2 } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
-import { formatPositionBadge, formatStatusBadge } from '../utils/sorareSlug';
+import { formatPositionBadge, formatStatusBadge, getPlayerStars } from '../utils/sorareSlug';
 
 interface PitchViewProps {
   lineup: Lineup;
@@ -114,19 +114,23 @@ export const PitchView: React.FC<PitchViewProps> = ({
     return (
       <div
         onClick={() => onOpenScout(card)}
-        className={`relative flex h-[270px] w-40 sm:h-[300px] sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card ${
+        className={`relative flex h-auto min-h-[300px] sm:min-h-[335px] w-40 sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
           isCaptain
             ? 'border-emerald-400 ring-2 ring-emerald-400/40 bg-gradient-to-b from-emerald-950/50 via-slate-900/90 to-slate-950 shadow-emerald-500/10'
             : 'border-slate-700/70 bg-slate-900/90 hover:border-slate-500'
         }`}
       >
         {/* Card Header Top */}
-        <div className="flex items-center justify-between p-2.5 bg-slate-950/80 border-b border-slate-800/60">
-          <div className="flex items-center gap-1.5">
-            <span className={`flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-black ${posBadge.bg} ${posBadge.text} border ${posBadge.border}`}>
+        <div className="flex items-center justify-between p-2 bg-slate-950/80 border-b border-slate-800/60 gap-1">
+          <div className="flex items-center gap-1 min-w-0">
+            <span className={`flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-black shrink-0 ${posBadge.bg} ${posBadge.text} border ${posBadge.border}`}>
               {card.positionCode}
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            {/* Tiny Star count */}
+            <span className="bg-amber-500/10 text-amber-400 font-extrabold text-[9px] px-1 rounded border border-amber-500/20 shrink-0">
+              {getPlayerStars(card)}★
+            </span>
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
               {slotKey === 'extra' ? 'EXTRA' : slotLabel}
             </span>
           </div>
@@ -138,14 +142,14 @@ export const PitchView: React.FC<PitchViewProps> = ({
               handleCaptainChangeForLineup(targetLineup, slotKey);
             }}
             title={isCaptain ? 'Capitaine actif (+20%)' : 'Nommer Capitaine'}
-            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-black transition-all ${
+            className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-black transition-all shrink-0 ${
               isCaptain
                 ? 'bg-emerald-400 text-slate-950 shadow-md shadow-emerald-400/30 ring-1 ring-emerald-300 scale-105'
                 : 'bg-slate-800/80 text-slate-400 hover:bg-emerald-500/20 hover:text-emerald-300'
             }`}
           >
-            <Crown className="h-3 w-3" />
-            <span>{isCaptain ? 'CAP +20%' : 'C'}</span>
+            <Crown className="h-2.5 w-2.5" />
+            <span>{isCaptain ? 'CAP' : 'C'}</span>
           </button>
         </div>
 
@@ -291,13 +295,50 @@ export const PitchView: React.FC<PitchViewProps> = ({
           <div className="absolute bottom-0 right-0 h-10 w-10 rounded-tl-full border-t-2 border-l-2 border-white"></div>
         </div>
 
-        {/* Pitch Positions Grid - Sorare Style Horizontal Row */}
-        <div className="relative z-10 flex flex-wrap items-center justify-center gap-3 md:gap-4 lg:gap-6 py-4">
-          <div>{renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}</div>
-          <div>{renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}</div>
-          <div>{renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}</div>
-          <div>{renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}</div>
-          <div>{renderPitchCard(targetLineup, 'extra', 'Extra (Joker)', 'EXTRA')}</div>
+        {/* Pitch Positions Grid - Responsive layout (Vertical tactical on Mobile, Horizontal on Desktop) */}
+        <div className="relative z-10 py-4 w-full">
+          {/* Smartphone Vertical Flow (football formation layout) */}
+          <div className="flex md:hidden flex-col items-center gap-6 w-full">
+            {/* Attack: FWD & EXTRA side by side */}
+            <div className="flex justify-center gap-4 w-full">
+              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                {renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}
+              </div>
+              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                {renderPitchCard(targetLineup, 'extra', 'Extra', 'EXTRA')}
+              </div>
+            </div>
+            
+            {/* Midfield: MID */}
+            <div className="flex justify-center w-full">
+              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                {renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}
+              </div>
+            </div>
+            
+            {/* Defense: DEF */}
+            <div className="flex justify-center w-full">
+              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                {renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}
+              </div>
+            </div>
+            
+            {/* Goalkeeper: GK */}
+            <div className="flex justify-center w-full">
+              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                {renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}
+              </div>
+            </div>
+          </div>
+
+          {/* PC / Wide Screen Horizontal Row */}
+          <div className="hidden md:flex flex-row flex-wrap items-center justify-center gap-4 lg:gap-6 w-full">
+            <div>{renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}</div>
+            <div>{renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}</div>
+            <div>{renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}</div>
+            <div>{renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}</div>
+            <div>{renderPitchCard(targetLineup, 'extra', 'Extra (Joker)', 'EXTRA')}</div>
+          </div>
         </div>
 
         {/* Pitch Legend Bottom */}

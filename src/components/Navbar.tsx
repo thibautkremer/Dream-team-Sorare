@@ -60,7 +60,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
+      <div className="w-full flex items-center justify-between px-4 sm:px-6 lg:px-8 py-3">
         
         {/* Logo & Brand */}
         <div className="flex items-center gap-3">
@@ -153,8 +153,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Navigation Sub-bar */}
-      <div className="border-t border-slate-800/60 bg-slate-950/60 px-4 sm:px-6">
-        <div className="mx-auto flex max-w-7xl items-center justify-between overflow-x-auto py-1 scrollbar-none">
+      <div className="border-t border-slate-800/60 bg-slate-950/60 px-4 sm:px-6 lg:px-8">
+        <div className="w-full flex items-center justify-between overflow-x-auto py-1 scrollbar-none">
           <nav className="flex space-x-1 sm:space-x-2">
             
             <button

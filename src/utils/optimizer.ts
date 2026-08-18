@@ -200,16 +200,22 @@ export function isCardMatchOnOrBeforeDate(card: SorareCard, maxDateStr?: string 
  */
 export function getPlayerWinProbability(fixture?: UpcomingFixture | null): number {
   if (!fixture || !fixture.bookmaker) return 50;
-  const win = fixture.bookmaker.win;
-  if (typeof win === 'number') {
-    if (win >= 10) {
-      return Math.min(95, Math.max(5, Math.round(win)));
-    }
-    if (win > 1) {
-      return Math.min(95, Math.max(5, Math.round((1 / win) * 100)));
-    }
+  
+  const { win, draw, loss } = fixture.bookmaker;
+  
+  if (win && draw && loss) {
+    const invWin = 1 / win;
+    const invDraw = 1 / draw;
+    const invLoss = 1 / loss;
+    const sumInv = invWin + invDraw + invLoss;
+    
+    // Normalize to 100%
+    return Math.round((invWin / sumInv) * 100);
   }
-  return 50;
+  
+  // Fallback if odds are incomplete
+  const winOdds = win || 2.0;
+  return Math.round((1 / winOdds) * 100);
 }
 
 /**
@@ -344,9 +350,23 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
   let matchupFactor = 1.0;
   let cleanSheetFactor = 0;
   let matchupImpactLabel = 'Neutre (FDR 3 : 100%)';
+  let difficultyRating = fixture?.difficultyRating || 3;
 
   if (fixture) {
-    switch (fixture.difficultyRating) {
+    const winProb = getPlayerWinProbability(fixture);
+    if (winProb >= 60) {
+      difficultyRating = 1;
+    } else if (winProb >= 48) {
+      difficultyRating = 2;
+    } else if (winProb >= 35) {
+      difficultyRating = 3;
+    } else if (winProb >= 22) {
+      difficultyRating = 4;
+    } else {
+      difficultyRating = 5;
+    }
+
+    switch (difficultyRating) {
       case 1:
         matchupFactor = 1.12;
         matchupImpactLabel = 'Très Favorable (FDR 1 : +12%)';
@@ -446,7 +466,7 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     starterFactor: Math.round(starterFactor * 100) / 100,
     starterImpactLabel,
 
-    difficultyRating: fixture?.difficultyRating || 3,
+    difficultyRating,
     matchupImpactLabel,
     isHome: fixture?.isHome ?? true,
     profileBonus: Math.round(profileBonus * 10) / 10,

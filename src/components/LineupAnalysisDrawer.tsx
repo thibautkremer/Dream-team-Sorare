@@ -11,8 +11,8 @@ export const LineupAnalysisDrawer: React.FC<LineupAnalysisDrawerProps> = ({ line
   const captain = lineup.slots[lineup.captainSlot];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl rounded-3xl border border-slate-700 bg-slate-900 p-6 shadow-2xl my-8">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 p-4 sm:p-6 backdrop-blur-sm flex justify-center items-start sm:items-center">
+      <div className="relative w-full max-w-2xl rounded-3xl border border-slate-700 bg-slate-900 p-5 sm:p-6 shadow-2xl my-4 sm:my-8">
         
         {/* Close Button */}
         <button

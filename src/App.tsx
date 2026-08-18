@@ -411,7 +411,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+      <main className="w-full px-4 py-6 sm:px-6 lg:px-8">
         
         {/* Toast Notification Banner */}
         {toast && (

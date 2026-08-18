@@ -156,8 +156,8 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
       });
     }
 
-    // Sorting
-    return result.sort((a, b) => {
+    // Sorting matchups
+    const sortedResult = result.sort((a, b) => {
       switch (sortBy) {
         case 'DATE_ASC':
           const tA = a.kickoffDate ? new Date(a.kickoffDate).getTime() : 0;
@@ -177,7 +177,33 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           return 0;
       }
     });
-  }, [cards, selectedCompetition, minWinChance, searchQuery, selectedDay, sortBy]);
+
+    // Ordonner les joueurs de chaque match selon leur poste, puis leur score
+    const positionOrder: Record<string, number> = {
+      'GK': 1,
+      'DEF': 2,
+      'MID': 3,
+      'FWD': 4
+    };
+
+    sortedResult.forEach(fixture => {
+      fixture.players.sort((playerA, playerB) => {
+        const orderA = positionOrder[playerA.positionCode] || 99;
+        const orderB = positionOrder[playerB.positionCode] || 99;
+        
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        
+        // Même poste -> Trier par score projeté décroissant
+        const scoreA = calculatePlayerProjectedScore(playerA, strategy).projectedScore;
+        const scoreB = calculatePlayerProjectedScore(playerB, strategy).projectedScore;
+        return scoreB - scoreA;
+      });
+    });
+
+    return sortedResult;
+  }, [cards, selectedCompetition, minWinChance, searchQuery, selectedDay, sortBy, strategy]);
 
   const getFDRBadge = (rating: number) => {
     switch (rating) {

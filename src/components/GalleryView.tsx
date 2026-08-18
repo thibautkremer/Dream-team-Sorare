@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent } from 'lucide-react';
+import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate } from '../utils/optimizer';
-import { formatPositionBadge, formatStatusBadge, getCardTotalBonus } from '../utils/sorareSlug';
+import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
 
 interface GalleryViewProps {
   cards: SorareCard[];
@@ -24,6 +24,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [selectedStatus, setSelectedStatus] = useState<PlayingStatus | 'ALL'>('ALL');
   const [selectedRarity, setSelectedRarity] = useState<string>('ALL');
   const [selectedBonusTier, setSelectedBonusTier] = useState<'ALL' | '0-4' | '5-9' | '10-14' | '15-19' | '20+'>('ALL');
+  const [selectedStarsFilter, setSelectedStarsFilter] = useState<'ALL' | '1' | '2' | '3' | '4' | '5'>('ALL');
   const [sortBy, setSortBy] = useState<
     | 'L5_DESC' | 'L5_ASC'
     | 'L15_DESC'
@@ -33,6 +34,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     | 'NAME_ASC' | 'NAME_DESC'
     | 'CLUB_ASC' | 'CLUB_DESC'
     | 'BONUS_ASC' | 'BONUS_DESC'
+    | 'STARS_DESC' | 'STARS_ASC'
   >('L5_DESC');
   const [maxMatchDate, setMaxMatchDate] = useState<string>('');
   const [minWinProb, setMinWinProb] = useState<number>(0);
@@ -95,9 +97,14 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         else if (selectedBonusTier === '20+') matchesBonus = bonus >= 20;
       }
 
-      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus;
+      let matchesStars = true;
+      if (selectedStarsFilter !== 'ALL') {
+        matchesStars = getPlayerStars(card) === Number(selectedStarsFilter);
+      }
+
+      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars;
     });
-  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, maxMatchDate, minWinProb]);
+  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
@@ -144,6 +151,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           return getCardTotalBonus(b) - getCardTotalBonus(a);
         case 'BONUS_ASC':
           return getCardTotalBonus(a) - getCardTotalBonus(b);
+        case 'STARS_DESC':
+          return getPlayerStars(b) - getPlayerStars(a);
+        case 'STARS_ASC':
+          return getPlayerStars(a) - getPlayerStars(b);
         default:
           return 0;
       }
@@ -364,7 +375,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
 
         {/* Filters and Search Bar */}
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
           
           {/* Search Box */}
           <div className="relative md:col-span-2 lg:col-span-2">
@@ -384,7 +395,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               type="date"
               value={maxMatchDate}
               onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 pr-8 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
               title="Match jusqu'à cette date (incluse)"
             />
             {maxMatchDate && (
@@ -399,6 +410,22 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             )}
           </div>
 
+          {/* Star Filter */}
+          <div>
+            <select
+              value={selectedStarsFilter}
+              onChange={(e) => { setSelectedStarsFilter(e.target.value as any); setCurrentPage(1); }}
+              className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3 py-2 text-xs text-amber-400 font-semibold focus:border-amber-400 focus:outline-none"
+            >
+              <option value="ALL" className="text-slate-300">Toutes les étoiles</option>
+              <option value="5" className="text-amber-400">★★★★★ (5 Étoiles)</option>
+              <option value="4" className="text-amber-400">★★★★☆ (4 Étoiles)</option>
+              <option value="3" className="text-amber-400">★★★☆☆ (3 Étoiles)</option>
+              <option value="2" className="text-amber-400">★★☆☆☆ (2 Étoiles)</option>
+              <option value="1" className="text-amber-400">★☆☆☆☆ (1 Étoile)</option>
+            </select>
+          </div>
+
           {/* Bonus Tier Filter (0-4, 5-9, 10-14, 15-19, 20+) */}
           <div>
             <select
@@ -411,7 +438,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <option value="5-9" className="text-amber-300">Bonus 5% - 9%</option>
               <option value="10-14" className="text-amber-300">Bonus 10% - 14%</option>
               <option value="15-19" className="text-amber-300">Bonus 15% - 19%</option>
-              <option value="20+" className="text-amber-300">Bonus 20%+ </option>
+              <option value="20+" className="text-amber-300">Bonus 20%+</option>
             </select>
           </div>
 
@@ -456,6 +483,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             >
               <option value="PROJ_DESC">Score Projeté (Décroissant)</option>
               <option value="PROJ_ASC">Score Projeté (Croissant)</option>
+              <option value="STARS_DESC">Nombre d'étoiles (Décroissant)</option>
+              <option value="STARS_ASC">Nombre d'étoiles (Croissant)</option>
               <option value="L5_DESC">Forme L5 (Décroissant)</option>
               <option value="L5_ASC">Forme L5 (Croissant)</option>
               <option value="L10_DESC">Forme L10 (Décroissant)</option>
@@ -473,12 +502,18 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
 
         {/* Filter Badges Active */}
-        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL') && (
+        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL') && (
           <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/60">
             <span className="text-[11px] text-slate-400">Filtres actifs :</span>
             {maxMatchDate && (
               <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
                 Match &le; {maxMatchDate}
+              </span>
+            )}
+            {selectedStarsFilter !== 'ALL' && (
+              <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400 flex items-center gap-1">
+                <Star className="h-2.5 w-2.5 text-amber-400 fill-amber-400" />
+                {selectedStarsFilter} Étoile{Number(selectedStarsFilter) > 1 ? 's' : ''}
               </span>
             )}
             {selectedBonusTier !== 'ALL' && (
@@ -501,6 +536,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 setSelectedStatus('ALL');
                 setSelectedRarity('ALL');
                 setSelectedBonusTier('ALL');
+                setSelectedStarsFilter('ALL');
               }}
               className="text-[10px] font-bold text-slate-400 hover:text-white underline ml-auto"
             >
@@ -526,7 +562,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           <p className="text-xs text-slate-500 mt-1">Essayez d'élargir la date ou de réduire le pourcentage de victoire minimum.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-9">
           {paginatedCards.map((card) => {
             const posBadge = formatPositionBadge(card.positionCode);
             const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
@@ -605,7 +641,22 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                       <h4 className="truncate text-sm font-bold text-white group-hover:text-emerald-400 transition">
                         {card.displayName}
                       </h4>
-                      <p className="truncate text-xs text-slate-400 mt-0.5">{card.club.name}</p>
+                      <div className="flex items-center justify-between gap-1 mt-0.5">
+                        <p className="truncate text-xs text-slate-400">{card.club.name}</p>
+                        {/* Star Rating Miniature */}
+                        <div className="flex items-center gap-0.5 shrink-0 bg-slate-950/40 px-1 py-0.5 rounded border border-slate-800/50">
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <Star
+                              key={i}
+                              className={`h-2.5 w-2.5 ${
+                                i < getPlayerStars(card)
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : 'text-slate-600'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                      </div>
                       <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
                         <span>{card.age} ans</span>
                         <span>•</span>
