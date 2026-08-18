@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal, Radio } from 'lucide-react';
-import { GameWeekInfo } from '../types';
+import { GameWeekInfo, StrategyType } from '../types';
 import { StorageService, SorareUserMeta } from '../utils/storage';
 
 interface NavbarProps {
@@ -14,6 +14,8 @@ interface NavbarProps {
   isOnline: boolean;
   lastSynced: string | null;
   totalCardsCount: number;
+  strategy: StrategyType;
+  setStrategy: (strategy: StrategyType) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -27,6 +29,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isOnline,
   lastSynced,
   totalCardsCount,
+  strategy,
+  setStrategy,
 }) => {
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [tempUsername, setTempUsername] = useState(username);
@@ -103,6 +107,22 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="text-[10px] text-slate-400">{userMeta.clubName || 'Thib 8 FC'} • {totalCardsCount} cartes</span>
             </div>
           </button>
+
+          {/* Strategy Selector Dropdown */}
+          <div className="flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-slate-900/90 px-2.5 py-1.5 text-xs font-semibold text-slate-200 shadow-sm transition-all hover:border-emerald-400">
+            <Sparkles className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+            <select
+              value={strategy}
+              onChange={(e) => setStrategy(e.target.value as StrategyType)}
+              title="Changer la stratégie de calcul des scores projetés"
+              className="bg-transparent font-bold text-emerald-300 focus:outline-none cursor-pointer text-xs"
+            >
+              <option value="BALANCED" className="bg-slate-900 text-slate-100">🎯 Stratégie : Équilibrée (50/35/15)</option>
+              <option value="SAFE_TITULAR" className="bg-slate-900 text-slate-100">🛡️ Stratégie : Sécurité Titulaire</option>
+              <option value="HIGH_CEILING" className="bg-slate-900 text-slate-100">🚀 Stratégie : Haut Plafond</option>
+              <option value="PURE_FORM" className="bg-slate-900 text-slate-100">🔥 Stratégie : Forme Pure (L5 75%)</option>
+            </select>
+          </div>
 
           {/* Sync Button */}
           <button

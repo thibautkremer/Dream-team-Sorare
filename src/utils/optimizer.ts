@@ -1,8 +1,13 @@
 import { SorareCard, Lineup, StrategyType, PositionCode, LineupOptimizationFilters, UpcomingFixture, MatchPerformanceDetail } from '../types';
+import { getCardTotalBonus, getCardBonusBreakdown, CardBonusBreakdown } from './sorareSlug';
 
 export interface ScoreBreakdown {
   player: SorareCard;
-  projectedScore: number;
+  projectedScore: number;        // Score total (Score de base + Bonus carte)
+  baseProjectedScore: number;    // Score de base projeté sans bonus
+  cardBonusPercentage: number;   // Pourcentage de bonus de la carte (ex: 10, 23)
+  cardBonusScore: number;        // Score en points apporté par le bonus
+  totalProjectedScore: number;   // Total général (Score de base + Bonus)
   formIndex: number;
   matchupFactor: number;
   cleanSheetFactor: number;
@@ -11,6 +16,29 @@ export interface ScoreBreakdown {
   playedLastMatch: boolean;
   lastMatchScore: number;
   recentPlayingFactor: number;
+
+  // DÉTAILS TRANSPARENTS DU CALCUL (Modal & Tooltip)
+  l5: number;
+  l15: number;
+  l40: number;
+  l5Boosted: number;            // L5 * (1 + bonus %)
+  l15Boosted: number;           // L15 * (1 + bonus %)
+  l40Boosted: number;           // L40 * (1 + bonus %)
+  strategyUsed: StrategyType;
+  strategyWeights: { l5: number; l15: number; l40: number };
+  rawBaseFormScore: number;     // Forme brute de base
+  boostedBaseFormScore: number; // Forme de base boostée par la carte
+
+  status: string;
+  starterFactor: number;
+  starterImpactLabel: string;
+
+  difficultyRating: number;
+  matchupImpactLabel: string;
+  isHome: boolean;
+  profileBonus: number;
+
+  bonusBreakdown: CardBonusBreakdown;
 }
 
 export interface PlayerRecentMatchStats {
@@ -216,37 +244,52 @@ export function formatKickoffDate(dateInput?: string | { kickoffDate?: string; k
  */
 export function calculatePlayerProjectedScore(card: SorareCard, strategy: StrategyType = 'BALANCED'): ScoreBreakdown {
   const recentStats = getPlayerRecentMatchAnalysis(card);
+  const bonusPct = getCardTotalBonus(card);
+  const bonusBreakdown = getCardBonusBreakdown(card);
+
+  const emptyBreakdown: ScoreBreakdown = {
+    player: card,
+    projectedScore: 0,
+    baseProjectedScore: 0,
+    cardBonusPercentage: bonusPct,
+    cardBonusScore: 0,
+    totalProjectedScore: 0,
+    formIndex: 0,
+    matchupFactor: 0,
+    cleanSheetFactor: 0,
+    starterSafety: 0,
+    riskRating: 'HIGH',
+    playedLastMatch: false,
+    lastMatchScore: 0,
+    recentPlayingFactor: 0,
+    l5: card.scores?.l5 || 0,
+    l15: card.scores?.l15 || 0,
+    l40: card.scores?.l40 || 0,
+    l5Boosted: Math.round((card.scores?.l5 || 0) * (1 + bonusPct / 100) * 10) / 10,
+    l15Boosted: Math.round((card.scores?.l15 || 0) * (1 + bonusPct / 100) * 10) / 10,
+    l40Boosted: Math.round((card.scores?.l40 || 0) * (1 + bonusPct / 100) * 10) / 10,
+    strategyUsed: strategy,
+    strategyWeights: { l5: 0.5, l15: 0.35, l40: 0.15 },
+    rawBaseFormScore: 0,
+    boostedBaseFormScore: 0,
+    status: card.status || 'NOT_PLAYING',
+    starterFactor: 0,
+    starterImpactLabel: 'Joueur indisponible ou hors groupe (0%)',
+    difficultyRating: card.upcomingFixture?.difficultyRating || 3,
+    matchupImpactLabel: 'Pas de projection de match',
+    isHome: card.upcomingFixture?.isHome ?? true,
+    profileBonus: 0,
+    bonusBreakdown,
+  };
 
   // 1. Élimination d'office des joueurs blessés, suspendus ou hors groupe
   if (card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED' || card.status === 'NOT_PLAYING') {
-    return {
-      player: card,
-      projectedScore: 0,
-      formIndex: 0,
-      matchupFactor: 0,
-      cleanSheetFactor: 0,
-      starterSafety: 0,
-      riskRating: 'HIGH',
-      playedLastMatch: false,
-      lastMatchScore: 0,
-      recentPlayingFactor: 0,
-    };
+    return emptyBreakdown;
   }
 
   // Si le joueur n'a disputé aucun match sur les 5 derniers, le risque DNP est maximal (score 0)
   if (recentStats.playedCountL5 === 0 && card.status !== 'STARTER') {
-    return {
-      player: card,
-      projectedScore: 0,
-      formIndex: 0,
-      matchupFactor: 0,
-      cleanSheetFactor: 0,
-      starterSafety: 0,
-      riskRating: 'HIGH',
-      playedLastMatch: false,
-      lastMatchScore: 0,
-      recentPlayingFactor: 0,
-    };
+    return emptyBreakdown;
   }
 
   // 2. Pondération des moyennes historiques selon la stratégie avec fallbacks robustes
@@ -255,33 +298,42 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
   const l40 = card.scores?.l40 || l15;
 
   let baseForm = 0;
+  let strategyWeights = { l5: 0.50, l15: 0.35, l40: 0.15 };
+
   if (strategy === 'PURE_FORM') {
-    baseForm = (l5 * 0.75) + (l15 * 0.20) + (l40 * 0.05);
+    strategyWeights = { l5: 0.75, l15: 0.20, l40: 0.05 };
   } else if (strategy === 'SAFE_TITULAR') {
-    baseForm = (l5 * 0.35) + (l15 * 0.40) + (l40 * 0.25);
+    strategyWeights = { l5: 0.35, l15: 0.40, l40: 0.25 };
   } else if (strategy === 'HIGH_CEILING') {
-    baseForm = (l5 * 0.60) + (l15 * 0.30) + (l40 * 0.10);
-  } else {
-    // BALANCED
-    baseForm = (l5 * 0.50) + (l15 * 0.35) + (l40 * 0.15);
+    strategyWeights = { l5: 0.60, l15: 0.30, l40: 0.10 };
   }
+
+  baseForm = (l5 * strategyWeights.l5) + (l15 * strategyWeights.l15) + (l40 * strategyWeights.l40);
 
   // 3. Facteur statut titulaire & pénalité derniers matchs
   let starterFactor = 1.0;
+  let starterImpactLabel = 'Titulaire indiscutable (100%)';
+
   if (card.status === 'STARTER') {
     starterFactor = 1.0;
+    starterImpactLabel = 'Titulaire garanti (100%)';
   } else if (card.status === 'REGULAR') {
     starterFactor = 0.90;
+    starterImpactLabel = 'Joueur régulier (-10%)';
   } else if (card.status === 'SUPER_SUBSTITUTE') {
-    starterFactor = 0.50; // Risque majeur SO5
+    starterFactor = 0.50;
+    starterImpactLabel = 'Super Sub (-50%)';
   } else if (card.status === 'SUBSTITUTE') {
     starterFactor = 0.20;
+    starterImpactLabel = 'Remplaçant (-80%)';
   }
 
   if (card.injuryStatus === 'DOUBTFUL') {
     starterFactor *= 0.60;
+    starterImpactLabel += ' • Douteux (-40%)';
   } else if (card.injuryStatus === 'QUESTIONABLE') {
     starterFactor *= 0.80;
+    starterImpactLabel += ' • Incertain (-20%)';
   }
 
   // Application de la pénalité liée au dernier match et aux DNP récents
@@ -291,68 +343,70 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
   const fixture = card.upcomingFixture;
   let matchupFactor = 1.0;
   let cleanSheetFactor = 0;
+  let matchupImpactLabel = 'Neutre (FDR 3 : 100%)';
 
   if (fixture) {
-    // FDR (Fixture Difficulty Rating 1 à 5)
     switch (fixture.difficultyRating) {
       case 1:
-        matchupFactor = 1.12; // Match très favorable (+12%)
+        matchupFactor = 1.12;
+        matchupImpactLabel = 'Très Favorable (FDR 1 : +12%)';
         break;
       case 2:
-        matchupFactor = 1.05; // Favorable (+5%)
+        matchupFactor = 1.05;
+        matchupImpactLabel = 'Favorable (FDR 2 : +5%)';
         break;
       case 3:
-        matchupFactor = 1.00; // Neutre
+        matchupFactor = 1.00;
+        matchupImpactLabel = 'Neutre (FDR 3 : 100%)';
         break;
       case 4:
-        matchupFactor = 0.92; // Délicat (-8%)
+        matchupFactor = 0.92;
+        matchupImpactLabel = 'Délicat (FDR 4 : -8%)';
         break;
       case 5:
-        matchupFactor = 0.85; // Très difficile (-15%)
+        matchupFactor = 0.85;
+        matchupImpactLabel = 'Très Difficile (FDR 5 : -15%)';
         break;
       default:
         matchupFactor = 1.00;
+        matchupImpactLabel = 'Neutre';
     }
 
-    // Bonus Clean Sheet pour GK et DEF
     if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture?.bookmaker?.cleanSheetProb) {
       cleanSheetFactor = (fixture.bookmaker.cleanSheetProb / 100) * 8;
     }
 
-    // Bonus Attaquant / Milieu si grosse espérance de buts (xG bookmaker)
     if ((card.positionCode === 'FWD' || card.positionCode === 'MID') && fixture?.bookmaker?.goalExpectancy) {
       if (fixture.bookmaker.goalExpectancy > 2.0) {
         matchupFactor += 0.06;
+        matchupImpactLabel += ' • xG Élevé (+6%)';
       }
     }
   }
 
-  // Bonus/Pondération selon la stratégie et le profil All-Around vs Décisif
   let profileBonus = 0;
   if (strategy === 'SAFE_TITULAR') {
-    // Les joueurs à fort All-Around (> 50% AA) ont un plancher sécurisé
     if ((card.scores?.allAroundContributionPct || 50) > 55) {
       profileBonus += 2.5;
     }
-    // Pénalité légère si joueur 100% dépendant d'un but (Décisif > 70%) sans volume
     if ((card.scores?.decisiveContributionPct || 40) > 70) {
       profileBonus -= 2.0;
     }
   } else if (strategy === 'HIGH_CEILING') {
-    // Les joueurs avec un gros potentiel décisif et un plafond élevé
     if ((card.scores?.ceilingScore || 65) > 75) {
       profileBonus += 3.5;
     }
   }
 
-  // Calcul final du score projeté
   let projected = (baseForm * starterFactor * matchupFactor) + cleanSheetFactor + profileBonus;
 
   if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker?.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
-    projected += 4; // Bonus buteur prolifique
+    projected += 4;
   }
 
-  projected = Math.max(0, Math.min(100, Math.round(projected * 10) / 10));
+  const baseProjected = Math.max(0, Math.min(100, Math.round(projected * 10) / 10));
+  const cardBonusScore = Math.round((baseProjected * (bonusPct / 100)) * 10) / 10;
+  const totalProjectedScore = Math.round((baseProjected + cardBonusScore) * 10) / 10;
 
   let riskRating: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
   if (starterFactor < 0.75 || !recentStats.playedLastMatch || card.injuryStatus !== 'FIT') {
@@ -363,7 +417,11 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
 
   return {
     player: card,
-    projectedScore: projected,
+    projectedScore: totalProjectedScore,
+    baseProjectedScore: baseProjected,
+    cardBonusPercentage: bonusPct,
+    cardBonusScore,
+    totalProjectedScore,
     formIndex: Math.round(baseForm * 10) / 10,
     matchupFactor: Math.round(matchupFactor * 100) / 100,
     cleanSheetFactor: Math.round(cleanSheetFactor * 10) / 10,
@@ -372,6 +430,28 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     playedLastMatch: recentStats.playedLastMatch,
     lastMatchScore: recentStats.lastMatchScore,
     recentPlayingFactor: recentStats.recentPlayingFactor,
+
+    l5: Math.round(l5 * 10) / 10,
+    l15: Math.round(l15 * 10) / 10,
+    l40: Math.round(l40 * 10) / 10,
+    l5Boosted: Math.round(l5 * (1 + bonusPct / 100) * 10) / 10,
+    l15Boosted: Math.round(l15 * (1 + bonusPct / 100) * 10) / 10,
+    l40Boosted: Math.round(l40 * (1 + bonusPct / 100) * 10) / 10,
+    strategyUsed: strategy,
+    strategyWeights,
+    rawBaseFormScore: Math.round(baseForm * 10) / 10,
+    boostedBaseFormScore: Math.round(baseForm * (1 + bonusPct / 100) * 10) / 10,
+
+    status: card.status || 'STARTER',
+    starterFactor: Math.round(starterFactor * 100) / 100,
+    starterImpactLabel,
+
+    difficultyRating: fixture?.difficultyRating || 3,
+    matchupImpactLabel,
+    isHome: fixture?.isHome ?? true,
+    profileBonus: Math.round(profileBonus * 10) / 10,
+
+    bonusBreakdown,
   };
 }
 
@@ -549,7 +629,7 @@ export function optimizeLineup(
 
   return {
     id: `lineup-${strategy.toLowerCase()}-${Date.now()}`,
-    name: `Composition ${strategy === 'SAFE_TITULAR' ? 'Sécurité' : strategy === 'HIGH_CEILING' ? 'Plafond Élevé' : strategy === 'PURE_FORM' ? 'Forme L5' : 'Optimale SO5'}`,
+    name: `Compo 1`,
     strategy,
     gameWeek,
     slots: {
@@ -599,10 +679,10 @@ export function generateFourDistinctLineups(
   const usedCardIds = new Set<string>();
 
   const strategies: { name: string; type: StrategyType }[] = [
-    { name: 'Composition Majeure #1', type: 'BALANCED' },
-    { name: 'Composition Outsider #2', type: 'SAFE_TITULAR' },
-    { name: 'Composition Plafond #3', type: 'HIGH_CEILING' },
-    { name: 'Composition Forme Pure #4', type: 'PURE_FORM' },
+    { name: 'Compo 1', type: 'BALANCED' },
+    { name: 'Compo 2', type: 'SAFE_TITULAR' },
+    { name: 'Compo 3', type: 'HIGH_CEILING' },
+    { name: 'Compo 4', type: 'PURE_FORM' },
   ];
 
   for (let i = 0; i < 4; i++) {

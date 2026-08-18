@@ -19318,21 +19318,22 @@ export const MOCK_GALLERY: SorareCard[] = [
     "grade": 0,
     "xp": 0,
     "scores": {
-      "l5": 6.8,
-      "l15": 19.3,
-      "l40": 19.3,
+      "l5": 40,
+      "l10": 38.6,
+      "l15": 38,
+      "l40": 42,
       "last5Scores": [
-        0,
-        0,
-        0,
-        0,
-        34.1
+        42.6,
+        39.8,
+        40.3,
+        36.2,
+        0
       ],
-      "consistencyRate": 40,
+      "consistencyRate": 65,
       "decisiveRate": 10
     },
-    "status": "BENCH",
-    "starterConfidence": 30,
+    "status": "SUPER_SUBSTITUTE",
+    "starterConfidence": 50,
     "injuryStatus": "FIT",
     "upcomingFixture": {
       "gameWeek": 48,
@@ -26956,6 +26957,8 @@ export const MOCK_GALLERY: SorareCard[] = [
     "name": "Pep Biel 2026-27 • Common",
     "displayName": "Pep Biel",
     "matchName": "Pep Biel",
+    "power": "1.230",
+    "bonusPercentage": 23,
     "age": 29,
     "position": "Midfielder",
     "positionCode": "MID",
@@ -47974,6 +47977,8 @@ export const MOCK_GALLERY: SorareCard[] = [
     "name": "Pep Biel 2026-27 • Common",
     "displayName": "Pep Biel",
     "matchName": "Pep Biel",
+    "power": "1.230",
+    "bonusPercentage": 23,
     "age": 29,
     "position": "Midfielder",
     "positionCode": "MID",
@@ -48346,6 +48351,8 @@ export const MOCK_GALLERY: SorareCard[] = [
     "name": "Evander 2026-27 • Common",
     "displayName": "Evander",
     "matchName": "Evander",
+    "power": "1.100",
+    "bonusPercentage": 10,
     "age": 28,
     "position": "Midfielder",
     "positionCode": "MID",
@@ -60022,35 +60029,42 @@ export const MOCK_GALLERY: SorareCard[] = [
     "club": {
       "name": "FC Barcelona",
       "slug": "barcelona-barcelona",
-      "pictureUrl": "https://assets.sorare.com/team/f115e8de-5e7a-44f6-a03f-1ec44cc02839/picture/low_res-e22e59b0d19b66242e924adc98b199e0.png",
-      "country": "ESP"
+      "pictureUrl": "https://assets.sorare.com/clubspicture/barcelona-barcelona/picture/squared-5c5a08fb6f59b6fe15bc8303fef3c79c.png",
+      "league": "LaLiga"
     },
-    "grade": 0,
-    "xp": 0,
-    "scores": {
-      "l5": 48,
-      "l15": 45,
-      "l40": 46,
-      "last5Scores": [45, 52, 48, 42, 53],
-      "consistencyRate": 70,
-      "decisiveRate": 20
-    },
+    "league": "LaLiga",
+    "country": "Espagne",
     "status": "REGULAR",
-    "starterConfidence": 65,
+    "starterConfidence": 40,
     "injuryStatus": "FIT",
+    "power": "1.05",
+    "bonusPercentage": 5,
+    "scores": {
+      "l5": 25.0,
+      "l15": 32.0,
+      "l40": 38.0,
+      "last5Scores": [25, 20, 30, 25, 25],
+      "allAroundContributionPct": 60,
+      "decisiveContributionPct": 40,
+      "floorScore": 20,
+      "ceilingScore": 50
+    },
     "upcomingFixture": {
-      "gameWeek": 48,
       "opponent": "Athletic Club",
+      "opponentSlug": "athletic-club",
+      "opponentLogoUrl": "",
       "isHome": true,
       "difficultyRating": 2,
-      "kickoffDate": "2026-08-22T17:00:00Z",
-      "matchDate": "2026-08-22T17:00:00Z",
-      "kickoffFormatted": "Sam. 22 août à 19:00",
-      "kickoffRelative": "Dans 5 jours",
-      "hasUpcomingMatch": true,
-      "competitionName": "La Liga EA Sports",
-      "projectedScore": 46
+      "kickoffDate": "2026-08-22T19:00:00Z",
+      "gameWeek": 48,
+      "competition": "LaLiga",
+      "bookmaker": {
+        "winProbability": 60,
+        "cleanSheetProb": 40,
+        "goalExpectancy": 1.8,
+        "anytimeScorerOdds": 5.0
+      }
     },
-    "tacticalNotes": "Titulaire potentiel en défense centrale."
+    "tacticalNotes": "Match GW 48 : FC Barcelona vs Athletic Club."
   }
 ];

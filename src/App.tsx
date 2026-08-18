@@ -6,6 +6,7 @@ import { MatchupsPage } from './pages/MatchupsPage';
 import { AICoachPage } from './pages/AICoachPage';
 import { AdminPage } from './pages/AdminPage';
 import { PlayerScoutModal } from './components/PlayerScoutModal';
+import { ProjectionBreakdownModal } from './components/ProjectionBreakdownModal';
 import { LineupAnalysisDrawer } from './components/LineupAnalysisDrawer';
 import { SlotSwapModal } from './components/SlotSwapModal';
 import { LiveScoringView } from './components/LiveScoringView';
@@ -37,6 +38,7 @@ export default function App() {
 
   const [compositions, setCompositions] = useState<Lineup[]>([]);
   const [selectedCompoIndex, setSelectedCompoIndex] = useState<number>(0);
+  const [strategy, setStrategy] = useState<StrategyType>('BALANCED');
 
   const [lineup, setLineup] = useState<Lineup>(() => {
     const initialCards = StorageService.getCards();
@@ -48,15 +50,15 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastSynced, setLastSynced] = useState<string | null>(StorageService.getLastSync());
 
-  // Generate 4 compositions dynamically whenever cards or filters change
+  // Generate 4 compositions dynamically whenever cards, filters, or strategy change
   useEffect(() => {
     if (cards.length > 0) {
-      const fourCompos = generateFourDistinctLineups(cards, 'BALANCED', CURRENT_GAME_WEEK.number, filters);
+      const fourCompos = generateFourDistinctLineups(cards, strategy, CURRENT_GAME_WEEK.number, filters);
       setCompositions(fourCompos);
       setLineup(fourCompos[0]);
       setSelectedCompoIndex(0);
     }
-  }, [cards, filters]);
+  }, [cards, filters, strategy]);
 
   const handleUpdateLineup = (updatedLineup: Lineup | ((prev: Lineup) => Lineup)) => {
     setLineup(prev => {
@@ -77,6 +79,7 @@ export default function App() {
 
   // Modals state
   const [scoutCard, setScoutCard] = useState<SorareCard | null>(null);
+  const [breakdownCard, setBreakdownCard] = useState<SorareCard | null>(null);
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
   const [slotToSwap, setSlotToSwap] = useState<'gk' | 'def' | 'mid' | 'fwd' | 'extra' | null>(null);
 
@@ -261,7 +264,7 @@ export default function App() {
 
           const primaryLineup: Lineup = {
             id: `lineup-gemini-${Date.now()}`,
-            name: `Option #1 - Équipe Optimale (Gemini)`,
+            name: `Compo 1`,
             strategy,
             gameWeek: CURRENT_GAME_WEEK.number,
             slots: { gk, def, mid, fwd, extra },
@@ -289,10 +292,10 @@ export default function App() {
           // Generate 4 distinct lineups using filter constraints
           const otherLineups = generateFourDistinctLineups(cards, strategy, CURRENT_GAME_WEEK.number, filters);
           const fourTeams = [
-            primaryLineup,
-            otherLineups[1] || otherLineups[0],
-            otherLineups[2] || otherLineups[0],
-            otherLineups[3] || otherLineups[0]
+            { ...primaryLineup, name: 'Compo 1' },
+            { ...(otherLineups[1] || otherLineups[0]), name: 'Compo 2' },
+            { ...(otherLineups[2] || otherLineups[0]), name: 'Compo 3' },
+            { ...(otherLineups[3] || otherLineups[0]), name: 'Compo 4' },
           ];
 
           setCompositions(fourTeams);
@@ -403,6 +406,8 @@ export default function App() {
         isOnline={isOnline}
         lastSynced={lastSynced}
         totalCardsCount={cards.length}
+        strategy={strategy}
+        setStrategy={setStrategy}
       />
 
       {/* Main Container */}
@@ -456,6 +461,7 @@ export default function App() {
             cards={cards}
             gameWeek={CURRENT_GAME_WEEK}
             onOpenScout={(c) => setScoutCard(c)}
+            strategy={strategy}
           />
         )}
 
@@ -467,6 +473,7 @@ export default function App() {
             compositions={compositions}
             onOpenScout={(c) => setScoutCard(c)}
             gameWeek={CURRENT_GAME_WEEK.number}
+            strategy={strategy}
           />
         )}
 
@@ -499,6 +506,15 @@ export default function App() {
           card={scoutCard}
           onClose={() => setScoutCard(null)}
           onAssignToSlot={handleAssignToSlot}
+        />
+      )}
+
+      {/* Projection Breakdown Modal */}
+      {breakdownCard && (
+        <ProjectionBreakdownModal
+          card={breakdownCard}
+          strategy={strategy}
+          onClose={() => setBreakdownCard(null)}
         />
       )}
 

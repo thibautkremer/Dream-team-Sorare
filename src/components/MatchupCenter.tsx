@@ -1,12 +1,15 @@
 import React from 'react';
 import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp } from 'lucide-react';
-import { SorareCard, GameWeekInfo } from '../types';
+import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
+import { getCardTotalBonus } from '../utils/sorareSlug';
+export { getCardTotalBonus };
 
 interface MatchupCenterProps {
   cards: SorareCard[];
   gameWeek: GameWeekInfo;
   onOpenScout: (card: SorareCard) => void;
+  strategy?: StrategyType;
 }
 
 interface FixtureAggregate {
@@ -27,7 +30,28 @@ interface FixtureAggregate {
   players: SorareCard[];
 }
 
-export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, onOpenScout }) => {
+export function isSamePlayer(c1: SorareCard, c2: SorareCard): boolean {
+  if (!c1 || !c2) return false;
+  if (c1.id === c2.id) return true;
+
+  const name1 = (c1.displayName || c1.name || '').trim().toLowerCase();
+  const name2 = (c2.displayName || c2.name || '').trim().toLowerCase();
+  if (name1 && name2 && name1 === name2) return true;
+
+  if (c1.matchName && c2.matchName && c1.matchName.trim().toLowerCase() === c2.matchName.trim().toLowerCase()) {
+    return true;
+  }
+
+  if (c1.slug && c2.slug) {
+    const baseSlug1 = c1.slug.split('-202')[0]?.toLowerCase();
+    const baseSlug2 = c2.slug.split('-202')[0]?.toLowerCase();
+    if (baseSlug1 && baseSlug2 && baseSlug1 === baseSlug2) return true;
+  }
+
+  return false;
+}
+
+export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, onOpenScout, strategy }) => {
   // Extract unique fixtures from cards
   const fixtureMap = new Map<string, FixtureAggregate>();
 
@@ -54,15 +78,18 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         });
       } else {
         const fixture = fixtureMap.get(key)!;
-        // Deduplicate: If the player is already present in this fixture (same slug or displayName), do not duplicate
-        const cardIdentifier = (card.slug || card.displayName || '').trim().toLowerCase();
-        const alreadyIncluded = fixture.players.some(p => {
-          const pIdentifier = (p.slug || p.displayName || '').trim().toLowerCase();
-          return pIdentifier === cardIdentifier;
-        });
+        // Deduplicate player: Keep strictly ONE card per player (highest bonus percentage)
+        const existingIdx = fixture.players.findIndex(p => isSamePlayer(p, card));
 
-        if (!alreadyIncluded) {
+        if (existingIdx === -1) {
           fixture.players.push(card);
+        } else {
+          const existingCard = fixture.players[existingIdx];
+          const existingBonus = getCardTotalBonus(existingCard);
+          const newBonus = getCardTotalBonus(card);
+          if (newBonus > existingBonus) {
+            fixture.players[existingIdx] = card;
+          }
         }
       }
     }
@@ -430,9 +457,10 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                   <div className="flex flex-wrap items-center gap-2.5">
                     {fixture.players.map((p) => {
                       const pStyle = getPositionStyle(p.positionCode);
-                      const breakdown = calculatePlayerProjectedScore(p);
+                      const breakdown = calculatePlayerProjectedScore(p, strategy);
                       const projected = breakdown.projectedScore;
                       const isStarter = p.status === 'STARTER';
+                      const bonusPct = getCardTotalBonus(p);
 
                       return (
                         <button
@@ -448,10 +476,19 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                             {p.displayName}
                           </span>
 
-                          {/* Score Projeté Badge */}
-                          <div className="flex items-center gap-1 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-black px-2 py-0.5 rounded-md text-[11px] shadow-sm">
-                            <TrendingUp className="h-3 w-3 text-emerald-400" />
-                            <span>Proj : {projected} pts</span>
+                          {/* Bonus badge */}
+                          {bonusPct > 0 && (
+                            <span className="text-[9px] font-bold text-amber-300 bg-amber-950/70 border border-amber-500/40 px-1.5 py-0.5 rounded shadow-sm" title={`Bonus de carte : +${bonusPct}%`}>
+                              +{bonusPct}% bonus
+                            </span>
+                          )}
+
+                          {/* Score Projeté Badge avec détail Base + Bonus */}
+                          <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[11px] shadow-sm">
+                            <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
+                            <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
+                            <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
+                            <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} pts</span>
                           </div>
 
                           {/* L5 Score */}

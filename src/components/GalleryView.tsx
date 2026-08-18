@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate } from '../utils/optimizer';
-import { formatPositionBadge, formatStatusBadge } from '../utils/sorareSlug';
+import { formatPositionBadge, formatStatusBadge, getCardTotalBonus } from '../utils/sorareSlug';
 
 interface GalleryViewProps {
   cards: SorareCard[];
@@ -23,7 +23,17 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [selectedPosition, setSelectedPosition] = useState<PositionCode | 'ALL'>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<PlayingStatus | 'ALL'>('ALL');
   const [selectedRarity, setSelectedRarity] = useState<string>('ALL');
-  const [sortBy, setSortBy] = useState<'L5_DESC' | 'L15_DESC' | 'L40_DESC' | 'PROJ_DESC' | 'NAME_ASC'>('L5_DESC');
+  const [selectedBonusTier, setSelectedBonusTier] = useState<'ALL' | '0-4' | '5-9' | '10-14' | '15-19' | '20+'>('ALL');
+  const [sortBy, setSortBy] = useState<
+    | 'L5_DESC' | 'L5_ASC'
+    | 'L15_DESC'
+    | 'L40_DESC' | 'L40_ASC'
+    | 'L10_DESC' | 'L10_ASC'
+    | 'PROJ_DESC' | 'PROJ_ASC'
+    | 'NAME_ASC' | 'NAME_DESC'
+    | 'CLUB_ASC' | 'CLUB_DESC'
+    | 'BONUS_ASC' | 'BONUS_DESC'
+  >('L5_DESC');
   const [maxMatchDate, setMaxMatchDate] = useState<string>('');
   const [minWinProb, setMinWinProb] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -75,23 +85,65 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         matchesWin = winProb >= minWinProb;
       }
 
-      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin;
+      let matchesBonus = true;
+      if (selectedBonusTier !== 'ALL') {
+        const bonus = getCardTotalBonus(card);
+        if (selectedBonusTier === '0-4') matchesBonus = bonus >= 0 && bonus < 5;
+        else if (selectedBonusTier === '5-9') matchesBonus = bonus >= 5 && bonus < 10;
+        else if (selectedBonusTier === '10-14') matchesBonus = bonus >= 10 && bonus < 15;
+        else if (selectedBonusTier === '15-19') matchesBonus = bonus >= 15 && bonus < 20;
+        else if (selectedBonusTier === '20+') matchesBonus = bonus >= 20;
+      }
+
+      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus;
     });
-  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, maxMatchDate, minWinProb]);
+  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, maxMatchDate, minWinProb]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
       switch (sortBy) {
         case 'L5_DESC':
           return (b.scores?.l5 || 0) - (a.scores?.l5 || 0);
+        case 'L5_ASC':
+          return (a.scores?.l5 || 0) - (b.scores?.l5 || 0);
         case 'L15_DESC':
           return (b.scores?.l15 || 0) - (a.scores?.l15 || 0);
+        case 'L10_DESC': {
+          const scoreB = b.scores?.l10 || (b.scores?.last10Scores && b.scores.last10Scores.length ? b.scores.last10Scores.reduce((acc, v) => acc + v, 0) / b.scores.last10Scores.length : 0) || 0;
+          const scoreA = a.scores?.l10 || (a.scores?.last10Scores && a.scores.last10Scores.length ? a.scores.last10Scores.reduce((acc, v) => acc + v, 0) / a.scores.last10Scores.length : 0) || 0;
+          return scoreB - scoreA;
+        }
+        case 'L10_ASC': {
+          const scoreB = b.scores?.l10 || (b.scores?.last10Scores && b.scores.last10Scores.length ? b.scores.last10Scores.reduce((acc, v) => acc + v, 0) / b.scores.last10Scores.length : 0) || 0;
+          const scoreA = a.scores?.l10 || (a.scores?.last10Scores && a.scores.last10Scores.length ? a.scores.last10Scores.reduce((acc, v) => acc + v, 0) / a.scores.last10Scores.length : 0) || 0;
+          return scoreA - scoreB;
+        }
         case 'L40_DESC':
           return (b.scores?.l40 || 0) - (a.scores?.l40 || 0);
+        case 'L40_ASC':
+          return (a.scores?.l40 || 0) - (b.scores?.l40 || 0);
         case 'PROJ_DESC':
           return calculatePlayerProjectedScore(b).projectedScore - calculatePlayerProjectedScore(a).projectedScore;
+        case 'PROJ_ASC':
+          return calculatePlayerProjectedScore(a).projectedScore - calculatePlayerProjectedScore(b).projectedScore;
         case 'NAME_ASC':
           return a.displayName.localeCompare(b.displayName);
+        case 'NAME_DESC':
+          return b.displayName.localeCompare(a.displayName);
+        case 'CLUB_ASC': {
+          const clubA = a.club?.name || '';
+          const clubB = b.club?.name || '';
+          return clubA.localeCompare(clubB);
+        }
+        case 'CLUB_DESC': {
+          const clubA = a.club?.name || '';
+          const clubB = b.club?.name || '';
+          return clubB.localeCompare(clubA);
+        }
+        case 'BONUS_DESC':
+          return getCardTotalBonus(b) - getCardTotalBonus(a);
+        case 'BONUS_ASC':
+          return getCardTotalBonus(a) - getCardTotalBonus(b);
         default:
           return 0;
       }
@@ -312,10 +364,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
 
         {/* Filters and Search Bar */}
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7">
           
           {/* Search Box */}
-          <div className="relative lg:col-span-2">
+          <div className="relative md:col-span-2 lg:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
@@ -345,6 +397,22 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 ✕
               </button>
             )}
+          </div>
+
+          {/* Bonus Tier Filter (0-4, 5-9, 10-14, 15-19, 20+) */}
+          <div>
+            <select
+              value={selectedBonusTier}
+              onChange={(e) => { setSelectedBonusTier(e.target.value as any); setCurrentPage(1); }}
+              className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3 py-2 text-xs text-amber-300 font-semibold focus:border-amber-400 focus:outline-none"
+            >
+              <option value="ALL" className="text-slate-300">Tous les bonus</option>
+              <option value="0-4" className="text-amber-300">Bonus 0% - 4%</option>
+              <option value="5-9" className="text-amber-300">Bonus 5% - 9%</option>
+              <option value="10-14" className="text-amber-300">Bonus 10% - 14%</option>
+              <option value="15-19" className="text-amber-300">Bonus 15% - 19%</option>
+              <option value="20+" className="text-amber-300">Bonus 20%+ </option>
+            </select>
           </div>
 
           {/* Win Probability Filter (Palier de 5% entre 25 et 50%) */}
@@ -384,24 +452,39 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none font-semibold"
             >
-              <option value="L5_DESC">Trier par Forme (L5)</option>
-              <option value="L15_DESC">Trier par Moyenne L15</option>
-              <option value="L40_DESC">Trier par Régularité L40</option>
-              <option value="PROJ_DESC">Trier par Score Projeté</option>
-              <option value="NAME_ASC">Trier par Nom (A-Z)</option>
+              <option value="PROJ_DESC">Score Projeté (Décroissant)</option>
+              <option value="PROJ_ASC">Score Projeté (Croissant)</option>
+              <option value="L5_DESC">Forme L5 (Décroissant)</option>
+              <option value="L5_ASC">Forme L5 (Croissant)</option>
+              <option value="L10_DESC">Forme L10 (Décroissant)</option>
+              <option value="L10_ASC">Forme L10 (Croissant)</option>
+              <option value="L40_DESC">Régularité L40 (Décroissant)</option>
+              <option value="L40_ASC">Régularité L40 (Croissant)</option>
+              <option value="BONUS_DESC">Bonus % (Décroissant)</option>
+              <option value="BONUS_ASC">Bonus % (Croissant)</option>
+              <option value="NAME_ASC">Nom (A-Z)</option>
+              <option value="NAME_DESC">Nom (Z-A)</option>
+              <option value="CLUB_ASC">Équipe (A-Z)</option>
+              <option value="CLUB_DESC">Équipe (Z-A)</option>
             </select>
           </div>
         </div>
 
         {/* Filter Badges Active */}
-        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL') && (
+        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL') && (
           <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/60">
             <span className="text-[11px] text-slate-400">Filtres actifs :</span>
             {maxMatchDate && (
               <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
                 Match &le; {maxMatchDate}
+              </span>
+            )}
+            {selectedBonusTier !== 'ALL' && (
+              <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-300 flex items-center gap-1">
+                <Sparkles className="h-2.5 w-2.5 text-amber-400" />
+                Bonus {selectedBonusTier === '20+' ? '≥ 20%' : `${selectedBonusTier}%`}
               </span>
             )}
             {minWinProb > 0 && (
@@ -417,6 +500,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 setSelectedPosition('ALL');
                 setSelectedStatus('ALL');
                 setSelectedRarity('ALL');
+                setSelectedBonusTier('ALL');
               }}
               className="text-[10px] font-bold text-slate-400 hover:text-white underline ml-auto"
             >
@@ -446,10 +530,12 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           {paginatedCards.map((card) => {
             const posBadge = formatPositionBadge(card.positionCode);
             const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
+            const bonusPct = getCardTotalBonus(card);
             const isInjured = card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED';
             const winProb = getPlayerWinProbability(card.upcomingFixture);
             const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
-            const projScore = calculatePlayerProjectedScore(card).projectedScore;
+            const breakdown = calculatePlayerProjectedScore(card);
+            const projScore = breakdown.projectedScore;
 
             return (
               <div
@@ -477,9 +563,18 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                       )}
                     </div>
 
-                    <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusInfo.color}`}>
-                      {statusInfo.label}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusInfo.color}`}>
+                        {statusInfo.label}
+                      </span>
+                      <span
+                        className="rounded-md border border-amber-500/40 bg-amber-950/70 px-1.5 py-0.5 text-[10px] font-black text-amber-300 shadow-sm flex items-center gap-0.5 shrink-0"
+                        title={`Bonus de la carte: +${bonusPct}%`}
+                      >
+                        <Sparkles className="h-2.5 w-2.5 text-amber-400" />
+                        +{bonusPct}%
+                      </span>
+                    </div>
                   </div>
 
                   {/* Player Profile & Picture */}
@@ -558,7 +653,11 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                       </div>
                       <div className="flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-800/60 pt-1">
                         <span>{formattedDate}</span>
-                        <span className="font-bold text-emerald-400">{projScore} pts proj.</span>
+                        <div className="flex items-center gap-1 text-[10px]">
+                          <span className="font-semibold text-slate-300" title="Score de base">{breakdown.baseProjectedScore} pts</span>
+                          <span className="font-bold text-amber-300" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
+                          <span className="font-black text-emerald-400 bg-emerald-500/10 px-1 rounded" title="Score total projeté avec bonus">= {projScore} pts</span>
+                        </div>
                       </div>
                     </div>
                   )}

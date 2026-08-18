@@ -707,12 +707,12 @@ app.get('/api/sorare/user-cards', async (req, res) => {
 
   try {
     const hasApiKey = Boolean(customApiKey);
-    const pageSize = hasApiKey ? 50 : 2;
+    const pageSize = hasApiKey ? 80 : 50;
     const scoresCount = 40;
 
     syncProgressMap.set(slug, {
       fetchedPages: 0,
-      estimatedTotalPages: hasApiKey ? 20 : 500, // Roughly estimating based on 1000 cards max
+      estimatedTotalPages: hasApiKey ? 15 : 25, // Roughly estimating based on 1000 cards max
       fetchedCards: 0,
       status: 'fetching'
     });
@@ -741,6 +741,15 @@ app.get('/api/sorare/user-cards', async (req, res) => {
               grade
               xp
               seasonYear
+              power
+              specialEdition
+              powerBreakdown {
+                collectionBasisPoints
+                seasonBasisPoints
+                specialEditionCardsBasisPoints
+                xpBasisPoints
+                otherBonusBasisPoints
+              }
               anyPositions
               anyPlayer {
                 slug
@@ -841,7 +850,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
 
       syncProgressMap.set(slug, {
         fetchedPages: page,
-        estimatedTotalPages: hasApiKey ? 85 : 500,
+        estimatedTotalPages: hasApiKey ? 15 : 25,
         fetchedCards: allRawNodes.length,
         status: (hasNext && after) ? 'fetching' : 'processing'
       });
@@ -1080,6 +1089,67 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           },
           grade: c.grade || 0,
           xp: c.xp || 0,
+          power: c.power || '1.050',
+          specialEdition: c.specialEdition || null,
+          powerBreakdown: (() => {
+            if (!c.powerBreakdown) return undefined;
+            const pb = {
+              collectionBasisPoints: c.powerBreakdown.collectionBasisPoints || 0,
+              seasonBasisPoints: c.powerBreakdown.seasonBasisPoints || 0,
+              specialEditionCardsBasisPoints: c.powerBreakdown.specialEditionCardsBasisPoints || 0,
+              xpBasisPoints: c.powerBreakdown.xpBasisPoints || 0,
+              otherBonusBasisPoints: c.powerBreakdown.otherBonusBasisPoints || 0,
+            };
+            if (pb.specialEditionCardsBasisPoints === 0 && c.specialEdition) {
+              const se = c.specialEdition.toLowerCase();
+              if (se.includes('chroma')) {
+                pb.specialEditionCardsBasisPoints = 2000;
+              } else if (se.includes('rising_flame') || se.includes('flame')) {
+                pb.specialEditionCardsBasisPoints = 1500;
+              } else if (se.includes('holo')) {
+                pb.specialEditionCardsBasisPoints = 1000;
+              } else if (se.includes('shiny')) {
+                pb.specialEditionCardsBasisPoints = 500;
+              }
+            }
+            return pb;
+          })(),
+          bonusPercentage: (() => {
+            if (c.powerBreakdown) {
+              const pb = {
+                collectionBasisPoints: c.powerBreakdown.collectionBasisPoints || 0,
+                seasonBasisPoints: c.powerBreakdown.seasonBasisPoints || 0,
+                specialEditionCardsBasisPoints: c.powerBreakdown.specialEditionCardsBasisPoints || 0,
+                xpBasisPoints: c.powerBreakdown.xpBasisPoints || 0,
+                otherBonusBasisPoints: c.powerBreakdown.otherBonusBasisPoints || 0,
+              };
+              if (pb.specialEditionCardsBasisPoints === 0 && c.specialEdition) {
+                const se = c.specialEdition.toLowerCase();
+                if (se.includes('chroma')) {
+                  pb.specialEditionCardsBasisPoints = 2000;
+                } else if (se.includes('rising_flame') || se.includes('flame')) {
+                  pb.specialEditionCardsBasisPoints = 1500;
+                } else if (se.includes('holo')) {
+                  pb.specialEditionCardsBasisPoints = 1000;
+                } else if (se.includes('shiny')) {
+                  pb.specialEditionCardsBasisPoints = 500;
+                }
+              }
+              const sumBps = pb.collectionBasisPoints +
+                             pb.seasonBasisPoints +
+                             pb.specialEditionCardsBasisPoints +
+                             pb.xpBasisPoints +
+                             pb.otherBonusBasisPoints;
+              return Math.round((sumBps / 100) * 10) / 10;
+            }
+            if (c.power) {
+              const p = parseFloat(c.power);
+              if (!isNaN(p) && p >= 1.0) {
+                return Math.round((p - 1.0) * 100 * 10) / 10;
+              }
+            }
+            return c.seasonYear >= 2025 ? 5 : 0;
+          })(),
           status,
           starterConfidence,
           injuryStatus,

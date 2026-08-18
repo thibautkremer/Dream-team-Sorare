@@ -105,7 +105,8 @@ export const PitchView: React.FC<PitchViewProps> = ({
       );
     }
 
-    const projected = calculatePlayerProjectedScore(card, targetLineup.strategy).projectedScore;
+    const cardBreakdown = calculatePlayerProjectedScore(card, targetLineup.strategy);
+    const projected = cardBreakdown.projectedScore;
     const bonusIfCaptain = isCaptain ? Math.round((projected * 0.20) * 10) / 10 : 0;
     const winProb = getPlayerWinProbability(card.upcomingFixture);
     const recentStats = getPlayerRecentMatchAnalysis(card);
@@ -185,13 +186,20 @@ export const PitchView: React.FC<PitchViewProps> = ({
         <div className="px-2.5 pb-2.5">
           {/* Projected Score Box */}
           <div className="rounded-xl bg-slate-950/80 p-2 border border-slate-800/80">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold text-slate-400">Score Projeté</span>
-              <div className="flex items-baseline gap-1">
-                <span className="text-sm sm:text-base font-black text-emerald-400">
-                  {isCaptain ? Math.round((projected + bonusIfCaptain) * 10) / 10 : projected}
+            <div className="space-y-0.5 text-[10px]">
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Base:</span>
+                <span className="font-semibold text-slate-200">{cardBreakdown.baseProjectedScore} pts</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Bonus (+{cardBreakdown.cardBonusPercentage}%):</span>
+                <span className="font-bold text-amber-300">+{cardBreakdown.cardBonusScore} pts</span>
+              </div>
+              <div className="flex items-center justify-between font-black border-t border-slate-800/80 pt-1 mt-1">
+                <span className="text-slate-300">Total:</span>
+                <span className="text-emerald-400 text-xs">
+                  {isCaptain ? Math.round((projected + bonusIfCaptain) * 10) / 10 : projected} pts
                 </span>
-                <span className="text-[10px] text-slate-500">pts</span>
               </div>
             </div>
 
@@ -614,7 +622,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider rounded bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/20">
-                        Option #{idx + 1}
+                        Compo {idx + 1}
                       </span>
                       {isSelected && (
                         <span className="bg-emerald-500 text-slate-950 font-black text-[9px] px-2 py-0.5 rounded uppercase tracking-wider">
@@ -626,7 +634,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
                       </span>
                     </div>
 
-                    <h4 className="font-black text-base sm:text-lg text-white">{comp.name}</h4>
+                    <h4 className="font-black text-base sm:text-lg text-white">{comp.name || `Compo ${idx + 1}`}</h4>
                     
                     <div className="mt-1 flex items-baseline gap-1.5">
                       <span className="text-xl sm:text-2xl font-black text-emerald-400">{comp.projectedTotalWithCaptain}</span>

@@ -6,12 +6,13 @@ export type StrategyType = 'BALANCED' | 'SAFE_TITULAR' | 'HIGH_CEILING' | 'PURE_
 export type CardRarity = 'common' | 'limited' | 'rare' | 'super_rare' | 'unique' | 'custom' | 'COMMON' | 'LIMITED' | 'RARE' | 'SUPER_RARE' | 'UNIQUE' | string;
 
 export interface BookmakerOdds {
-  win: number; // e.g. 1.65 (60% win prob)
-  draw: number; // e.g. 3.80
-  loss: number; // e.g. 5.20
-  cleanSheetProb: number; // 0 - 100 % (critical for DEF/GK)
-  goalExpectancy: number; // Team xG e.g. 2.1
+  win?: number; // e.g. 1.65 (60% win prob)
+  draw?: number; // e.g. 3.80
+  loss?: number; // e.g. 5.20
+  cleanSheetProb?: number; // 0 - 100 % (critical for DEF/GK)
+  goalExpectancy?: number; // Team xG e.g. 2.1
   anytimeScorerOdds?: number; // e.g. 2.10
+  winProbability?: number;
 }
 
 export interface UpcomingFixture {
@@ -19,6 +20,7 @@ export interface UpcomingFixture {
   opponent: string;
   opponentSlug?: string;
   opponentLogo?: string;
+  opponentLogoUrl?: string;
   isHome: boolean;
   matchDate?: string;
   kickoffDate?: string;
@@ -27,9 +29,10 @@ export interface UpcomingFixture {
   hasUpcomingMatch?: boolean;
   difficultyRating: number; // 1 (Very easy) to 5 (Extremely hard)
   competitionName?: string;
+  competition?: string;
   bookmaker?: BookmakerOdds;
   projectedMinutes?: number; // Expected minutes (e.g. 90, 75, 20, 0)
-  projectedScore: number; // Baseline projected SO5 score (0 - 100)
+  projectedScore?: number; // Baseline projected SO5 score (0 - 100)
 }
 
 export interface RealMatchScoreDetail {
@@ -131,6 +134,16 @@ export interface SorareCard {
   grade?: number;
   xp?: number;
   seasonYear?: number;
+  power?: string;
+  specialEdition?: string | null;
+  powerBreakdown?: {
+    collectionBasisPoints: number;
+    seasonBasisPoints: number;
+    specialEditionCardsBasisPoints: number;
+    xpBasisPoints: number;
+    otherBonusBasisPoints: number;
+  };
+  bonusPercentage?: number;
   scores: {
     l5: number;
     l10?: number;

@@ -3,6 +3,7 @@ import { X, Sparkles, Shield, Trophy, Activity, Target, AlertTriangle, CheckCirc
 import { SorareCard, MatchPerformanceDetail } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, compute40MatchPerformances } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge } from '../utils/sorareSlug';
+import { ProjectionBreakdownModal } from './ProjectionBreakdownModal';
 
 interface PlayerScoutModalProps {
   card: SorareCard | null;
@@ -17,6 +18,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
   const [selectedMatchIndex, setSelectedMatchIndex] = useState<number>(39);
   const [selectedPeriod, setSelectedPeriod] = useState<5 | 10 | 15 | 40>(40);
   const [statMode, setStatMode] = useState<'total' | 'per90'>('total');
+  const [showProjectionBreakdown, setShowProjectionBreakdown] = useState(false);
 
   useEffect(() => {
     if (!initialCard) return;
@@ -406,10 +408,23 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                 <span className="text-[10px] text-slate-400 block uppercase font-bold">Difficulté</span>
                 <span className="text-xs font-bold text-amber-400">{card.upcomingFixture?.difficultyRating || 3}/5</span>
               </div>
-              <div className="border-l border-slate-800 pl-3">
-                <span className="text-[10px] text-slate-400 block uppercase font-bold">Projeté</span>
-                <span className="text-sm font-black text-emerald-400">{proj.projectedScore} pts</span>
-              </div>
+              <button 
+                onClick={() => setShowProjectionBreakdown(true)}
+                className="border-l border-slate-800 pl-3 text-right hover:bg-slate-800/60 p-1.5 rounded-xl transition-all group border border-transparent hover:border-emerald-500/30"
+                title="Cliquer pour voir la formule exacte et le calcul détaillé"
+              >
+                <div className="flex items-center justify-end gap-1">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold">Score Projeté</span>
+                  <HelpCircle className="w-3 h-3 text-emerald-400 group-hover:scale-110 transition-transform" />
+                </div>
+                <div className="text-[11px] text-slate-300 font-semibold flex items-center justify-end gap-1 mt-0.5">
+                  <span>Base: {proj.baseProjectedScore} pts</span>
+                  <span className="text-amber-300 font-bold">+{proj.cardBonusScore} pts (+{proj.cardBonusPercentage}%)</span>
+                </div>
+                <div className="text-sm font-black text-emerald-400 mt-0.5 flex items-center justify-end gap-1">
+                  <span>Total : {proj.totalProjectedScore} pts</span>
+                </div>
+              </button>
             </div>
           </div>
         </div>
@@ -417,41 +432,60 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
         {/* Sorare Metrics Row: Last 5, Last 15, Last 40, Bonus */}
         <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           {/* Last 5 */}
-          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Score L5</span>
-            <div className="text-xl sm:text-2xl font-black text-emerald-400">{card.scores.l5}</div>
+          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Score L5</span>
+            <div className="my-1">
+              <div className="text-xl sm:text-2xl font-black text-emerald-400">{card.scores.l5}</div>
+              <div className="text-[10px] font-bold text-emerald-300/90 mt-0.5">
+                Pondéré : {proj.l5Boosted} pts
+              </div>
+            </div>
             <div className="mt-1 flex flex-col items-center justify-center">
-              <span className="text-[9px] text-slate-400">Joués</span>
-              <span className="text-[10px] font-bold text-emerald-400">{getPlayingPercentage(card, 5)}%</span>
+              <span className="text-[9px] text-slate-400">Joués : <strong className="text-emerald-400">{getPlayingPercentage(card, 5)}%</strong></span>
             </div>
           </div>
 
           {/* Last 15 */}
-          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Score L15</span>
-            <div className="text-xl sm:text-2xl font-black text-white">{card.scores.l15 || 45}</div>
+          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Score L15</span>
+            <div className="my-1">
+              <div className="text-xl sm:text-2xl font-black text-white">{card.scores.l15 || 45}</div>
+              <div className="text-[10px] font-bold text-sky-300/90 mt-0.5">
+                Pondéré : {proj.l15Boosted} pts
+              </div>
+            </div>
             <div className="mt-1 flex flex-col items-center justify-center">
-              <span className="text-[9px] text-slate-400">Joués</span>
-              <span className="text-[10px] font-bold text-slate-300">{getPlayingPercentage(card, 15)}%</span>
+              <span className="text-[9px] text-slate-400">Joués : <strong className="text-slate-300">{getPlayingPercentage(card, 15)}%</strong></span>
             </div>
           </div>
 
           {/* Last 40 */}
-          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Score L40</span>
-            <div className="text-xl sm:text-2xl font-black text-slate-300">{card.scores.l40}</div>
+          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Score L40</span>
+            <div className="my-1">
+              <div className="text-xl sm:text-2xl font-black text-slate-300">{card.scores.l40}</div>
+              <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                Pondéré : {proj.l40Boosted} pts
+              </div>
+            </div>
             <div className="mt-1 flex flex-col items-center justify-center">
-              <span className="text-[9px] text-slate-400">Joués</span>
-              <span className="text-[10px] font-bold text-slate-400">{getPlayingPercentage(card, 40)}%</span>
+              <span className="text-[9px] text-slate-400">Joués : <strong className="text-slate-400">{getPlayingPercentage(card, 40)}%</strong></span>
             </div>
           </div>
 
           {/* Bonus */}
-          <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Bonus</span>
-            <div className="text-base sm:text-lg font-black text-emerald-400 my-auto">+2%</div>
-            <span className="text-[9px] text-slate-500">XP & Saison</span>
-          </div>
+          <button 
+            onClick={() => setShowProjectionBreakdown(true)}
+            className="rounded-2xl bg-slate-900/90 border border-slate-800 p-3 text-center flex flex-col justify-between hover:border-amber-500/50 hover:bg-slate-800/80 transition-all group"
+            title="Cliquer pour décomposer le bonus de la carte (API Sorare)"
+          >
+            <div className="flex items-center justify-center gap-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Bonus Carte</span>
+              <HelpCircle className="w-3 h-3 text-amber-400 group-hover:scale-110 transition-transform" />
+            </div>
+            <div className="text-base sm:text-lg font-black text-amber-300 my-auto">+{proj.cardBonusPercentage}%</div>
+            <span className="text-[9px] font-bold text-amber-400/90">+{proj.cardBonusScore} pts bonus</span>
+          </button>
         </div>
 
         {/* PERFORMANCE GRAPH WITH EXACT COLOR CODING */}
@@ -1219,6 +1253,13 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
         </div>
 
       </div>
+
+      {showProjectionBreakdown && (
+        <ProjectionBreakdownModal
+          card={card}
+          onClose={() => setShowProjectionBreakdown(false)}
+        />
+      )}
     </div>
   );
 };

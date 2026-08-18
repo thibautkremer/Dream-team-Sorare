@@ -1,3 +1,5 @@
+import { SorareCard } from '../types';
+
 /**
  * Nettoyage et normalisation de pseudo utilisateur Sorare
  * Transforme "Thib 8" en "thib-8", supprime les caractères spéciaux, etc.
@@ -68,3 +70,109 @@ export function formatStatusBadge(status: string, confidence: number = 100): { l
       };
   }
 }
+
+export interface CardBonusBreakdown {
+  editionBonus: number;        // Bonus d'Édition / Saison (ex: 5% ou 20%)
+  collectionBonus: number;     // Bonus de Collection d'album (ex: 0% à 5%)
+  xpGradeBonus: number;        // Bonus Niveau/Grade XP (ex: 0.5% * grade)
+  rarityBonus: number;         // Bonus Rareté de base (Rare +10%, Super Rare +20%, Unique +40%)
+  totalBonusPercentage: number;// Multiplicateur total de la carte
+  powerString: string;         // Ex: "1.230" (depuis l'API Sorare)
+  hasInSeasonBonus: boolean;   // Vrai si saison courante (2025/2026)
+}
+
+export function getCardBonusBreakdown(card: SorareCard): CardBonusBreakdown {
+  const total = getCardTotalBonus(card);
+  const powerStr = (1 + total / 100).toFixed(3);
+  const isInSeason = card.seasonYear === 2026 || card.seasonYear === 2025;
+
+  let rarityBonus = 0;
+  const rarity = (card.rarity || '').toUpperCase();
+  if (rarity === 'RARE') rarityBonus = 10;
+  else if (rarity === 'SUPER_RARE') rarityBonus = 20;
+  else if (rarity === 'UNIQUE') rarityBonus = 40;
+
+  if (card.powerBreakdown) {
+    const pb = card.powerBreakdown;
+    const editionBonus = Math.round(((pb.seasonBasisPoints || 0) + (pb.specialEditionCardsBasisPoints || 0)) / 10) / 10;
+    const collectionBonus = Math.round((pb.collectionBasisPoints || 0) / 10) / 10;
+    const xpGradeBonus = Math.round((pb.xpBasisPoints || 0) / 10) / 10;
+    const otherBonus = Math.round((pb.otherBonusBasisPoints || 0) / 10) / 10;
+
+    return {
+      editionBonus,
+      collectionBonus: Math.max(0, Math.round((collectionBonus + otherBonus) * 10) / 10),
+      xpGradeBonus,
+      rarityBonus,
+      totalBonusPercentage: total,
+      powerString: powerStr,
+      hasInSeasonBonus: editionBonus > 0,
+    };
+  }
+
+  let xpGradeBonus = 0;
+  if (typeof card.grade === 'number' && card.grade > 0) {
+    xpGradeBonus = card.grade * 0.5;
+  } else if (typeof card.xp === 'number' && card.xp > 0) {
+    xpGradeBonus = Math.min(card.xp / 100, 5);
+  }
+
+  // Détermination du bonus d'édition par soustraction / type (y compris pour les cartes communes d'édition spéciale)
+  let editionBonus = 0;
+  if (rarity === 'COMMON') {
+    if (total >= 20) {
+      editionBonus = 20; // Édition Spéciale Premium (+20%)
+    } else if (total >= 15) {
+      editionBonus = 15; // Édition Spéciale Shiny (+15%)
+    } else if (total >= 10) {
+      editionBonus = 10; // Édition Spéciale Standard (+10%)
+    } else if (total >= 5) {
+      editionBonus = 5;  // Édition Spéciale Basique (+5%)
+    }
+  } else {
+    if (total >= 20) {
+      editionBonus = 20; // Édition Spéciale (+20%)
+    } else if (total >= 5 && isInSeason) {
+      editionBonus = 5;  // In-Season Standard (+5%)
+    }
+  }
+
+  // Le solde provient de la collection club
+  let collectionBonus = Math.max(0, Math.round((total - editionBonus - xpGradeBonus - rarityBonus) * 10) / 10);
+
+  return {
+    editionBonus,
+    collectionBonus,
+    xpGradeBonus: Math.round(xpGradeBonus * 10) / 10,
+    rarityBonus,
+    totalBonusPercentage: total,
+    powerString: powerStr,
+    hasInSeasonBonus: editionBonus > 0,
+  };
+}
+
+export function getCardTotalBonus(card: SorareCard): number {
+  if (typeof card.bonusPercentage === 'number') {
+    return card.bonusPercentage;
+  }
+
+  if (card.powerBreakdown) {
+    const pb = card.powerBreakdown;
+    const sumBps = (pb.collectionBasisPoints || 0) +
+                   (pb.seasonBasisPoints || 0) +
+                   (pb.specialEditionCardsBasisPoints || 0) +
+                   (pb.xpBasisPoints || 0) +
+                   (pb.otherBonusBasisPoints || 0);
+    return Math.round((sumBps / 100) * 10) / 10;
+  }
+
+  if (card.power) {
+    const p = parseFloat(card.power);
+    if (!isNaN(p) && p >= 1.0) {
+      return Math.round((p - 1.0) * 100 * 10) / 10;
+    }
+  }
+
+  return 0;
+}
+

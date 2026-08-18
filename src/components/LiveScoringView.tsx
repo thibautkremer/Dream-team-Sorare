@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { RefreshCw, Zap, Clock, Trophy, Crown, CheckCircle2, AlertCircle, Sparkles, Filter, ChevronRight, Activity, Flame, Shield, Calendar, TrendingUp, AlertTriangle, Users, Layers } from 'lucide-react';
-import { SorareCard, Lineup } from '../types';
+import { SorareCard, Lineup, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, formatKickoffDate, getPlayerWinProbability, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 
 interface LiveScoringViewProps {
@@ -9,6 +9,7 @@ interface LiveScoringViewProps {
   compositions?: Lineup[];
   onOpenScout: (card: SorareCard) => void;
   gameWeek: number;
+  strategy?: StrategyType;
 }
 
 export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
@@ -17,6 +18,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
   compositions = [],
   onOpenScout,
   gameWeek,
+  strategy,
 }) => {
   // Navigation mode: 'all_aligned' (all players across all lineups), 'team_0', 'team_1', 'team_2', 'team_3', 'gw_matches', 'all_gallery'
   const [activeView, setActiveView] = useState<string>('all_aligned');
@@ -46,7 +48,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     const map = new Map<string, Array<{ compoIndex: number; compoName: string; isCaptain: boolean; slot: string }>>();
     
     activeCompositions.forEach((comp, idx) => {
-      const compName = comp.name || `Équipe ${idx + 1}`;
+      const compName = comp.name || `Compo ${idx + 1}`;
       const slots = comp.slots;
       const slotKeys: Array<'gk' | 'def' | 'mid' | 'fwd' | 'extra'> = ['gk', 'def', 'mid', 'fwd', 'extra'];
 
@@ -85,7 +87,8 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       slotKeys.forEach(slotKey => {
         const card = slots[slotKey];
         if (card) {
-          const breakdown = calculatePlayerProjectedScore(card);
+          const activeStrat = strategy || comp.strategy || lineup.strategy;
+          const breakdown = calculatePlayerProjectedScore(card, activeStrat);
           const score = breakdown.projectedScore;
           if (comp.captainSlot === slotKey) {
             sum += score * 1.20;
@@ -99,7 +102,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       return {
         index: idx,
         id: comp.id,
-        name: comp.name || `Équipe ${idx + 1}`,
+        name: comp.name || `Compo ${idx + 1}`,
         projectedTotal: Math.round(sum * 10) / 10,
         captainName,
         captainSlot: comp.captainSlot,
@@ -112,7 +115,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     return cards.map(card => {
       const lineupPresences = playerLineupMap.get(card.id) || [];
       const isAlignedAny = lineupPresences.length > 0;
-      const breakdown = calculatePlayerProjectedScore(card);
+      const breakdown = calculatePlayerProjectedScore(card, strategy || lineup.strategy);
       const recentAnalysis = getPlayerRecentMatchAnalysis(card);
       const fixture = card.upcomingFixture;
       const hasMatch = fixture && fixture.hasUpcomingMatch !== false;
@@ -329,7 +332,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
           {/* Buttons for each Team / Composition */}
           {activeCompositions.map((comp, idx) => {
             const isSelected = activeView === `team_${idx}`;
-            const compName = comp.name || `Équipe ${idx + 1}`;
+            const compName = comp.name || `Compo ${idx + 1}`;
             return (
               <button
                 key={comp.id || idx}
