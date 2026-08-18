@@ -811,6 +811,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
     const maxPages = 200; // 200 pages * 12 cards = 2400 cards max
 
     for (let page = 1; page <= maxPages; page++) {
+      console.log(`[Sorare Sync] Fetching page ${page}, headers:`, JSON.stringify(headers));
       const responseResult = await fetchGraphQLWithRetry(
         'https://api.sorare.com/graphql',
         { query, variables: { slug, after } },
