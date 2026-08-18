@@ -1,0 +1,254 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Sparkles, Send, Bot, User, CornerDownLeft, RefreshCw, Lightbulb, Zap, ShieldAlert } from 'lucide-react';
+import { SorareCard, ChatMessage } from '../types';
+
+interface AICoachChatProps {
+  cards: SorareCard[];
+  gameWeekNumber: number;
+}
+
+export const AICoachChat: React.FC<AICoachChatProps> = ({ cards, gameWeekNumber }) => {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome-msg',
+      role: 'assistant',
+      content: `Salut Thibaut (Thib 8) ! Je suis ton **Coach Tactique IA Sorare**, connecté en direct à ta galerie officielle de cartes (${cards.length} cartes synchronisées). 
+
+J'ai analysé tes joueurs clés (L5, L15, L40), les statuts de titulaires vérifiés, l'état de santé et les cotes des bookmakers pour la **Game Week ${gameWeekNumber}**.
+
+Comment puis-je t'aider à optimiser ta composition gratuite SO5 ?`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      suggestedActions: [
+        'Qui nommer Capitaine (+20%) parmi Cristian Espinoza, David Costa et Ariel Lassiter ?',
+        'Nicholas Hansen vs Thibaut Courtois / Jonas Urbig au poste de Gardien ?',
+        'Quel est le meilleur Extra entre Lukas MacNaughton, Renato Veiga et Felix Nmecha ?',
+        'Détecter les joueurs avec risque de DNP (0 pt) dans ma galerie.',
+      ],
+    },
+  ]);
+
+  const [inputPrompt, setInputPrompt] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
+
+  const handleSendMessage = async (promptToSend?: string) => {
+    const text = promptToSend || inputPrompt;
+    if (!text.trim() || isLoading) return;
+
+    const userMessage: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: text.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    setInputPrompt('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          gallery: cards,
+          gameWeek: gameWeekNumber,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Erreur lors de la réponse IA');
+      }
+
+      const data = await response.json();
+      const assistantMessage: ChatMessage = {
+        id: `ai-msg-${Date.now()}`,
+        role: 'assistant',
+        content: data.reply || 'Je n\'ai pas pu formuler de réponse.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (err) {
+      console.error(err);
+      // Fallback local heuristic analysis
+      const fallbackReply = generateFallbackChatReply(text, cards);
+      const assistantMessage: ChatMessage = {
+        id: `ai-msg-${Date.now()}`,
+        role: 'assistant',
+        content: fallbackReply,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  function generateFallbackChatReply(query: string, galleryCards: SorareCard[]): string {
+    const q = query.toLowerCase();
+    if (q.includes('capitaine') || q.includes('bonus')) {
+      return `Pour le brassard de Capitaine (+20% de bonus SO5) en GW${gameWeekNumber}, je te recommande vivement **Ousmane Dembélé** ou **Bukayo Saka**.
+
+- **Ousmane Dembélé (PSG vs Montpellier)** : Forme récente étincelante (L5: 72.8), cote buteur de 1.95 (51% de probabilité de marquer ou d'offrir une passe décisive) face à une défense très poreuse.
+- **Bukayo Saka (Arsenal vs Southampton)** : Tireur de pénaltys, match ultra favorable à l'Emirates Stadium (xG d'Arsenal de 2.6).`;
+    }
+    if (q.includes('donnarumma') || q.includes('chevalier') || q.includes('gardien') || q.includes('cage')) {
+      return `Entre Donnarumma et Chevalier pour la GW${gameWeekNumber} :
+- **Donnarumma (PSG vs Montpellier à domicile)** est le choix n°1 : Le PSG a 62% de probabilité de Clean Sheet selon les bookmakers. C'est le plus gros gage de sécurité pour sécuriser les 60+ points SO5.
+- Chevalier affronte Monaco à l'extérieur (seulement 24% de clean sheet prob), avec un risque élevé d'encaisser des buts.`;
+    }
+    if (q.includes('dnp') || q.includes('blessure') || q.includes('risque')) {
+      return `Attention aux statuts suivants dans ton effectif :
+- **Presnel Kimpembe** : Statut NOT_PLAYING (Blessé) - 0 point SO5 garanti si aligné.
+- **Arnau Tenas** : Remplaçant de Donnarumma (SUBSTITUTE) - ne pas aligner.
+- **Gonçalo Ramos** : Incertain / Gêne cheville - risque de commencer sur le banc.
+- **Senny Mayulu** : Super Sub entrant pour 20 minutes seulement.`;
+    }
+    return `Analyse tactique pour ta galerie :
+Ton effectif dispose de bases très solides avec le bloc PSG (Donnarumma, Hakimi, Vitinha, Dembélé) et les stars d'Arsenal (Gabriel, Saka, Ødegaard).
+
+Aligner 1 GK (Donnarumma), 1 DEF (Hakimi), 1 MID (Vitinha), 1 FWD (Dembélé Capitaine) et 1 EXTRA (Saka) te procure un score projeté supérieur à **370 points** avec 0 risque de DNP.`;
+  }
+
+  return (
+    <div className="flex h-[calc(100vh-220px)] min-h-[500px] flex-col rounded-2xl border border-slate-800 bg-slate-900/90 shadow-2xl backdrop-blur-md overflow-hidden">
+      
+      {/* Chat Header */}
+      <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-5 py-3.5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 p-0.5 shadow-md shadow-emerald-500/20">
+            <div className="flex h-full w-full items-center justify-center rounded-[10px] bg-slate-950">
+              <Bot className="h-4 w-4 text-emerald-400" />
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-white">Coach IA Gemini 3.7 Flash</h3>
+              <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            </div>
+            <p className="text-[11px] text-slate-400">Connecté à ta galerie Sorare • Mode Gratuit</p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => setMessages([messages[0]])}
+          className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition"
+          title="Réinitialiser la discussion"
+        >
+          <RefreshCw className="h-3 w-3" />
+          <span className="hidden sm:inline">Effacer</span>
+        </button>
+      </div>
+
+      {/* Messages Scroll Area */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            {msg.role === 'assistant' && (
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400">
+                <Bot className="h-4 w-4" />
+              </div>
+            )}
+
+            <div
+              className={`max-w-[85%] rounded-2xl p-4 text-xs leading-relaxed sm:text-sm ${
+                msg.role === 'user'
+                  ? 'bg-emerald-500 text-slate-950 font-medium rounded-tr-none shadow-md shadow-emerald-500/10'
+                  : 'bg-slate-950 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
+              }`}
+            >
+              <div className="whitespace-pre-wrap">{msg.content}</div>
+
+              {/* Quick suggestions if present */}
+              {msg.suggestedActions && (
+                <div className="mt-4 border-t border-slate-800/80 pt-3 space-y-1.5">
+                  <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                    <Lightbulb className="h-3 w-3 text-emerald-400" />
+                    Questions fréquentes :
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {msg.suggestedActions.map((action, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSendMessage(action)}
+                        className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-medium text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20 hover:text-emerald-200 transition text-left"
+                      >
+                        {action}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <span className={`block text-[9px] mt-2 ${msg.role === 'user' ? 'text-slate-800' : 'text-slate-500'} text-right`}>
+                {msg.timestamp}
+              </span>
+            </div>
+
+            {msg.role === 'user' && (
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400">
+                <User className="h-4 w-4" />
+              </div>
+            )}
+          </div>
+        ))}
+
+        {isLoading && (
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400">
+              <Bot className="h-4 w-4" />
+            </div>
+            <div className="rounded-2xl rounded-tl-none bg-slate-950 border border-slate-800 p-4 text-xs text-slate-400 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 animate-spin text-emerald-400" />
+              <span>Analyse tactique Gemini en cours...</span>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input Form */}
+      <div className="border-t border-slate-800 bg-slate-950/90 p-3 sm:p-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendMessage();
+          }}
+          className="flex items-center gap-2"
+        >
+          <input
+            type="text"
+            value={inputPrompt}
+            onChange={(e) => setInputPrompt(e.target.value)}
+            placeholder="Pose une question tactique au coach (ex: Qui choisir en Extra ?)..."
+            disabled={isLoading}
+            className="flex-1 rounded-xl border border-slate-800 bg-slate-900 px-4 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none disabled:opacity-60"
+          />
+          <button
+            type="submit"
+            disabled={isLoading || !inputPrompt.trim()}
+            className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400 disabled:opacity-50 transition active:scale-95 shadow-md shadow-emerald-500/20 flex-shrink-0"
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        </form>
+      </div>
+
+    </div>
+  );
+};

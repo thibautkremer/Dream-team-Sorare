@@ -1,0 +1,6 @@
+{
+  "name": "Team Sorare",
+  "description": "Optimisateur intelligent de compositions de fantasy football Sorare (SO5) avec synchronisation d'effectif GraphQL, analyse prédictive IA Gemini, cotes bookmakers et persistance hors-ligne.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
