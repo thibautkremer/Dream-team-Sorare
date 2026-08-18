@@ -402,6 +402,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               type="date"
               value={maxMatchDate}
               onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
+              onClick={(e) => e.currentTarget.showPicker?.()}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
               title="Match inclus jusqu'à cette date"
             />
@@ -442,9 +443,13 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             >
               <option value={0}>Tous les scores</option>
               <option value={30}>&ge; 30 pts projetés</option>
+              <option value={35}>&ge; 35 pts projetés</option>
               <option value={40}>&ge; 40 pts projetés</option>
+              <option value={45}>&ge; 45 pts projetés</option>
               <option value={50}>&ge; 50 pts projetés</option>
+              <option value={55}>&ge; 55 pts projetés</option>
               <option value={60}>&ge; 60 pts projetés</option>
+              <option value={65}>&ge; 65 pts projetés</option>
               <option value={70}>&ge; 70 pts projetés</option>
             </select>
           </div>
@@ -599,7 +604,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             const isInjured = card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED';
             const winProb = getPlayerWinProbability(card.upcomingFixture);
             const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
-            const breakdown = calculatePlayerProjectedScore(card);
+            const breakdown = calculatePlayerProjectedScore(card, 'BALANCED', cards);
             const projScore = breakdown.projectedScore;
 
             return (
@@ -736,7 +741,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                         <div className="flex items-center gap-1 text-[10px]">
                           <span className="font-semibold text-slate-300" title="Score de base">{breakdown.baseProjectedScore} pts</span>
                           <span className="font-bold text-amber-300" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
-                          <span className="font-black text-emerald-400 bg-emerald-500/10 px-1 rounded" title="Score total projeté avec bonus">= {projScore} pts</span>
+                          <span className="font-black text-emerald-400 bg-emerald-500/10 px-1 rounded" title="Score total projeté avec bonus">= {projScore} ({breakdown.projectedFloor}-{breakdown.projectedCeiling}) pts</span>
                         </div>
                       </div>
                     </div>

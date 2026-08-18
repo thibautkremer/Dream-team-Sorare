@@ -7,15 +7,17 @@ import { X, TrendingUp, ShieldAlert, Zap, Layers, Sparkles, Award, Calculator, I
 interface ProjectionBreakdownModalProps {
   card: SorareCard;
   strategy?: StrategyType;
+  allGalleryCards?: SorareCard[];
   onClose: () => void;
 }
 
 export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> = ({
   card,
   strategy = 'BALANCED',
+  allGalleryCards = [],
   onClose,
 }) => {
-  const breakdown = calculatePlayerProjectedScore(card, strategy as StrategyType);
+  const breakdown = calculatePlayerProjectedScore(card, strategy as StrategyType, allGalleryCards);
   const posBadge = formatPositionBadge(card.positionCode);
   const fixture = card.upcomingFixture;
 
@@ -88,18 +90,13 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
 
             <div className="flex items-center gap-3 bg-slate-950/80 px-4 py-2.5 rounded-xl border border-emerald-500/40">
               <div className="text-center">
-                <span className="text-[10px] text-slate-400 block font-semibold">Score de Base</span>
-                <span className="text-base font-bold text-slate-200">{breakdown.baseProjectedScore} pts</span>
+                <span className="text-[10px] text-slate-400 block font-semibold">Base + Bonus</span>
+                <span className="text-base font-bold text-slate-200">{breakdown.totalProjectedScore} pts</span>
               </div>
-              <span className="text-amber-400 font-bold text-sm">+</span>
-              <div className="text-center">
-                <span className="text-[10px] text-amber-300 block font-semibold">Bonus ({breakdown.cardBonusPercentage}%)</span>
-                <span className="text-base font-bold text-amber-300">+{breakdown.cardBonusScore} pts</span>
-              </div>
-              <span className="text-emerald-400 font-bold text-sm">=</span>
+              <span className="text-emerald-400 font-bold text-sm">➜</span>
               <div className="text-center border-l border-slate-800 pl-3">
-                <span className="text-[10px] text-emerald-400 block font-bold uppercase">Total Projeté</span>
-                <span className="text-lg font-black text-emerald-400">{breakdown.totalProjectedScore} pts</span>
+                <span className="text-[10px] text-emerald-400 block font-bold uppercase">Fourchette Projetée</span>
+                <span className="text-lg font-black text-emerald-400">{breakdown.projectedFloor} - {breakdown.projectedCeiling} pts</span>
               </div>
             </div>
           </div>
@@ -144,11 +141,22 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
               </div>
             </div>
 
-            <div className="text-xs text-slate-400 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80 flex items-center justify-between">
-              <span>Note de forme pondérée :</span>
-              <span className="font-mono text-emerald-300 font-bold text-[11px]">
-                ({breakdown.l5Boosted} × {breakdown.strategyWeights.l5}) + ({breakdown.l15Boosted} × {breakdown.strategyWeights.l15}) + ({breakdown.l40Boosted} × {breakdown.strategyWeights.l40}) = {breakdown.boostedBaseFormScore} pts
-              </span>
+            <div className="text-xs text-slate-400 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span>Note de forme pondérée :</span>
+                <span className="font-mono text-emerald-300 font-bold text-[11px]">
+                  ({breakdown.l5Boosted} × {breakdown.strategyWeights.l5}) + ({breakdown.l15Boosted} × {breakdown.strategyWeights.l15}) + ({breakdown.l40Boosted} × {breakdown.strategyWeights.l40}) = {Math.round((breakdown.boostedBaseFormScore + breakdown.regressionPenalty) * 10) / 10} pts
+                </span>
+              </div>
+              {breakdown.regressionPenalty > 0 && (
+                <div className="flex items-center justify-between text-rose-400 font-semibold border-t border-slate-800 pt-1.5 mt-0.5">
+                  <span className="flex items-center gap-1">
+                    <TrendingUp className="w-3 h-3 rotate-180" />
+                    Régression vers la moyenne (L5 vs L40) :
+                  </span>
+                  <span>-{breakdown.regressionPenalty} pts</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -196,16 +204,102 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
               </div>
 
               <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 flex flex-col justify-between">
-                <span className="text-slate-400 text-[10px] font-semibold">Bonus Clean Sheet / xG</span>
-                <span className="font-bold text-white text-xs mt-1">
-                  +{breakdown.cleanSheetFactor} pts Clean Sheet
-                </span>
-                <span className="text-[10px] text-slate-400 mt-1">Applicable GK & DEF (Cotes Bookmaker)</span>
+                <span className="text-slate-400 text-[10px] font-semibold">Bonus contextuels & Game State</span>
+                <div className="mt-1 space-y-1">
+                  {breakdown.cleanSheetFactor > 0 && (
+                    <span className="font-bold text-white text-[11px] block">
+                      +{breakdown.cleanSheetFactor} pts Clean Sheet
+                    </span>
+                  )}
+                  {breakdown.bookmakerActionBonus > 0 && (
+                    <span className="font-bold text-sky-400 text-[11px] block">
+                      +{breakdown.bookmakerActionBonus} pts Buteur/Passeur
+                    </span>
+                  )}
+                  {breakdown.contextualBonus !== 0 && (
+                    <span className={`font-bold ${breakdown.contextualBonus > 0 ? 'text-emerald-400' : 'text-rose-400'} text-[11px] block`}>
+                      {breakdown.contextualBonus > 0 ? '+' : ''}{breakdown.contextualBonus} pts (Context)
+                      {breakdown.contextualImpactLabel && <span className="text-[9px] font-normal ml-1 block text-slate-400 italic">{breakdown.contextualImpactLabel}</span>}
+                    </span>
+                  )}
+                  {breakdown.cleanSheetFactor === 0 && breakdown.bookmakerActionBonus === 0 && breakdown.contextualBonus === 0 && (
+                    <span className="text-slate-500 italic text-[10px]">Aucun bonus additionnel</span>
+                  )}
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1">Impact des absents et du scénario de match</span>
               </div>
             </div>
           </div>
 
-          {/* Section 4 : Décomposition Complète du Bonus de Carte (API Sorare) */}
+          {/* Section 4: Volatility & Reliant Type */}
+          <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-500/20 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                <Layers className="w-4 h-4" />
+                <span>Analyse de Volatilité & Profil de Score</span>
+              </div>
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${
+                breakdown.volatilityRating === 'HIGH' ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
+                breakdown.volatilityRating === 'MEDIUM' ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' :
+                'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+              }`}>
+                {breakdown.volatilityRating === 'HIGH' ? 'VOLATILITÉ HAUTE' : breakdown.volatilityRating === 'MEDIUM' ? 'VOLATILITÉ MODÉRÉE' : 'VOLATILITÉ FAIBLE'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800 flex items-center gap-3">
+                <div className={`h-10 w-10 rounded-full flex items-center justify-center border-2 ${
+                  breakdown.reliantType === 'AA_RELIANT' ? 'border-sky-500/50 bg-sky-500/10' :
+                  breakdown.reliantType === 'DECISIVE_RELIANT' ? 'border-rose-500/50 bg-rose-500/10' :
+                  'border-slate-500/50 bg-slate-500/10'
+                }`}>
+                  {breakdown.reliantType === 'AA_RELIANT' ? <Activity className="w-5 h-5 text-sky-400" /> :
+                   breakdown.reliantType === 'DECISIVE_RELIANT' ? <Award className="w-5 h-5 text-rose-400" /> :
+                   <Info className="w-5 h-5 text-slate-400" />}
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold block">TYPE DE JOUEUR</span>
+                  <span className="text-xs font-black text-white">
+                    {breakdown.reliantType === 'AA_RELIANT' ? 'AA-RELIANT (Stable)' :
+                     breakdown.reliantType === 'DECISIVE_RELIANT' ? 'DECISIVE-RELIANT (Volatil)' :
+                     'PROFIL ÉQUILIBRÉ'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase">Confidence Range</span>
+                  <span className="text-[9px] font-bold text-emerald-400">-{Math.round(breakdown.projectedScore - breakdown.projectedFloor)} / +{Math.round(breakdown.projectedCeiling - breakdown.projectedScore)} pts</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black text-slate-400">{breakdown.projectedFloor}</span>
+                  <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden flex relative">
+                    {/* Visual bar centered on the projected score */}
+                    <div
+                      className="absolute top-0 bottom-0 bg-emerald-500/40"
+                      style={{
+                        left: `${((breakdown.projectedFloor - breakdown.projectedFloor) / (breakdown.projectedCeiling - breakdown.projectedFloor)) * 100}%`,
+                        right: '0%'
+                      }}
+                    />
+                    <div
+                      className="absolute top-0 bottom-0 w-1 bg-white shadow-[0_0_8px_white] z-10"
+                      style={{ left: `${((breakdown.projectedScore - breakdown.projectedFloor) / (breakdown.projectedCeiling - breakdown.projectedFloor)) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-black text-slate-400">{breakdown.projectedCeiling}</span>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-[10px] text-slate-500 leading-relaxed italic">
+              * La fourchette représente l'écart probable entre un match "sans action décisive" et un match avec un impact majeur, ajusté selon le volume d'All-Around historique du joueur.
+            </p>
+          </div>
+
+          {/* Section 5 : Décomposition Complète du Bonus de Carte (API Sorare) */}
           <div className="p-4 rounded-xl bg-slate-950/80 border border-amber-500/30 space-y-3">
             <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
               <div className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-wider">

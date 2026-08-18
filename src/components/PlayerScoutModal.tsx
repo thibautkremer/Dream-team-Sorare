@@ -9,9 +9,10 @@ interface PlayerScoutModalProps {
   card: SorareCard | null;
   onClose: () => void;
   onAssignToSlot?: (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
+  allCards?: SorareCard[];
 }
 
-export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initialCard, onClose, onAssignToSlot }) => {
+export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initialCard, onClose, onAssignToSlot, allCards = [] }) => {
   const [aiReport, setAiReport] = useState<any>(null);
   const [isLoadingAI, setIsLoadingAI] = useState(false);
   const [liveCard, setLiveCard] = useState<SorareCard | null>(null);
@@ -71,7 +72,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
       verdict: isStarter ? (playerCard.scores.l5 > 60 ? 'Aligner absolument' : 'Titulaire solide') : 'Risque de banc',
       confidenceRating: playerCard.starterConfidence,
       floorScore: Math.max(35, Math.round(playerCard.scores.l40 * 0.8)),
-      expectedScore: Math.round(calculatePlayerProjectedScore(playerCard).projectedScore),
+      expectedScore: Math.round(calculatePlayerProjectedScore(playerCard, 'BALANCED', allCards).projectedScore),
       ceilingScore: Math.min(100, Math.round(playerCard.scores.l5 * 1.35)),
       matchupAnalysis: `Match face à ${playerCard.upcomingFixture?.opponent || 'Adversaire'}. FDR : ${playerCard.upcomingFixture?.difficultyRating || 2}/5.`,
       starterSecurity: isStarter ? 'Titulaire indiscutable dans le XI de départ.' : 'Temps de jeu incertain.',
@@ -314,7 +315,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
 
   const posBadge = formatPositionBadge(card.positionCode);
   const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
-  const proj = calculatePlayerProjectedScore(card);
+  const proj = calculatePlayerProjectedScore(card, 'BALANCED', allCards);
   const winProb = getPlayerWinProbability(card.upcomingFixture);
   const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
 
@@ -433,10 +434,10 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                 </div>
                 <div className="text-[11px] text-slate-300 font-semibold flex items-center justify-end gap-1 mt-0.5">
                   <span>Base: {proj.baseProjectedScore} pts</span>
-                  <span className="text-amber-300 font-bold">+{proj.cardBonusScore} pts (+{proj.cardBonusPercentage}%)</span>
+                  <span className="text-amber-300 font-bold">+{proj.cardBonusScore} pts</span>
                 </div>
                 <div className="text-sm font-black text-emerald-400 mt-0.5 flex items-center justify-end gap-1">
-                  <span>Total : {proj.totalProjectedScore} pts</span>
+                  <span>Total : {proj.totalProjectedScore} ({proj.projectedFloor}-{proj.projectedCeiling}) pts</span>
                 </div>
               </button>
             </div>
@@ -1358,6 +1359,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
       {showProjectionBreakdown && (
         <ProjectionBreakdownModal
           card={card}
+          allGalleryCards={allCards}
           onClose={() => setShowProjectionBreakdown(false)}
         />
       )}

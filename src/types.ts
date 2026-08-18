@@ -12,6 +12,7 @@ export interface BookmakerOdds {
   cleanSheetProb?: number; // 0 - 100 % (critical for DEF/GK)
   goalExpectancy?: number; // Team xG e.g. 2.1
   anytimeScorerOdds?: number; // e.g. 2.10
+  anytimeAssistOdds?: number; // e.g. 3.40
   winProbability?: number;
 }
 

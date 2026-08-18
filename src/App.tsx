@@ -504,6 +504,7 @@ export default function App() {
       {scoutCard && (
         <PlayerScoutModal
           card={scoutCard}
+          allCards={cards}
           onClose={() => setScoutCard(null)}
           onAssignToSlot={handleAssignToSlot}
         />
@@ -514,6 +515,7 @@ export default function App() {
         <ProjectionBreakdownModal
           card={breakdownCard}
           strategy={strategy}
+          allGalleryCards={cards}
           onClose={() => setBreakdownCard(null)}
         />
       )}

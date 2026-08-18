@@ -1,0 +1,5 @@
+- [x] Robust fallback logic for all contextual bonuses in `calculatePlayerProjectedScore`
+- [x] Remove redundant xG matchup multiplier
+- [x] Clean up `matchupImpactLabel` consistency
+- [x] Update UI logic for regression penalty visibility
+- [x] Verify score consistency between Gallery and Optimizer

@@ -105,7 +105,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
       );
     }
 
-    const cardBreakdown = calculatePlayerProjectedScore(card, targetLineup.strategy);
+    const cardBreakdown = calculatePlayerProjectedScore(card, targetLineup.strategy, cards);
     const projected = cardBreakdown.projectedScore;
     const bonusIfCaptain = isCaptain ? Math.round((projected * 0.20) * 10) / 10 : 0;
     const winProb = getPlayerWinProbability(card.upcomingFixture);
@@ -193,7 +193,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
             <div className="space-y-0.5 text-[10px]">
               <div className="flex items-center justify-between text-slate-400">
                 <span>Base:</span>
-                <span className="font-semibold text-slate-200">{cardBreakdown.baseProjectedScore} pts</span>
+                <span className="font-semibold text-slate-200">{cardBreakdown.baseProjectedScore} ({cardBreakdown.projectedFloor}-{cardBreakdown.projectedCeiling}) pts</span>
               </div>
               <div className="flex items-center justify-between text-slate-400">
                 <span>Bonus (+{cardBreakdown.cardBonusPercentage}%):</span>
@@ -442,6 +442,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
                     type="date"
                     value={filters.maxMatchDate || ''}
                     onChange={(e) => setFilters(prev => ({ ...prev, maxMatchDate: e.target.value || undefined }))}
+                    onClick={(e) => e.currentTarget.showPicker?.()}
                     className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-400"
                   />
                   {filters.maxMatchDate && (

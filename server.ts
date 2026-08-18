@@ -94,7 +94,7 @@ async function generateContentWithRetry(params: {
   }
 
   const ai = getAI();
-  const modelsToTry = [params.model, 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  const modelsToTry = [params.model, 'gemini-2.0-flash', 'gemini-1.5-flash'];
   const uniqueModels = Array.from(new Set(modelsToTry));
   let lastError: any = null;
 
@@ -128,9 +128,8 @@ async function generateContentWithRetry(params: {
                               errMessage.includes('quota');
                               
       if (isQuotaExhausted) {
-        lastQuotaExhaustedTime = Date.now();
-        console.log(`[AI Engine] Model ${modelName} reached free tier quota. Gracefully engaging SO5 algorithmic engine.`);
-        break;
+        console.log(`[AI Engine] Model ${modelName} reached free tier quota. Trying next available model...`);
+        continue;
       }
 
       const isTransient = errStatus === 503 || 
@@ -146,6 +145,9 @@ async function generateContentWithRetry(params: {
   }
 
   const durationMs = Date.now() - startTime;
+  if (lastError && (lastError.status === 429 || String(lastError.message).includes('429'))) {
+    lastQuotaExhaustedTime = Date.now();
+  }
   addApiLog({
     description: `Gemini AI: Échec de génération (${params.model})`,
     service: 'Gemini AI',
@@ -1579,7 +1581,7 @@ app.post('/api/ai/optimize-lineup', async (req, res) => {
 
   try {
     const ai = getAI();
-    const model = 'gemini-3.1-flash-lite';
+    const model = 'gemini-2.0-flash';
 
     // Apply active optimization filters to the player pool
     let filteredCandidates = cards.filter((c: any) => {
@@ -1855,7 +1857,7 @@ app.post('/api/ai/scout-player', async (req, res) => {
 
   try {
     const ai = getAI();
-    const model = 'gemini-3.1-flash-lite';
+    const model = 'gemini-2.0-flash';
 
     const systemInstruction = `Tu es un recruteur expert Sorare SO5. Analyse la carte du joueur, sa forme récente (L5), sa régularité (L15/L40), son statut de titulaire, son adversaire et les cotes bookmakers pour délivrer une fiche de scouting ultra précise.`;
 
@@ -1944,7 +1946,7 @@ app.post('/api/ai/chat', async (req, res) => {
 
   try {
     const ai = getAI();
-    const model = 'gemini-3.1-flash-lite';
+    const model = 'gemini-2.0-flash';
 
     const systemInstruction = `Tu es l'Assistant Tactique IA personnel de Thib 8 pour Sorare SO5 (Fantasy Football).
 Tu as accès en temps réel à l'ensemble de ses cartes de jeu, leurs statistiques L5/L15/L40, leurs statuts de titulaires, blessures et leurs matchs à venir avec cotes bookmakers.

@@ -8,6 +8,13 @@ export interface ScoreBreakdown {
   cardBonusPercentage: number;   // Pourcentage de bonus de la carte (ex: 10, 23)
   cardBonusScore: number;        // Score en points apporté par le bonus
   totalProjectedScore: number;   // Total général (Score de base + Bonus)
+
+  // Nouveaux champs pour la volatilité et fourchette
+  projectedFloor: number;
+  projectedCeiling: number;
+  reliantType: 'AA_RELIANT' | 'DECISIVE_RELIANT' | 'BALANCED';
+  volatilityRating: 'LOW' | 'MEDIUM' | 'HIGH';
+
   formIndex: number;
   matchupFactor: number;
   cleanSheetFactor: number;
@@ -37,6 +44,12 @@ export interface ScoreBreakdown {
   matchupImpactLabel: string;
   isHome: boolean;
   profileBonus: number;
+  bookmakerActionBonus: number;
+
+  // Bonus contextuels
+  contextualBonus: number;
+  contextualImpactLabel?: string;
+  regressionPenalty: number;
 
   bonusBreakdown: CardBonusBreakdown;
 }
@@ -245,10 +258,23 @@ export function formatKickoffDate(dateInput?: string | { kickoffDate?: string; k
   }
 }
 
+export interface ClubContext {
+  absentScorerName?: string;
+  absentAssisterName?: string;
+  absentDefenderName?: string;
+  absentStarName?: string;
+  avgClubScore: number;
+}
+
 /**
  * Calcule le score projeté SO5 pour une carte selon la stratégie
  */
-export function calculatePlayerProjectedScore(card: SorareCard, strategy: StrategyType = 'BALANCED'): ScoreBreakdown {
+export function calculatePlayerProjectedScore(
+  card: SorareCard,
+  strategy: StrategyType = 'BALANCED',
+  allGalleryCards: SorareCard[] = [],
+  precomputedClubContext?: Record<string, ClubContext>
+): ScoreBreakdown {
   const recentStats = getPlayerRecentMatchAnalysis(card);
   const bonusPct = getCardTotalBonus(card);
   const bonusBreakdown = getCardBonusBreakdown(card);
@@ -260,6 +286,10 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     cardBonusPercentage: bonusPct,
     cardBonusScore: 0,
     totalProjectedScore: 0,
+    projectedFloor: 0,
+    projectedCeiling: 0,
+    reliantType: 'BALANCED',
+    volatilityRating: 'LOW',
     formIndex: 0,
     matchupFactor: 0,
     cleanSheetFactor: 0,
@@ -285,6 +315,9 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     matchupImpactLabel: 'Pas de projection de match',
     isHome: card.upcomingFixture?.isHome ?? true,
     profileBonus: 0,
+    bookmakerActionBonus: 0,
+    contextualBonus: 0,
+    regressionPenalty: 0,
     bonusBreakdown,
   };
 
@@ -315,6 +348,14 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
   }
 
   baseForm = (l5 * strategyWeights.l5) + (l15 * strategyWeights.l15) + (l40 * strategyWeights.l40);
+
+  // --- NEW: Regression to the Mean ---
+  let regressionPenalty = 0;
+  if (l5 > l40 + 12 && l40 > 0) {
+    // Si la forme récente est bcp plus haute que le long terme, on tempère de 30% l'excédent
+    regressionPenalty = (l5 - l40 - 12) * 0.3;
+    baseForm -= regressionPenalty;
+  }
 
   // 3. Facteur statut titulaire & pénalité derniers matchs
   let starterFactor = 1.0;
@@ -351,6 +392,7 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
   let cleanSheetFactor = 0;
   let matchupImpactLabel = 'Neutre (FDR 3 : 100%)';
   let difficultyRating = fixture?.difficultyRating || 3;
+  let allAroundFactor = 1.0;
 
   if (fixture) {
     const winProb = getPlayerWinProbability(fixture);
@@ -370,10 +412,12 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
       case 1:
         matchupFactor = 1.12;
         matchupImpactLabel = 'Très Favorable (FDR 1 : +12%)';
+        allAroundFactor = (card.positionCode === 'MID') ? 1.05 : 1.0; // Boost possession pour MID
         break;
       case 2:
         matchupFactor = 1.05;
         matchupImpactLabel = 'Favorable (FDR 2 : +5%)';
+        allAroundFactor = (card.positionCode === 'MID') ? 1.03 : 1.0;
         break;
       case 3:
         matchupFactor = 1.00;
@@ -387,21 +431,125 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
         matchupFactor = 0.85;
         matchupImpactLabel = 'Très Difficile (FDR 5 : -15%)';
         break;
-      default:
-        matchupFactor = 1.00;
-        matchupImpactLabel = 'Neutre';
+    }
+
+    // --- NEW: Opponent Style Proxies ---
+    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture?.bookmaker?.goalExpectancy && fixture.bookmaker.goalExpectancy > 1.8) {
+      // Si l'adversaire a bcp d'xG, plus de volume défensif attendu
+      allAroundFactor *= 1.05;
     }
 
     if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture?.bookmaker?.cleanSheetProb) {
       cleanSheetFactor = (fixture.bookmaker.cleanSheetProb / 100) * 8;
     }
+  }
 
-    if ((card.positionCode === 'FWD' || card.positionCode === 'MID') && fixture?.bookmaker?.goalExpectancy) {
-      if (fixture.bookmaker.goalExpectancy > 2.0) {
-        matchupFactor += 0.06;
-        matchupImpactLabel += ' • xG Élevé (+6%)';
+  // --- NEW: Game State (O/U Proxy) ---
+  let gameStateBonus = 0;
+  if (fixture?.bookmaker?.goalExpectancy) {
+    const xG = fixture.bookmaker.goalExpectancy;
+    if (xG < 1.1) {
+      // Match fermé
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 2;
+      if (card.positionCode === 'FWD') gameStateBonus -= 2;
+    } else if (xG > 2.2) {
+      // Match ouvert
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 1;
+      if (card.positionCode === 'FWD') gameStateBonus += 3;
+    }
+  }
+
+  // --- NEW: Contextual Absents ---
+  let contextualBonus = 0;
+  let contextualImpactLabel = '';
+
+  const clubName = card.club?.name;
+  if (clubName) {
+    const context = precomputedClubContext?.[clubName];
+    if (context) {
+      // Depth Factor: Les grosses équipes encaissent mieux les absences
+      // avgClubScore > 52 ➜ grosses écuries (depth compensation)
+      // avgClubScore < 42 ➜ petites écuries (impact critique)
+      const depthFactor = context.avgClubScore > 52 ? 0.5 : context.avgClubScore < 42 ? 1.2 : 1.0;
+
+      // 1. Leader Absent (Penalty Matchup)
+      if (context.absentStarName && context.absentStarName !== card.displayName) {
+        const penalty = 0.05 * depthFactor;
+        matchupFactor *= (1 - penalty);
+        matchupImpactLabel = `${matchupImpactLabel} • Leader absent (${Math.round(penalty * 100)}%)`;
+        contextualImpactLabel = `Leader absent (${context.absentStarName}) (-${Math.round(penalty * 100)}%)`;
+      }
+
+      // 2. Meilleur Défenseur Absent (Penalty CS)
+      if (context.absentDefenderName && context.absentDefenderName !== card.displayName && (card.positionCode === 'DEF' || card.positionCode === 'GK')) {
+        const csPenalty = 0.20 * depthFactor;
+        cleanSheetFactor *= (1 - csPenalty);
+        const label = `Défenseur clé absent (-${Math.round(csPenalty * 100)}% CS)`;
+        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • ${label}` : label;
+      }
+
+      // 3. Buteur Star Absent (Boost pour les autres FWDs)
+      if (context.absentScorerName && card.positionCode === 'FWD' && context.absentScorerName !== card.displayName) {
+        contextualBonus += (baseForm * 0.15);
+        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Buteur star absent (+15%)` : `Buteur star (${context.absentScorerName}) absent (+15%)`;
+      }
+
+      // 4. Passeur Star Absent (Pénalité pour les FWDs)
+      if (context.absentAssisterName && card.positionCode === 'FWD') {
+        contextualBonus -= (baseForm * 0.05);
+        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Passeur absent (-5%)` : `Passeur star (${context.absentAssisterName}) absent (-5%)`;
+      }
+    } else if (allGalleryCards.length > 0) {
+      // Fallback si pas de precomputed (ex: modal unitaire)
+      const teammates = allGalleryCards.filter(c => c.club?.name === clubName && c.id !== card.id);
+
+      // Calcul du Depth Factor en fallback
+      const validScores = allGalleryCards.filter(c => c.club?.name === clubName).map(c => c.scores?.l40 || 0).filter(s => s > 0);
+      const avgClubScore = validScores.length > 0 ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 40;
+      const depthFactor = avgClubScore > 52 ? 0.5 : avgClubScore < 42 ? 1.2 : 1.0;
+
+      // 1. Leader Absent
+      const reliableCandidates = allGalleryCards.filter(c => c.club?.name === clubName && (c.scores?.l40PlayedRate || 80) >= 70);
+      const absoluteStar = [...reliableCandidates].sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+      if (absoluteStar && absoluteStar.id !== card.id && (absoluteStar.injuryStatus !== 'FIT' || absoluteStar.status === 'NOT_PLAYING')) {
+        const penalty = 0.05 * depthFactor;
+        matchupFactor *= (1 - penalty);
+        matchupImpactLabel = `${matchupImpactLabel} • Leader absent (${Math.round(penalty * 100)}%)`;
+        contextualImpactLabel = `Leader absent (${absoluteStar.displayName}) (-${Math.round(penalty * 100)}%)`;
+      }
+
+      // 2. Meilleur Défenseur
+      const bestDef = [...reliableCandidates]
+        .filter(c => c.positionCode === 'DEF')
+        .sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+      if (bestDef && bestDef.id !== card.id && (bestDef.injuryStatus !== 'FIT' || bestDef.status === 'NOT_PLAYING') && (card.positionCode === 'DEF' || card.positionCode === 'GK')) {
+        const csPenalty = 0.20 * depthFactor;
+        cleanSheetFactor *= (1 - csPenalty);
+        const label = `Défenseur clé absent (-${Math.round(csPenalty * 100)}% CS)`;
+        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • ${label}` : label;
+      }
+
+      // 3. Buteur Star absent ?
+      const starScorer = teammates.find(c => c.positionCode === 'FWD' && (c.scores?.l40 || 0) > 55 && (c.injuryStatus !== 'FIT' || c.status === 'NOT_PLAYING'));
+      if (starScorer && card.positionCode === 'FWD') {
+        contextualBonus += (baseForm * 0.15);
+        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Buteur star absent (+15%)` : `Buteur star (${starScorer.displayName}) absent (+15%)`;
+      }
+
+      // 4. Passeur absent ?
+      const starAssister = teammates.find(c => c.positionCode === 'MID' && (c.scores?.l40 || 0) > 55 && (c.injuryStatus !== 'FIT' || c.status === 'NOT_PLAYING'));
+      if (starAssister && card.positionCode === 'FWD') {
+        contextualBonus -= (baseForm * 0.05);
+        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Passeur absent (-5%)` : `Passeur star (${starAssister.displayName}) absent (-5%)`;
       }
     }
+  }
+
+  // --- NEW: Penalty Taker Logic ---
+  const notes = (card.tacticalNotes || '').toLowerCase();
+  if (notes.includes('pénalty') || notes.includes('penalty') || notes.includes('tireur')) {
+    contextualBonus += 1.5;
+    contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Tireur de pénaltys (+1.5)` : 'Tireur de pénaltys (+1.5)';
   }
 
   let profileBonus = 0;
@@ -418,7 +566,21 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     }
   }
 
-  let projected = (baseForm * starterFactor * matchupFactor) + cleanSheetFactor + profileBonus;
+  let projected = (baseForm * starterFactor * matchupFactor * allAroundFactor) + cleanSheetFactor + profileBonus + gameStateBonus + contextualBonus;
+
+  // 5. Bonus additionnels Buteur/Passeur (Bookmakers)
+  let bookmakerActionBonus = 0;
+  if (fixture?.bookmaker) {
+    const bm = fixture.bookmaker;
+    // Petit bonus progressif si le joueur est bien placé pour marquer ou passer
+    if (bm.anytimeScorerOdds && bm.anytimeScorerOdds < 4.5) {
+      bookmakerActionBonus += Math.max(0.2, (5.0 - bm.anytimeScorerOdds) * 0.4);
+    }
+    if (bm.anytimeAssistOdds && bm.anytimeAssistOdds < 5.5) {
+      bookmakerActionBonus += Math.max(0.1, (6.0 - bm.anytimeAssistOdds) * 0.3);
+    }
+  }
+  projected += bookmakerActionBonus;
 
   if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker?.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
     projected += 4;
@@ -428,10 +590,28 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
   const cardBonusScore = Math.round((baseProjected * (bonusPct / 100)) * 10) / 10;
   const totalProjectedScore = Math.round((baseProjected + cardBonusScore) * 10) / 10;
 
+  // --- NEW: Volatility & Range Logic ---
+  const aaPct = card.scores?.allAroundContributionPct || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'GK' ? 30 : 50);
+  const decPct = card.scores?.decisiveContributionPct || (card.positionCode === 'FWD' ? 60 : card.positionCode === 'MID' ? 40 : 50);
+  const reliantType = aaPct > 58 ? 'AA_RELIANT' : decPct > 50 ? 'DECISIVE_RELIANT' : 'BALANCED';
+
+  // Amplitude de la fourchette (Range)
+  let rangeAmplitude = 8; // +/- 8 pts par défaut
+  if (reliantType === 'AA_RELIANT') rangeAmplitude = 5; // Stable
+  if (reliantType === 'DECISIVE_RELIANT') rangeAmplitude = 12; // Volatil
+
+  // Pour les attaquants, on réduit un peu comme demandé si c'est trop large
+  if (card.positionCode === 'FWD' && rangeAmplitude > 10) rangeAmplitude = 10;
+
+  const projectedFloor = Math.max(15, Math.round((totalProjectedScore - rangeAmplitude) * 10) / 10);
+  const projectedCeiling = Math.min(100, Math.round((totalProjectedScore + rangeAmplitude) * 10) / 10);
+
   let riskRating: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
   if (starterFactor < 0.75 || !recentStats.playedLastMatch || card.injuryStatus !== 'FIT') {
     riskRating = 'HIGH';
   } else if (fixture && fixture.difficultyRating >= 4) {
+    riskRating = 'MEDIUM';
+  } else if (reliantType === 'DECISIVE_RELIANT') {
     riskRating = 'MEDIUM';
   }
 
@@ -442,6 +622,10 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     cardBonusPercentage: bonusPct,
     cardBonusScore,
     totalProjectedScore,
+    projectedFloor,
+    projectedCeiling,
+    reliantType,
+    volatilityRating: rangeAmplitude > 9 ? 'HIGH' : rangeAmplitude > 6 ? 'MEDIUM' : 'LOW',
     formIndex: Math.round(baseForm * 10) / 10,
     matchupFactor: Math.round(matchupFactor * 100) / 100,
     cleanSheetFactor: Math.round(cleanSheetFactor * 10) / 10,
@@ -470,6 +654,10 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     matchupImpactLabel,
     isHome: fixture?.isHome ?? true,
     profileBonus: Math.round(profileBonus * 10) / 10,
+    bookmakerActionBonus: Math.round(bookmakerActionBonus * 10) / 10,
+    contextualBonus: Math.round(contextualBonus * 10) / 10,
+    contextualImpactLabel,
+    regressionPenalty: Math.round(regressionPenalty * 10) / 10,
 
     bonusBreakdown,
   };
@@ -531,8 +719,49 @@ export function optimizeLineup(
   filters: LineupOptimizationFilters = {},
   usedCardIds: Set<string> = new Set<string>()
 ): Lineup {
+  // Precompute Club Context (Absent Stars) to avoid O(N^2)
+  const clubContext: Record<string, ClubContext> = {};
+  const clubGroups = new Map<string, SorareCard[]>();
+  cards.forEach(c => {
+    if (c.club?.name) {
+      if (!clubGroups.has(c.club.name)) clubGroups.set(c.club.name, []);
+      clubGroups.get(c.club.name)!.push(c);
+    }
+  });
+
+  clubGroups.forEach((teammates, clubName) => {
+    // 0. Avg Club Score (Strength Proxy)
+    const validScores = teammates.map(c => c.scores?.l40 || 0).filter(s => s > 0);
+    const avgClubScore = validScores.length > 0 ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 40;
+
+    // 1. Star absolute (highest L40 + played > 70% of matches)
+    const reliableCandidates = teammates.filter(c => (c.scores?.l40PlayedRate || 80) >= 70);
+    const absoluteStar = [...reliableCandidates].sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+    const isStarAbsent = absoluteStar && (absoluteStar.injuryStatus !== 'FIT' || absoluteStar.status === 'NOT_PLAYING');
+
+    // 2. Best Defender (highest L40 among DEFs + reliable)
+    const bestDef = [...reliableCandidates]
+      .filter(c => c.positionCode === 'DEF')
+      .sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+    const isDefAbsent = bestDef && (bestDef.injuryStatus !== 'FIT' || bestDef.status === 'NOT_PLAYING');
+
+    // 3. Specific roles (must also be reliable to count as a "loss")
+    const starScorer = reliableCandidates.find(c => c.positionCode === 'FWD' && (c.scores?.l40 || 0) > 55 && (c.injuryStatus !== 'FIT' || c.status === 'NOT_PLAYING'));
+    const starAssister = reliableCandidates.find(c => c.positionCode === 'MID' && (c.scores?.l40 || 0) > 55 && (c.injuryStatus !== 'FIT' || c.status === 'NOT_PLAYING'));
+
+    if (isStarAbsent || isDefAbsent || starScorer || starAssister || avgClubScore > 0) {
+      clubContext[clubName] = {
+        absentScorerName: starScorer?.displayName,
+        absentAssisterName: starAssister?.displayName,
+        absentDefenderName: isDefAbsent ? bestDef.displayName : undefined,
+        absentStarName: isStarAbsent ? absoluteStar.displayName : undefined,
+        avgClubScore
+      };
+    }
+  });
+
   // Score chaque carte
-  const scoredCards = cards.map(c => calculatePlayerProjectedScore(c, strategy));
+  const scoredCards = cards.map(c => calculatePlayerProjectedScore(c, strategy, cards, clubContext));
 
   // Filtrer selon les critères de base et les filtres actifs du manager
   const eligible = scoredCards.filter(sc => {
@@ -629,15 +858,42 @@ export function optimizeLineup(
   const selectedExtra = selectPlayerForPosition(outfieldCandidates, selectedPlayersList);
 
   // Calcul du capitaine (+20% bonus SO5)
-  const teamPlayers: { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; player: SorareCard | null; score: number }[] = [
-    { slot: 'gk', player: selectedGk, score: selectedGk ? calculatePlayerProjectedScore(selectedGk, strategy).projectedScore : 0 },
-    { slot: 'def', player: selectedDef, score: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy).projectedScore : 0 },
-    { slot: 'mid', player: selectedMid, score: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy).projectedScore : 0 },
-    { slot: 'fwd', player: selectedFwd, score: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy).projectedScore : 0 },
-    { slot: 'extra', player: selectedExtra, score: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy).projectedScore : 0 },
+  const teamPlayers: { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; player: SorareCard | null; score: number; ceiling: number }[] = [
+    {
+      slot: 'gk', player: selectedGk,
+      score: selectedGk ? calculatePlayerProjectedScore(selectedGk, strategy, cards, clubContext).projectedScore : 0,
+      ceiling: selectedGk ? calculatePlayerProjectedScore(selectedGk, strategy, cards, clubContext).projectedCeiling : 0
+    },
+    {
+      slot: 'def', player: selectedDef,
+      score: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext).projectedScore : 0,
+      ceiling: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext).projectedCeiling : 0
+    },
+    {
+      slot: 'mid', player: selectedMid,
+      score: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext).projectedScore : 0,
+      ceiling: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext).projectedCeiling : 0
+    },
+    {
+      slot: 'fwd', player: selectedFwd,
+      score: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext).projectedScore : 0,
+      ceiling: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext).projectedCeiling : 0
+    },
+    {
+      slot: 'extra', player: selectedExtra,
+      score: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext).projectedScore : 0,
+      ceiling: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext).projectedCeiling : 0
+    },
   ];
 
-  const sortedForCaptain = [...teamPlayers].filter(p => p.player !== null).sort((a, b) => b.score - a.score);
+  // Smart Captaincy: In HIGH_CEILING mode, pick captain by Ceiling
+  const sortedForCaptain = [...teamPlayers]
+    .filter(p => p.player !== null)
+    .sort((a, b) => {
+      if (strategy === 'HIGH_CEILING') return b.ceiling - a.ceiling;
+      return b.score - a.score;
+    });
+
   const bestCaptainSlot = sortedForCaptain[0]?.slot || 'fwd';
 
   const rawSum = teamPlayers.reduce((acc, curr) => acc + curr.score, 0);

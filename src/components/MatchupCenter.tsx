@@ -27,6 +27,8 @@ interface FixtureAggregate {
   winOdds: number;
   drawOdds: number;
   lossOdds: number;
+  anytimeScorerOdds?: number;
+  anytimeAssistOdds?: number;
   players: SorareCard[];
 }
 
@@ -74,6 +76,8 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           winOdds: card.upcomingFixture.bookmaker?.win || 2.5,
           drawOdds: card.upcomingFixture.bookmaker?.draw || 3.3,
           lossOdds: card.upcomingFixture.bookmaker?.loss || 2.8,
+          anytimeScorerOdds: card.upcomingFixture.bookmaker?.anytimeScorerOdds,
+          anytimeAssistOdds: card.upcomingFixture.bookmaker?.anytimeAssistOdds,
           players: [card],
         });
       } else {
@@ -141,7 +145,11 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     // Min win chance
     if (minWinChance > 0) {
       result = result.filter(f => {
-        const winProb = f.winOdds > 1 ? Math.round((1 / f.winOdds) * 100) : Math.round(f.winOdds);
+        const invWin = 1 / f.winOdds;
+        const invDraw = 1 / f.drawOdds;
+        const invLoss = 1 / f.lossOdds;
+        const sumInv = invWin + invDraw + invLoss;
+        const winProb = Math.round((invWin / sumInv) * 100);
         return winProb >= minWinChance;
       });
     }
@@ -164,9 +172,14 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           const tB = b.kickoffDate ? new Date(b.kickoffDate).getTime() : 0;
           return tA - tB;
         case 'WIN_DESC':
-          const wA = a.winOdds > 1 ? Math.round((1 / a.winOdds) * 100) : a.winOdds;
-          const wB = b.winOdds > 1 ? Math.round((1 / b.winOdds) * 100) : b.winOdds;
-          return wB - wA;
+          const getWinProb = (f: FixtureAggregate) => {
+            const invWin = 1 / f.winOdds;
+            const invDraw = 1 / f.drawOdds;
+            const invLoss = 1 / f.lossOdds;
+            const sumInv = invWin + invDraw + invLoss;
+            return (invWin / sumInv) * 100;
+          };
+          return getWinProb(b) - getWinProb(a);
         case 'CS_DESC':
           return b.cleanSheetProb - a.cleanSheetProb;
         case 'XG_DESC':
@@ -394,7 +407,16 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         ) : (
           processedFixtures.map((fixture, idx) => {
             const fdr = getFDRBadge(fixture.difficulty);
-            const winProb = fixture.winOdds > 1 ? Math.round((1 / fixture.winOdds) * 100) : Math.round(fixture.winOdds);
+
+            const invWin = 1 / fixture.winOdds;
+            const invDraw = 1 / fixture.drawOdds;
+            const invLoss = 1 / fixture.lossOdds;
+            const sumInv = invWin + invDraw + invLoss;
+
+            const winProb = Math.round((invWin / sumInv) * 100);
+            const drawProb = Math.round((invDraw / sumInv) * 100);
+            const lossProb = Math.round((invLoss / sumInv) * 100);
+
             const formattedDate = fixture.kickoffFormatted || formatKickoffDate(fixture.kickoffDate);
 
             return (
@@ -439,9 +461,9 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                     
                     {/* Win Odds */}
                     <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Cote Victoire</span>
-                      <span className="text-sm font-black text-emerald-400">{typeof fixture.winOdds === 'number' ? fixture.winOdds.toFixed(2) : fixture.winOdds}</span>
-                      <span className="block text-[9px] text-emerald-300 font-semibold">{winProb}% chance</span>
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Probas 1N2</span>
+                      <span className="text-sm font-black text-emerald-400 font-mono">{winProb}% / {drawProb}% / {lossProb}%</span>
+                      <span className="block text-[9px] text-emerald-300 font-semibold">V / N / D</span>
                     </div>
 
                     {/* Clean Sheet */}
@@ -483,7 +505,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                   <div className="flex flex-wrap items-center gap-2.5">
                     {fixture.players.map((p) => {
                       const pStyle = getPositionStyle(p.positionCode);
-                      const breakdown = calculatePlayerProjectedScore(p, strategy);
+                      const breakdown = calculatePlayerProjectedScore(p, strategy, cards);
                       const projected = breakdown.projectedScore;
                       const isStarter = p.status === 'STARTER';
                       const bonusPct = getCardTotalBonus(p);
@@ -513,14 +535,26 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                           <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[11px] shadow-sm">
                             <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
                             <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
-                            <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
-                            <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} pts</span>
+                            <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}%</span>
+                            <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} ({breakdown.projectedFloor}-{breakdown.projectedCeiling}) pts</span>
                           </div>
 
                           {/* L5 Score */}
                           <span className="text-[10px] text-slate-400 font-semibold">
                             L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
                           </span>
+
+                          {/* Odds for Scorer/Assist */}
+                          {(p.upcomingFixture?.bookmaker?.anytimeScorerOdds || p.upcomingFixture?.bookmaker?.anytimeAssistOdds) && (
+                            <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1">
+                              {p.upcomingFixture.bookmaker.anytimeScorerOdds && (
+                                <span className="text-[9px] text-rose-400 font-bold" title="Cote Buteur">⚽ {p.upcomingFixture.bookmaker.anytimeScorerOdds.toFixed(2)}</span>
+                              )}
+                              {p.upcomingFixture.bookmaker.anytimeAssistOdds && (
+                                <span className="text-[9px] text-sky-400 font-bold" title="Cote Passeur">🅰️ {p.upcomingFixture.bookmaker.anytimeAssistOdds.toFixed(2)}</span>
+                              )}
+                            </div>
+                          )}
 
                           {/* Starter indicator */}
                           {isStarter ? (
