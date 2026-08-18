@@ -34,10 +34,65 @@ export interface UpcomingFixture {
 
 export interface RealMatchScoreDetail {
   score: number;
+  decisiveScore?: number;
+  allAroundScore?: number;
   opponent: string;
   isHome: boolean;
   competitionName?: string;
   matchDate?: string;
+  minsPlayed?: number;
+  isStarter?: boolean;
+  isSub?: boolean;
+  baseScore?: number; // 35 for Starter, 25 for Sub, 0 for DNP
+  goals?: number;
+  goalAssist?: number;
+  yellowCards?: number;
+  redCards?: number;
+  cleanSheet?: number;
+  accuratePass?: number;
+  totalPass?: number;
+  wonContest?: number;
+  bigChanceCreated?: number;
+  errorLeadToGoal?: number;
+  ownGoals?: number;
+  penaltyKickMissed?: number;
+  penaltySave?: number;
+  wasFouled?: number;
+  decisiveActions?: string[];
+  negativeActions?: string[];
+  allAroundDetails?: string[];
+}
+
+export interface LivePlayerScore {
+  cardId: string;
+  playerSlug: string;
+  displayName: string;
+  positionCode: PositionCode;
+  clubName: string;
+  opponentName: string;
+  isHome: boolean;
+  matchStatus: 'NOT_STARTED' | 'LIVE' | 'HALF_TIME' | 'FINISHED' | 'POSTPONED';
+  minute?: number;
+  currentScore: number;
+  decisiveScore: number;
+  allAroundScore: number;
+  goals: number;
+  assists: number;
+  yellowCards: number;
+  redCards: number;
+  cleanSheet: boolean;
+  lastUpdated: string;
+}
+
+export interface LiveGameWeekState {
+  gameWeek: number;
+  status: 'UPCOMING' | 'LIVE' | 'PAST';
+  totalLiveScore: number;
+  playersCount: number;
+  playingNowCount: number;
+  finishedCount: number;
+  remainingCount: number;
+  playerScores: Record<string, LivePlayerScore>;
 }
 
 export interface SorareCard {
@@ -61,6 +116,7 @@ export interface SorareCard {
     slug?: string;
     pictureUrl?: string;
     country?: string;
+    league?: string;
   };
   country?: {
     name: string;
@@ -85,6 +141,24 @@ export interface SorareCard {
     last15Scores?: number[];
     last40Scores?: number[];
     recentMatches?: RealMatchScoreDetail[];
+    avgDecisiveScore?: number;
+    avgAllAroundScore?: number;
+    decisiveContributionPct?: number;
+    allAroundContributionPct?: number;
+    floorScore?: number;
+    ceilingScore?: number;
+    l5Played?: number;
+    l5PlayedRate?: number;
+    l15Played?: number;
+    l15PlayedRate?: number;
+    l40Played?: number;
+    l40PlayedRate?: number;
+    decisiveCountL5?: number;
+    decisiveRateL5?: number;
+    decisiveCountL15?: number;
+    decisiveRateL15?: number;
+    decisiveCountL40?: number;
+    decisiveRateL40?: number;
     decisiveActionsRecent?: number;
     consistencyScore?: number;
     consistencyRate?: number;
@@ -169,17 +243,21 @@ export interface GameWeekInfo {
 }
 
 export interface MatchPerformanceDetail {
-  matchIndex: number; // 1 to 15 (15 being most recent)
-  matchLabel: string; // e.g. "Match 15"
+  matchIndex: number; // 1 to 40 (40 being most recent)
+  matchLabel: string; // e.g. "Match 40"
   totalScore: number; // 0 to 100
   isDNP: boolean; // Did Not Play (0 min, bench / injured / out)
+  isStarter: boolean; // Titulaire (Base 35 pts)
+  isSub: boolean; // Remplaçant entré en jeu (Base 25 pts)
+  baseScore: number; // 35 for Starter, 25 for Sub, 0 for DNP
   minutesPlayed: number;
   opponent: string;
   isHome: boolean;
   result: string;
   
   // Green Decisive Score Part (Vert)
-  decisiveScore: number;
+  decisiveScore: number; // Positive decisive level score (60, 70, 80, 90, 100) or 0 if no decisive action
+  decisiveBonus: number; // Difference above base (e.g. +25 or +35) or 0
   decisiveActions: string[];
   
   // White All-Around Score Part (Blanc)
@@ -189,6 +267,28 @@ export interface MatchPerformanceDetail {
   // Red Negative Actions & Malus Part (Rouge)
   negativeMalus: number;
   negativeActions: string[];
+
+  // Detailed statistics
+  goals?: number;
+  goalAssists?: number;
+  penaltyAssists?: number;
+  lastManTackles?: number;
+  yellowCards?: number;
+  redCards?: number;
+  cleanSheet?: number;
+  accuratePasses?: number;
+  totalPasses?: number;
+  wonTackles?: number;
+  wonContests?: number;
+  interceptionsWon?: number;
+  setPiecesTaken?: number;
+  bigChancesCreated?: number;
+  errorsLeadToGoal?: number;
+  penaltiesConceded?: number;
+  ownGoals?: number;
+  penaltiesMissed?: number;
+  penaltiesSaved?: number;
+  wasFouled?: number;
 }
 
 export interface UserGalleryState {

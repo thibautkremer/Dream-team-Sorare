@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal } from 'lucide-react';
+import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal, Radio } from 'lucide-react';
 import { GameWeekInfo } from '../types';
 import { StorageService, SorareUserMeta } from '../utils/storage';
 
 interface NavbarProps {
-  currentTab: 'pitch' | 'gallery' | 'matchups' | 'ai-coach' | 'admin';
-  setCurrentTab: (tab: 'pitch' | 'gallery' | 'matchups' | 'ai-coach' | 'admin') => void;
+  currentTab: 'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin';
+  setCurrentTab: (tab: 'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin') => void;
   username: string;
   setUsername: (name: string) => void;
   gameWeek: GameWeekInfo;
@@ -171,6 +171,21 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <BarChart3 className="h-3.5 w-3.5" />
               <span>Cotes & Bookmakers</span>
+            </button>
+
+            <button
+              onClick={() => setCurrentTab('live')}
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-all ${
+                currentTab === 'live'
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm'
+                  : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+              }`}
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span>Live Scoring SO5</span>
             </button>
 
             <button

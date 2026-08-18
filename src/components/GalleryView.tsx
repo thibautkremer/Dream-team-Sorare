@@ -28,6 +28,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [minWinProb, setMinWinProb] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // New card form state
   const [newCardName, setNewCardName] = useState('');
@@ -202,19 +203,36 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <UserPlus className="h-4 w-4" />
               <span>Ajouter Manuellement</span>
             </button>
-            <button
-              onClick={() => {
-                if (confirm('Voulez-vous vraiment effacer TOUTE la galerie ? Cette action est irréversible.')) {
-                  import('../utils/storage').then(mod => {
-                    mod.StorageService.clearCards();
-                    window.location.reload();
-                  });
-                }
-              }}
-              className="flex items-center gap-2 rounded-xl bg-red-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-500/20 hover:bg-red-400 transition active:scale-95 whitespace-nowrap"
-            >
-              Effacer Galerie
-            </button>
+            {confirmClear ? (
+              <div className="flex gap-1">
+                <button
+                  onClick={async () => {
+                    import('../utils/storage').then(async mod => {
+                      const username = mod.StorageService.getUsername();
+                      await fetch(`/api/sorare/user-cards?username=${encodeURIComponent(username)}&clearCache=true`);
+                      mod.StorageService.clearCards();
+                      window.location.reload();
+                    });
+                  }}
+                  className="flex items-center gap-2 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-600/20 hover:bg-red-500 transition active:scale-95 whitespace-nowrap"
+                >
+                  Confirmer
+                </button>
+                <button
+                  onClick={() => setConfirmClear(false)}
+                  className="flex items-center gap-2 rounded-xl bg-slate-700 px-3.5 py-2 text-xs font-bold text-slate-200 hover:bg-slate-600 transition active:scale-95 whitespace-nowrap"
+                >
+                  Annuler
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmClear(true)}
+                className="flex items-center gap-2 rounded-xl bg-red-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-500/20 hover:bg-red-400 transition active:scale-95 whitespace-nowrap"
+              >
+                Effacer Galerie
+              </button>
+            )}
           </div>
         </div>
 

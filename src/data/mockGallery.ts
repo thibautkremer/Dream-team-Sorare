@@ -48363,18 +48363,89 @@ export const MOCK_GALLERY: SorareCard[] = [
     "grade": 0,
     "xp": 0,
     "scores": {
-      "l5": 81,
-      "l15": 78,
-      "l40": 78,
+      "l5": 79,
+      "l15": 80,
+      "l40": 67,
       "last5Scores": [
+        52.3,
+        86.7,
+        68.9,
+        66.9,
+        100
+      ],
+      "last10Scores": [
+        52.3,
+        86.7,
+        68.9,
+        66.9,
+        100,
         73.4,
         87.8,
         100,
         84,
         60
       ],
+      "last15Scores": [
+        52.3,
+        86.7,
+        68.9,
+        66.9,
+        100,
+        73.4,
+        87.8,
+        100,
+        84,
+        60,
+        75.4,
+        93.1,
+        86.9,
+        70,
+        91.7
+      ],
+      "last40Scores": [
+        52.3,
+        86.7,
+        68.9,
+        66.9,
+        100,
+        73.4,
+        87.8,
+        100,
+        84,
+        60,
+        75.4,
+        93.1,
+        86.9,
+        70,
+        91.7,
+        53.4,
+        47.1,
+        36.2,
+        68.5,
+        70.4,
+        37.9,
+        38.5,
+        0,
+        0,
+        28.7,
+        64.5,
+        36,
+        53.1,
+        28.3,
+        41.4,
+        91.8,
+        40.4,
+        81.3,
+        100,
+        93.5,
+        62.1,
+        56.6,
+        70,
+        57.9,
+        37.1
+      ],
       "consistencyRate": 82,
-      "decisiveRate": 45
+      "decisiveRate": 55
     },
     "status": "STARTER",
     "starterConfidence": 90,
@@ -59952,26 +60023,20 @@ export const MOCK_GALLERY: SorareCard[] = [
       "name": "FC Barcelona",
       "slug": "barcelona-barcelona",
       "pictureUrl": "https://assets.sorare.com/team/f115e8de-5e7a-44f6-a03f-1ec44cc02839/picture/low_res-e22e59b0d19b66242e924adc98b199e0.png",
-      "country": "Espagne"
+      "country": "ESP"
     },
     "grade": 0,
     "xp": 0,
     "scores": {
-      "l5": 17.8,
-      "l15": 12.5,
-      "l40": 12.5,
-      "last5Scores": [
-        0,
-        0,
-        0,
-        42.5,
-        46.7
-      ],
-      "consistencyRate": 40,
-      "decisiveRate": 10
+      "l5": 48,
+      "l15": 45,
+      "l40": 46,
+      "last5Scores": [45, 52, 48, 42, 53],
+      "consistencyRate": 70,
+      "decisiveRate": 20
     },
-    "status": "BENCH",
-    "starterConfidence": 50,
+    "status": "REGULAR",
+    "starterConfidence": 65,
     "injuryStatus": "FIT",
     "upcomingFixture": {
       "gameWeek": 48,
@@ -59984,18 +60049,8 @@ export const MOCK_GALLERY: SorareCard[] = [
       "kickoffRelative": "Dans 5 jours",
       "hasUpcomingMatch": true,
       "competitionName": "La Liga EA Sports",
-      "projectedScore": 26.8,
-      "bookmaker": {
-        "win": 1.42,
-        "draw": 4.6,
-        "loss": 7.2,
-        "cleanSheetProb": 55,
-        "goalExpectancy": 1.5,
-        "anytimeScorerOdds": 1.85
-      }
+      "projectedScore": 46
     },
-    "tacticalNotes": "Match GW 48 : FC Barcelona vs Athletic Club (Dom., Sam. 22 août à 19:00). Moyenne L5: 17.8 pts."
+    "tacticalNotes": "Titulaire potentiel en défense centrale."
   }
 ];
-
-export const DEFAULT_GALLERY_THIB8 = MOCK_GALLERY;

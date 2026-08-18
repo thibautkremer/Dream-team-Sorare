@@ -1,10 +1,10 @@
 import React from 'react';
 import { MatchupCenter } from '../components/MatchupCenter';
-import { SorareCard, GameWeek } from '../types';
+import { SorareCard, GameWeekInfo } from '../types';
 
 interface MatchupsPageProps {
   cards: SorareCard[];
-  gameWeek: GameWeek;
+  gameWeek: GameWeekInfo;
   onOpenScout: (card: SorareCard) => void;
 }
 

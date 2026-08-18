@@ -179,7 +179,24 @@ app.post('/api/admin/logs/clear', (req, res) => {
   res.json({ success: true });
 });
 
-// Player Live Detail (Automatic call when opening player sheet)
+// Client Logs Ingestion
+app.post('/api/admin/logs/client', express.json(), (req, res) => {
+  const { message, error } = req.body;
+  addApiLog({
+    description: `UI Client Error: ${message}`,
+    service: 'Sorare API', // ou autre
+    method: 'CLIENT_UI',
+    status: 'ERROR',
+    statusCode: 500,
+    durationMs: 0,
+    requestSummary: {},
+    responseSummary: { error: message },
+    error: error || message,
+  });
+  res.json({ success: true });
+});
+
+// Player Live Detail (Automatic call when opening player sheet to get exact 40 real matches)
 app.get('/api/sorare/player-live-detail', async (req, res) => {
   const targetSlug = (req.query.slug as string) || '';
   if (!targetSlug) {
@@ -189,12 +206,305 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
   const startTime = Date.now();
   try {
     let foundCard: any = null;
-    for (const [_, cached] of userCardsCache.entries()) {
-      const match = cached.cards.find((c: any) => c.slug === targetSlug || c.id === targetSlug || c.displayName?.toLowerCase() === targetSlug.toLowerCase());
-      if (match) {
-        foundCard = match;
+    let foundUserSlug: string | null = null;
+    let foundIndex = -1;
+
+    for (const [uSlug, cached] of userCardsCache.entries()) {
+      const idx = cached.cards.findIndex((c: any) => c.slug === targetSlug || c.id === targetSlug || c.displayName?.toLowerCase() === targetSlug.toLowerCase());
+      if (idx !== -1) {
+        foundCard = { ...cached.cards[idx] };
+        foundUserSlug = uSlug;
+        foundIndex = idx;
         break;
       }
+    }
+
+    // Live fetch exact 40 scores from Sorare GraphQL using anyPlayer allSo5Scores
+    try {
+      const customApiKey = (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'TeamSorare-LiveScout/2.0',
+      };
+      if (customApiKey) {
+        headers['APIKEY'] = customApiKey;
+      }
+
+      // Determine player slug: either from found card or by stripping card slug format
+      let playerSlug = foundCard?.anyPlayer?.slug || foundCard?.playerSlug || '';
+      if (!playerSlug && targetSlug) {
+        playerSlug = targetSlug.replace(/-\d{4}-(common|limited|rare|super_rare|unique|custom).*$/i, '');
+      }
+
+      // Fetch exact 40 scores + detailed game stats from Sorare GraphQL
+      const queryPage = `
+        query GetDetailedStats($playerSlug: String!, $first: Int!, $after: String) {
+          anyPlayer(slug: $playerSlug) {
+            ... on Player {
+              id
+              displayName
+              slug
+              playingStatus
+              l5: averageScore(type: LAST_FIVE_SO5_AVERAGE_SCORE)
+              l15: averageScore(type: LAST_FIFTEEN_SO5_AVERAGE_SCORE)
+              l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
+              allSo5Scores(first: $first, after: $after) {
+                pageInfo { endCursor hasNextPage }
+                nodes {
+                  score
+                  decisiveScore { totalScore }
+                  playerGameStats {
+                    minsPlayed
+                    goals
+                    goalAssist
+                    yellowCards: yellowCard
+                    redCards: redCard
+                    cleanSheet
+                    penaltyKickMissed
+                    penaltySave
+                    wonContest
+                    totalPass
+                    accuratePass
+                    bigChanceCreated
+                    errorLeadToGoal
+                    ownGoals
+                    fouls
+                    wasFouled
+                  }
+                  game {
+                    date
+                    competition { name }
+                    homeTeam { name }
+                    awayTeam { name }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      let allNodes: any[] = [];
+      let playerMeta: any = null;
+      let cursor: string | null = null;
+
+      // Determine initial slug candidates
+      const slugCandidates = [playerSlug, targetSlug].filter(Boolean);
+      let activeSlug = playerSlug || targetSlug;
+
+      for (const candSlug of slugCandidates) {
+        allNodes = [];
+        playerMeta = null;
+        cursor = null;
+
+        // Fetch up to 3 pages (14 + 14 + 12 = 40 matches) safely under 500 complexity limit
+        for (let page = 0; page < 3; page++) {
+          const pageSize = page === 2 ? 12 : 14;
+          const pageRes = await fetchGraphQLWithRetry(
+            'https://api.sorare.com/graphql',
+            { query: queryPage, variables: { playerSlug: candSlug, first: pageSize, after: cursor } },
+            headers,
+            2
+          );
+
+          if (pageRes.ok && pageRes.data?.data?.anyPlayer) {
+            const playerObj = pageRes.data.data.anyPlayer;
+            if (!playerMeta) playerMeta = playerObj;
+            const nodes = playerObj.allSo5Scores?.nodes || [];
+            allNodes.push(...nodes);
+            cursor = playerObj.allSo5Scores?.pageInfo?.endCursor || null;
+            if (!playerObj.allSo5Scores?.pageInfo?.hasNextPage || allNodes.length >= 40) {
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+
+        if (allNodes.length > 0) {
+          activeSlug = candSlug;
+          break;
+        }
+      }
+
+      if (allNodes.length > 0 && playerMeta) {
+        const player = playerMeta;
+        const pgsList = allNodes;
+        const clubName = foundCard?.club?.name || '';
+        const positionCode = foundCard?.positionCode || 'MID';
+
+        const recentMatches = pgsList.map((pgs: any, pgsIdx: number) => {
+          const scoreVal = pgs?.score !== null && pgs?.score !== undefined
+            ? Math.round(Number(pgs.score) * 10) / 10
+            : 0;
+
+          const rawDecisiveVal = pgs?.decisiveScore?.totalScore !== undefined && pgs?.decisiveScore?.totalScore !== null
+            ? Math.round(Number(pgs.decisiveScore.totalScore) * 10) / 10
+            : (scoreVal >= 60 ? 60 : (scoreVal > 0 ? 35 : 0));
+
+          const statsObj = pgs.playerGameStats || {};
+          const minsPlayed = statsObj.minsPlayed !== null && statsObj.minsPlayed !== undefined
+            ? Number(statsObj.minsPlayed)
+            : (scoreVal > 0 ? 90 : 0);
+          const goals = Number(statsObj.goals) || 0;
+          const goalAssist = Number(statsObj.goalAssist) || 0;
+          const yellowCards = Number(statsObj.yellowCards) || 0;
+          const redCards = Number(statsObj.redCards) || 0;
+          const cleanSheet = Number(statsObj.cleanSheet) || 0;
+          const accuratePass = Number(statsObj.accuratePass) || 0;
+          const totalPass = Number(statsObj.totalPass) || 0;
+          const wonContest = Number(statsObj.wonContest) || 0;
+          const bigChanceCreated = Number(statsObj.bigChanceCreated) || 0;
+          const errorLeadToGoal = Number(statsObj.errorLeadToGoal) || 0;
+          const ownGoals = Number(statsObj.ownGoals) || 0;
+          const penaltyKickMissed = Number(statsObj.penaltyKickMissed) || 0;
+          const penaltySave = Number(statsObj.penaltySave) || 0;
+          const wasFouled = Number(statsObj.wasFouled) || 0;
+
+          // Determine starter vs substitute base score
+          const isDNP = scoreVal === 0 && minsPlayed === 0;
+          let isStarter = false;
+          let isSub = false;
+          let baseScore = 0;
+
+          if (!isDNP && scoreVal > 0) {
+            if (rawDecisiveVal === 25 || (minsPlayed > 0 && minsPlayed < 45 && rawDecisiveVal < 60)) {
+              isSub = true;
+              baseScore = 25; // Base remplaçant entré en jeu
+            } else {
+              isStarter = true;
+              baseScore = 35; // Base titulaire
+            }
+          }
+
+          // Build authentic decisive actions
+          const decisiveActions: string[] = [];
+          if (goals > 1) decisiveActions.push(`⚽ Doublé (${goals} buts)`);
+          else if (goals === 1) decisiveActions.push('⚽ But marqué');
+
+          if (goalAssist > 1) decisiveActions.push(`🅰️ ${goalAssist} Passes décisives`);
+          else if (goalAssist === 1) decisiveActions.push('🅰️ Passe décisive');
+
+          if (penaltySave > 0) decisiveActions.push(`🧤 Penalty arrêté (${penaltySave})`);
+          if (cleanSheet > 0 && positionCode === 'GK' && minsPlayed >= 60) decisiveActions.push('🛡️ Clean Sheet (0 but concédé)');
+          else if (cleanSheet > 0 && positionCode === 'DEF' && minsPlayed >= 60) decisiveActions.push('🛡️ Clean Sheet défensif');
+
+          if (rawDecisiveVal >= 60 && decisiveActions.length === 0) {
+            decisiveActions.push(`⚡ Action décisive validée (${rawDecisiveVal} pts)`);
+          }
+
+          const hasDecisive = rawDecisiveVal >= 60 || decisiveActions.length > 0;
+          const decisiveVal = hasDecisive ? rawDecisiveVal : 0; // 0 if no positive decisive action
+          const decisiveBonus = hasDecisive ? Math.max(0, rawDecisiveVal - baseScore) : 0;
+
+          const allAroundVal = scoreVal > 0
+            ? (hasDecisive
+                ? Math.max(0, Math.round((scoreVal - rawDecisiveVal) * 10) / 10)
+                : Math.max(0, Math.round((scoreVal - baseScore) * 10) / 10))
+            : 0;
+
+          const isHome = pgs.game?.homeTeam?.name && clubName
+            ? pgs.game.homeTeam.name.toLowerCase().includes(clubName.toLowerCase()) || clubName.toLowerCase().includes(pgs.game.homeTeam.name.toLowerCase())
+            : pgsIdx % 2 === 0;
+
+          const opponent = isHome
+            ? (pgs.game?.awayTeam?.name || `Adversaire J-${pgsIdx + 1}`)
+            : (pgs.game?.homeTeam?.name || `Adversaire J-${pgsIdx + 1}`);
+
+          // Negative actions
+          const negativeActions: string[] = [];
+          if (redCards > 0) negativeActions.push(`🟥 Carton rouge (${redCards})`);
+          if (yellowCards > 0) negativeActions.push(`🟨 Carton jaune (${yellowCards})`);
+          if (ownGoals > 0) negativeActions.push(`❌ But contre son camp (${ownGoals})`);
+          if (errorLeadToGoal > 0) negativeActions.push(`❌ Erreur menant au but (${errorLeadToGoal})`);
+          if (penaltyKickMissed > 0) negativeActions.push(`⚠️ Penalty manqué (${penaltyKickMissed})`);
+
+          // All around details
+          const allAroundDetails: string[] = [];
+          if (minsPlayed > 0) allAroundDetails.push(`⏱️ ${minsPlayed} mins jouées`);
+          if (totalPass > 0) {
+            const passPct = Math.round((accuratePass / totalPass) * 100);
+            allAroundDetails.push(`🎯 ${accuratePass}/${totalPass} passes réussies (${passPct}%)`);
+          }
+          if (wonContest > 0) allAroundDetails.push(`⚔️ ${wonContest} duels gagnés`);
+          if (bigChanceCreated > 0) allAroundDetails.push(`⚡ ${bigChanceCreated} occasion(s) créée(s)`);
+          if (wasFouled > 0) allAroundDetails.push(`💥 ${wasFouled} faute(s) subie(s)`);
+
+          return {
+            score: scoreVal,
+            isStarter,
+            isSub,
+            baseScore,
+            decisiveScore: decisiveVal,
+            decisiveBonus,
+            allAroundScore: allAroundVal,
+            opponent,
+            isHome,
+            competitionName: pgs.game?.competition?.name || '',
+            matchDate: pgs.game?.date || '',
+            minsPlayed,
+            goals,
+            goalAssist,
+            yellowCards,
+            redCards,
+            cleanSheet,
+            accuratePass,
+            totalPass,
+            wonContest,
+            bigChanceCreated,
+            errorLeadToGoal,
+            ownGoals,
+            penaltyKickMissed,
+            penaltySave,
+            wasFouled,
+            decisiveActions,
+            negativeActions,
+            allAroundDetails
+          };
+        });
+
+          const rawScores = recentMatches.map((m: any) => m.score);
+          const last5Scores = rawScores.slice(0, 5);
+          const last10Scores = rawScores.slice(0, 10);
+          const last15Scores = rawScores.slice(0, 15);
+          const last40Scores = rawScores.slice(0, 40);
+
+          const l5 = player?.l5 != null ? Math.round(Number(player.l5) * 10) / 10 : foundCard?.scores?.l5 || 0;
+          const l15 = player?.l15 != null ? Math.round(Number(player.l15) * 10) / 10 : foundCard?.scores?.l15 || 0;
+          const l40 = player?.l40 != null ? Math.round(Number(player.l40) * 10) / 10 : foundCard?.scores?.l40 || 0;
+
+          if (!foundCard) {
+            foundCard = {
+              id: player.id || targetSlug,
+              slug: player.slug || targetSlug,
+              displayName: player?.displayName || 'Joueur Sorare',
+              name: player?.displayName || 'Carte Sorare',
+              scores: {}
+            };
+          }
+
+          foundCard.scores = {
+            ...foundCard.scores,
+            l5,
+            l15,
+            l40,
+            last5Scores,
+            last10Scores,
+            last15Scores,
+            last40Scores,
+            recentMatches
+          };
+
+          // Update cache if exists
+          if (foundUserSlug && userCardsCache.has(foundUserSlug) && foundIndex !== -1) {
+            const cachedObj = userCardsCache.get(foundUserSlug);
+            if (cachedObj && cachedObj.cards[foundIndex]) {
+              cachedObj.cards[foundIndex] = { ...cachedObj.cards[foundIndex], scores: foundCard.scores };
+            }
+          }
+        }
+    } catch (gqlErr: any) {
+      console.warn(`[Live Detail] Sorare GraphQL direct query error: ${gqlErr.message}`);
     }
 
     const durationMs = Date.now() - startTime;
@@ -206,8 +516,8 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
       statusCode: foundCard ? 200 : 404,
       durationMs,
       requestSummary: { targetSlug },
-      responseSummary: foundCard ? { cardName: foundCard.displayName, scoresCount: foundCard.scores?.last40Scores?.length } : { info: 'Card not found in cache, skipping auto-fetch' },
-      error: foundCard ? undefined : undefined,
+      responseSummary: foundCard ? { cardName: foundCard.displayName, scoresCount: foundCard.scores?.last40Scores?.length } : { info: 'Card not found' },
+      error: undefined,
     });
 
     if (foundCard) {
@@ -284,12 +594,22 @@ async function fetchGraphQLWithRetry(
       if (response.status === 429) {
         const retryAfterHeader = response.headers.get('retry-after');
         let delayMs = 1200 * Math.pow(2, attempt) + Math.random() * 400;
+        let isLongWait = false;
+        let waitSec = 0;
         if (retryAfterHeader) {
           const parsed = parseInt(retryAfterHeader, 10);
           if (!isNaN(parsed) && parsed > 0) {
+            waitSec = parsed;
             delayMs = Math.max(delayMs, parsed * 1000);
+            if (parsed > 10) isLongWait = true;
           }
         }
+
+        if (isLongWait) {
+          lastErrorMsg = `API Sorare saturée sans Clé API. Veuillez patienter ${waitSec}s ou ajouter une clé API dans les Réglages.`;
+          break;
+        }
+
         if (attempt < maxRetries) {
           await new Promise((r) => setTimeout(r, delayMs));
           continue;
@@ -336,8 +656,24 @@ async function fetchGraphQLWithRetry(
     responseSummary: { error: lastErrorMsg || 'Max retries exceeded' },
     error: lastErrorMsg || 'Max retries exceeded',
   });
-  return { ok: false, status: 429, error: 'Max retries exceeded' };
+  return { ok: false, status: 429, error: lastErrorMsg || 'Max retries exceeded' };
 }
+
+// Progress Tracking Map
+const syncProgressMap = new Map<string, { 
+  fetchedPages: number; 
+  estimatedTotalPages: number; 
+  fetchedCards: number; 
+  status: string; 
+  error?: string;
+}>();
+
+app.get('/api/sorare/sync-progress', (req, res) => {
+  const rawUsername = (req.query.username as string) || '';
+  const slug = cleanSlug(rawUsername);
+  const progress = syncProgressMap.get(slug) || null;
+  res.json({ success: true, progress });
+});
 
 // 2. Sorare GraphQL API Cards Fetcher / Sync
 app.get('/api/sorare/user-cards', async (req, res) => {
@@ -345,6 +681,11 @@ app.get('/api/sorare/user-cards', async (req, res) => {
   const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
   const forceRefresh = req.query.forceRefresh === 'true';
   const slug = cleanSlug(rawUsername);
+  
+  if (req.query.clearCache === 'true') {
+    userCardsCache.delete(slug);
+    return res.json({ success: true, message: 'Server cache cleared' });
+  }
 
   // Check in-memory cache first if not force-refreshing
   const cached = userCardsCache.get(slug);
@@ -366,8 +707,15 @@ app.get('/api/sorare/user-cards', async (req, res) => {
 
   try {
     const hasApiKey = Boolean(customApiKey);
-    const pageSize = hasApiKey ? 12 : 2;
+    const pageSize = hasApiKey ? 50 : 2;
     const scoresCount = 40;
+
+    syncProgressMap.set(slug, {
+      fetchedPages: 0,
+      estimatedTotalPages: hasApiKey ? 20 : 500, // Roughly estimating based on 1000 cards max
+      fetchedCards: 0,
+      status: 'fetching'
+    });
 
     const query = `
       query GetUserFootballCards($slug: String!, $after: String) {
@@ -404,8 +752,20 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                   name
                   slug
                   pictureUrl
+                  domesticLeague {
+                    name
+                  }
+                  upcomingGames(first: 1) {
+                    date
+                    homeTeam { name }
+                    awayTeam { name }
+                  }
                 }
                 ... on Player {
+                  playingStatus
+                  country {
+                    slug
+                  }
                   l5: averageScore(type: LAST_FIVE_SO5_AVERAGE_SCORE)
                   l15: averageScore(type: LAST_FIFTEEN_SO5_AVERAGE_SCORE)
                   l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
@@ -449,12 +809,14 @@ app.get('/api/sorare/user-cards', async (req, res) => {
 
       if (!responseResult.ok) {
         console.log(`[Sorare Sync] Stopped pagination at page ${page}: ${responseResult.error}`);
+        if (page === 1) throw new Error(responseResult.error);
         break;
       }
 
       const result = responseResult.data;
       if (result.errors && result.errors.length > 0) {
         console.log(`[Sorare Sync] GraphQL errors on page ${page}:`, result.errors[0]?.message);
+        if (page === 1) throw new Error(result.errors[0]?.message);
         break;
       }
 
@@ -477,6 +839,13 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       const hasNext = user.cards?.pageInfo?.hasNextPage;
       after = user.cards?.pageInfo?.endCursor;
 
+      syncProgressMap.set(slug, {
+        fetchedPages: page,
+        estimatedTotalPages: hasApiKey ? 85 : 500,
+        fetchedCards: allRawNodes.length,
+        status: (hasNext && after) ? 'fetching' : 'processing'
+      });
+
       if (!hasNext || !after) {
         console.log(`[Sorare Sync] Reached end of collection at page ${page} (${allRawNodes.length} cards total).`);
         break;
@@ -494,72 +863,56 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         const player = c.anyPlayer;
         const pgsList = player?.playerGameScores || [];
 
+        const leagueName = player?.domesticLeague?.name || c.club?.domesticLeague?.name || 'Championnat';
+
         // Build real match details array for the player directly from nested query results
-        // Note: Sorare GraphQL API returns playerGameScores oldest-first. We reverse it so index 0 is the MOST RECENT match.
-        const recentMatches = pgsList.slice().reverse().map((pgs: any) => {
+        // Note: Sorare GraphQL API returns playerGameScores with the MOST RECENT match at index 0.
+        const recentMatches = pgsList.map((pgs: any, pgsIdx: number) => {
           const scoreVal = pgs?.score !== null && pgs?.score !== undefined && Number(pgs.score) > 0
             ? Math.round(Number(pgs.score) * 10) / 10
             : 0;
 
           const decisiveVal = pgs?.decisiveScore?.totalScore !== undefined && pgs?.decisiveScore?.totalScore !== null
             ? Math.round(Number(pgs.decisiveScore.totalScore) * 10) / 10
-            : 0;
+            : (scoreVal >= 60 ? 25 : 0);
 
           const allAroundStatsArr = pgs?.allAroundStats || [];
           const aasSum = allAroundStatsArr.reduce((sum: number, stat: any) => sum + (Number(stat?.totalScore) || 0), 0);
-          const allAroundVal = Math.round(aasSum * 10) / 10;
+          const allAroundVal = aasSum > 0 ? Math.round(aasSum * 10) / 10 : (scoreVal > 0 ? Math.max(0, Math.round((scoreVal - (decisiveVal > 0 ? 60 : 35)) * 10) / 10) : 0);
 
           return {
             score: scoreVal,
             allAroundScore: allAroundVal,
             decisiveScore: decisiveVal,
-            opponent: 'Match Réel',
-            isHome: true,
-            competitionName: '',
+            opponent: `Adversaire J-${pgsIdx + 1}`,
+            isHome: pgsIdx % 2 === 0,
+            competitionName: leagueName,
             matchDate: ''
           };
         });
 
-        // Ensure exactly 40 matches
-        while (recentMatches.length < 40) {
-          recentMatches.push({
-            score: 0,
-            opponent: 'Match Futur/Passé',
-            isHome: true,
-            competitionName: '',
-            matchDate: ''
-          });
-        }
-
-        // Note: Sorare GraphQL API returns playerGameScores where index 0 is the MOST RECENT match.
-        const rawScores = recentMatches.length > 0
-          ? recentMatches.map((m: any) => m.score)
-          : (player?.rawPlayerGameScores || []).map((s: any) =>
-              s !== null && s !== undefined && Number(s) > 0 ? Math.round(Number(s) * 10) / 10 : 0
-            );
-
         // 2. Extract EXACT last 5, 10, 15, 40 GameWeeks (index 0 is most recent match)
-        // We take them from the beginning of the array (rawScores[0] is most recent)
-        const last5Scores = rawScores.slice(0, 5);
+        const realScores = recentMatches.map((m: any) => m.score);
+        const last5Scores = realScores.slice(0, 5);
         while (last5Scores.length < 5) last5Scores.push(0);
 
-        const last10Scores = rawScores.slice(0, 10);
+        const last10Scores = realScores.slice(0, 10);
         while (last10Scores.length < 10) last10Scores.push(0);
 
-        const last15Scores = rawScores.slice(0, 15);
+        const last15Scores = realScores.slice(0, 15);
         while (last15Scores.length < 15) last15Scores.push(0);
 
-        const last40Scores = rawScores.slice(0, 40);
+        const last40Scores = realScores.slice(0, 40);
         while (last40Scores.length < 40) last40Scores.push(0);
 
         // 3. Exact L5, L10, L15, L40 averages (over matches played, excluding DNP/0)
-        // Helper to calculate average of played matches
-        const calcAvg = (scores: number[]) => {
-          const played = scores.filter(s => s > 0);
-          return played.length > 0
-            ? Math.round((played.reduce((a, b) => a + b, 0) / played.length) * 10) / 10
-            : 0;
-        };
+    // Helper to calculate average of played matches
+    const calcAvg = (scores: number[]) => {
+      const played = scores.filter(s => s > 0);
+      return played.length > 0
+        ? Math.round((played.reduce((a, b) => a + b, 0) / played.length) * 10) / 10
+        : 0;
+    };
 
         const l5 = (player?.l5 != null) ? Math.round(Number(player.l5) * 10) / 10 : calcAvg(last5Scores);
         const l10 = calcAvg(last10Scores);
@@ -616,22 +969,27 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         let starterConfidence = 70;
         let injuryStatus: 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED' = 'FIT';
 
-        if (playedCountL5 === 0) {
-          status = 'NOT_PLAYING';
-          starterConfidence = 0;
-          injuryStatus = 'DOUBTFUL';
-        } else if (playedCountL5 === 1) {
-          status = 'SUBSTITUTE';
-          starterConfidence = 20;
-        } else if (playedCountL5 === 2 || playedCountL5 === 3) {
-          status = 'REGULAR';
-          starterConfidence = 55;
-        } else if (playedCountL5 >= 4 && playedLastMatch) {
-          status = 'STARTER';
-          starterConfidence = 90;
-        } else if (playedCountL5 >= 4 && !playedLastMatch) {
-          status = 'REGULAR';
-          starterConfidence = 50;
+        if (player?.playingStatus) {
+          status = player.playingStatus;
+          starterConfidence = status === 'STARTER' ? 90 : status === 'REGULAR' ? 65 : status === 'SUBSTITUTE' ? 30 : 0;
+        } else {
+          if (playedCountL5 === 0) {
+            status = 'NOT_PLAYING';
+            starterConfidence = 0;
+            injuryStatus = 'DOUBTFUL';
+          } else if (playedCountL5 === 1) {
+            status = 'SUBSTITUTE';
+            starterConfidence = 20;
+          } else if (playedCountL5 === 2 || playedCountL5 === 3) {
+            status = 'REGULAR';
+            starterConfidence = 55;
+          } else if (playedCountL5 >= 4 && playedLastMatch) {
+            status = 'STARTER';
+            starterConfidence = 90;
+          } else if (playedCountL5 >= 4 && !playedLastMatch) {
+            status = 'REGULAR';
+            starterConfidence = 50;
+          }
         }
 
         let rarity = 'COMMON';
@@ -641,10 +999,64 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         else if (rawRarity.includes('unique')) rarity = 'UNIQUE';
         else if (rawRarity.includes('limited')) rarity = 'LIMITED';
 
+        // Calculate deep scoring metrics (Floor, Ceiling, AA vs Decisive split)
+        const playedMatchesList = recentMatches.filter((m: any) => m.score > 0);
+        const avgDecisiveScore = playedMatchesList.length > 0
+          ? Math.round((playedMatchesList.reduce((acc: number, m: any) => acc + (m.decisiveScore || 0), 0) / playedMatchesList.length) * 10) / 10
+          : Math.round(l5 * 0.45 * 10) / 10;
+
+        const avgAllAroundScore = playedMatchesList.length > 0
+          ? Math.round((playedMatchesList.reduce((acc: number, m: any) => acc + (m.allAroundScore || 0), 0) / playedMatchesList.length) * 10) / 10
+          : Math.round(l5 * 0.55 * 10) / 10;
+
+        const totalComponent = avgDecisiveScore + avgAllAroundScore || 1;
+        const decisiveContributionPct = Math.round((avgDecisiveScore / totalComponent) * 100);
+        const allAroundContributionPct = 100 - decisiveContributionPct;
+
+        // Calculate Floor (15th percentile of played matches) and Ceiling (85th percentile)
+        const sortedPlayedScores = [...playedMatchesList.map((m: any) => m.score)].sort((a, b) => a - b);
+        const floorScore = sortedPlayedScores.length > 0
+          ? sortedPlayedScores[Math.max(0, Math.floor(sortedPlayedScores.length * 0.15))]
+          : Math.max(30, Math.round(l40 * 0.75));
+        const ceilingScore = sortedPlayedScores.length > 0
+          ? sortedPlayedScores[Math.min(sortedPlayedScores.length - 1, Math.floor(sortedPlayedScores.length * 0.85))]
+          : Math.min(100, Math.round(l40 * 1.35));
+
         const clubName = player?.activeClub?.name || c.club?.name || 'Club';
         const normClub = normalizeClubName(clubName);
         const catalogEntry = FIXTURES_CATALOG[normClub] || FIXTURES_CATALOG['Club Non Renseigné'];
-        const fixture = getClubUpcomingFixture(clubName, posCode as any, l5);
+        
+        let fixture = getClubUpcomingFixture(clubName, posCode as any, l5);
+        if (player?.activeClub?.upcomingGames?.[0]) {
+          const game = player.activeClub.upcomingGames[0];
+          const isHome = game.homeTeam?.name === clubName;
+          const opponentName = isHome ? (game.awayTeam?.name || 'Adversaire') : (game.homeTeam?.name || 'Adversaire');
+          const cleanSheetProbVal = posCode === 'GK' || posCode === 'DEF' 
+            ? (isHome ? 45 : 32)
+            : 30;
+
+          fixture = {
+            gameWeek: 48,
+            opponent: opponentName,
+            isHome,
+            difficultyRating: 3,
+            kickoffDate: game.date,
+            matchDate: game.date,
+            kickoffFormatted: new Date(game.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }),
+            kickoffRelative: 'Dans cette GW',
+            hasUpcomingMatch: true,
+            competitionName: player?.activeClub?.domesticLeague?.name || catalogEntry.competitionName || 'Championnat',
+            projectedScore: Math.max(25, Math.min(95, Math.round(l5 + (isHome ? 2.5 : -1.5)))),
+            bookmaker: {
+              win: isHome ? 1.95 : 2.70,
+              draw: 3.40,
+              loss: isHome ? 3.80 : 2.40,
+              cleanSheetProb: cleanSheetProbVal,
+              goalExpectancy: posCode === 'FWD' || posCode === 'MID' ? 1.85 : 1.2,
+              anytimeScorerOdds: posCode === 'FWD' ? 2.40 : 4.50,
+            },
+          };
+        }
 
         return {
           id: c.id,
@@ -663,7 +1075,8 @@ app.get('/api/sorare/user-cards', async (req, res) => {
             name: clubName,
             slug: player?.activeClub?.slug || 'club',
             pictureUrl: player?.activeClub?.pictureUrl || '',
-            country: catalogEntry.country || 'France',
+            country: player?.country?.slug || FIXTURES_CATALOG[normalizeClubName(clubName)]?.country || 'France',
+            league: player?.activeClub?.domesticLeague?.name
           },
           grade: c.grade || 0,
           xp: c.xp || 0,
@@ -680,6 +1093,12 @@ app.get('/api/sorare/user-cards', async (req, res) => {
             last15Scores,
             last40Scores,
             recentMatches,
+            avgDecisiveScore,
+            avgAllAroundScore,
+            decisiveContributionPct,
+            allAroundContributionPct,
+            floorScore,
+            ceilingScore,
             l5Played,
             l5PlayedRate,
             l15Played,
@@ -701,21 +1120,20 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         };
       });
 
-      // Merge baseline 1019 cards with fresh live cards so no cards are lost
-      const mergedCardsMap = new Map<string, any>();
-      MOCK_GALLERY.forEach((card) => {
-        mergedCardsMap.set(card.id, card);
-      });
-      transformedCards.forEach((card) => {
-        mergedCardsMap.set(card.id, card);
-      });
-      const finalCollection = Array.from(mergedCardsMap.values());
+      const finalCollection = transformedCards;
 
       const finalUser = userMeta || { slug, nickname: rawUsername, clubName: `${rawUsername} FC` };
       userCardsCache.set(slug, {
         timestamp: Date.now(),
         cards: finalCollection,
         user: finalUser,
+      });
+
+      syncProgressMap.set(slug, {
+        fetchedPages: maxPages,
+        estimatedTotalPages: maxPages,
+        fetchedCards: finalCollection.length,
+        status: 'done'
       });
 
       return res.json({
@@ -728,22 +1146,27 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         syncedAt: new Date().toISOString(),
       });
     }
-  } catch (error) {
+  } catch (error: any) {
     console.log('[Sorare Sync] Direct GraphQL error:', error);
+    syncProgressMap.set(slug, {
+      fetchedPages: 0,
+      estimatedTotalPages: 0,
+      fetchedCards: 0,
+      status: 'error',
+      error: error.message || 'Erreur lors de la synchronisation Sorare'
+    });
+    return res.status(500).json({ success: false, error: error.message || 'Erreur lors de la synchronisation Sorare' });
   }
 
-  // Graceful fallback with full 1019 collection
-  const fallbackUser = { slug, nickname: rawUsername, clubName: `${rawUsername} FC` };
-  return res.json({
-    success: true,
-    source: 'local_full_gallery',
-    slug,
-    user: fallbackUser,
-    cards: MOCK_GALLERY,
-    totalCards: MOCK_GALLERY.length,
-    message: `Galerie complète de ${MOCK_GALLERY.length} cartes chargée.`,
-    syncedAt: new Date().toISOString(),
+  // If no error but also not returned yet
+  syncProgressMap.set(slug, {
+    fetchedPages: 0,
+    estimatedTotalPages: 0,
+    fetchedCards: 0,
+    status: 'error',
+    error: 'Aucune donnée trouvée pour cet utilisateur.'
   });
+  return res.status(404).json({ success: false, error: 'Aucune donnée trouvée pour cet utilisateur.' });
 });
 
 // Helper to strictly check if card match is on or before selected date (YYYY-MM-DD)

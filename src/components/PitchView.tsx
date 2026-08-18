@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent } from 'lucide-react';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2 } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge } from '../utils/sorareSlug';
@@ -18,6 +18,7 @@ interface PitchViewProps {
   compositions: Lineup[];
   selectedCompoIndex: number;
   onSelectComposition: (index: number) => void;
+  onExportLineup?: (lineup: Lineup) => void;
 }
 
 export const PitchView: React.FC<PitchViewProps> = ({
@@ -34,6 +35,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
   compositions,
   selectedCompoIndex,
   onSelectComposition,
+  onExportLineup,
 }) => {
   // Accordion state: filters open by default, can be toggled
   const [isFiltersOpen, setIsFiltersOpen] = useState(true);
@@ -249,11 +251,23 @@ export const PitchView: React.FC<PitchViewProps> = ({
               Terrain Tactique - {targetLineup.name}
             </h4>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-300">Total :</span>
-            <span className="text-base font-black text-emerald-400">
-              {targetLineup.projectedTotalWithCaptain} pts
-            </span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-300">Total :</span>
+              <span className="text-base font-black text-emerald-400">
+                {targetLineup.projectedTotalWithCaptain} pts
+              </span>
+            </div>
+            {onExportLineup && (
+              <button
+                type="button"
+                onClick={() => onExportLineup(targetLineup)}
+                className="flex items-center gap-1.5 rounded-xl bg-emerald-500 px-3 py-1.5 text-xs font-black text-slate-950 shadow-md hover:bg-emerald-400 transition"
+              >
+                <Send className="h-3.5 w-3.5" />
+                <span>Exporter / Soumettre</span>
+              </button>
+            )}
           </div>
         </div>
 

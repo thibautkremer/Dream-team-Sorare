@@ -1,7 +1,7 @@
 import React from 'react';
-import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight } from 'lucide-react';
+import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp } from 'lucide-react';
 import { SorareCard, GameWeekInfo } from '../types';
-import { formatKickoffDate, getPlayerWinProbability } from '../utils/optimizer';
+import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 
 interface MatchupCenterProps {
   cards: SorareCard[];
@@ -53,7 +53,17 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           players: [card],
         });
       } else {
-        fixtureMap.get(key)!.players.push(card);
+        const fixture = fixtureMap.get(key)!;
+        // Deduplicate: If the player is already present in this fixture (same slug or displayName), do not duplicate
+        const cardIdentifier = (card.slug || card.displayName || '').trim().toLowerCase();
+        const alreadyIncluded = fixture.players.some(p => {
+          const pIdentifier = (p.slug || p.displayName || '').trim().toLowerCase();
+          return pIdentifier === cardIdentifier;
+        });
+
+        if (!alreadyIncluded) {
+          fixture.players.push(card);
+        }
       }
     }
   });
@@ -417,25 +427,50 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                     <span className="text-[10px] text-slate-500">Cliquez pour voir la fiche détaillée</span>
                   </div>
                   
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2.5">
                     {fixture.players.map((p) => {
                       const pStyle = getPositionStyle(p.positionCode);
+                      const breakdown = calculatePlayerProjectedScore(p);
+                      const projected = breakdown.projectedScore;
+                      const isStarter = p.status === 'STARTER';
+
                       return (
                         <button
                           key={p.id}
                           onClick={() => onOpenScout(p)}
-                          className="flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-1.5 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/40 border border-slate-800 transition shadow-sm group"
+                          className="flex items-center gap-2.5 rounded-xl bg-slate-950 px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group"
                         >
                           <span className={`rounded px-1.5 py-0.5 text-[9px] font-black border ${pStyle}`}>
                             {p.positionCode}
                           </span>
+                          
                           <span className="font-bold group-hover:text-emerald-300 transition">
                             {p.displayName}
                           </span>
-                          <span className="text-[10px] text-emerald-400 font-semibold">
-                            (L5: {p.scores?.l5 || 0})
+
+                          {/* Score Projeté Badge */}
+                          <div className="flex items-center gap-1 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-black px-2 py-0.5 rounded-md text-[11px] shadow-sm">
+                            <TrendingUp className="h-3 w-3 text-emerald-400" />
+                            <span>Proj : {projected} pts</span>
+                          </div>
+
+                          {/* L5 Score */}
+                          <span className="text-[10px] text-slate-400 font-semibold">
+                            L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
                           </span>
-                          <ChevronRight className="h-3 w-3 text-slate-600 group-hover:text-emerald-400 transition" />
+
+                          {/* Starter indicator */}
+                          {isStarter ? (
+                            <span className="text-[9px] font-bold text-blue-400 bg-blue-950/60 border border-blue-800/60 px-1.5 py-0.5 rounded">
+                              Titulaire
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-medium text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded">
+                              {p.status === 'REGULAR' ? 'Rotation' : 'Rempl.'}
+                            </span>
+                          )}
+
+                          <ChevronRight className="h-3.5 w-3.5 text-slate-600 group-hover:text-emerald-400 transition ml-0.5" />
                         </button>
                       );
                     })}

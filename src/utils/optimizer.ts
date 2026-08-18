@@ -315,22 +315,40 @@ export function calculatePlayerProjectedScore(card: SorareCard, strategy: Strate
     }
 
     // Bonus Clean Sheet pour GK et DEF
-    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture.bookmaker.cleanSheetProb) {
+    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture?.bookmaker?.cleanSheetProb) {
       cleanSheetFactor = (fixture.bookmaker.cleanSheetProb / 100) * 8;
     }
 
     // Bonus Attaquant / Milieu si grosse espérance de buts (xG bookmaker)
-    if ((card.positionCode === 'FWD' || card.positionCode === 'MID') && fixture.bookmaker.goalExpectancy) {
+    if ((card.positionCode === 'FWD' || card.positionCode === 'MID') && fixture?.bookmaker?.goalExpectancy) {
       if (fixture.bookmaker.goalExpectancy > 2.0) {
         matchupFactor += 0.06;
       }
     }
   }
 
-  // Calcul final du score projeté
-  let projected = (baseForm * starterFactor * matchupFactor) + cleanSheetFactor;
+  // Bonus/Pondération selon la stratégie et le profil All-Around vs Décisif
+  let profileBonus = 0;
+  if (strategy === 'SAFE_TITULAR') {
+    // Les joueurs à fort All-Around (> 50% AA) ont un plancher sécurisé
+    if ((card.scores?.allAroundContributionPct || 50) > 55) {
+      profileBonus += 2.5;
+    }
+    // Pénalité légère si joueur 100% dépendant d'un but (Décisif > 70%) sans volume
+    if ((card.scores?.decisiveContributionPct || 40) > 70) {
+      profileBonus -= 2.0;
+    }
+  } else if (strategy === 'HIGH_CEILING') {
+    // Les joueurs avec un gros potentiel décisif et un plafond élevé
+    if ((card.scores?.ceilingScore || 65) > 75) {
+      profileBonus += 3.5;
+    }
+  }
 
-  if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
+  // Calcul final du score projeté
+  let projected = (baseForm * starterFactor * matchupFactor) + cleanSheetFactor + profileBonus;
+
+  if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker?.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
     projected += 4; // Bonus buteur prolifique
   }
 
@@ -555,7 +573,7 @@ export function optimizeLineup(
         `Vérifier l'annonce des XI officiels de départ 1h avant la deadline.`,
       ],
       captainReasoning: `${captainName} présente le meilleur score projeté (${captainObj?.score} pts) de l'équipe.`,
-      cleanSheetOutlook: selectedGk?.upcomingFixture ? `${selectedGk.upcomingFixture.bookmaker.cleanSheetProb}% de clean sheet pour ${selectedGk.displayName}` : 'Favorable',
+      cleanSheetOutlook: selectedGk?.upcomingFixture ? `${selectedGk.upcomingFixture.bookmaker?.cleanSheetProb || 45}% de clean sheet pour ${selectedGk.displayName}` : 'Favorable',
       tacticalPerPosition: {
         gk: selectedGk ? `${selectedGk.displayName} - Face à ${selectedGk.upcomingFixture?.opponent}.` : 'Non défini',
         def: selectedDef ? `${selectedDef.displayName} - Sécurisé et solide.` : 'Non défini',
@@ -749,13 +767,17 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   const last5 = card.scores?.last5Scores;
   const recentMatches = card.scores?.recentMatches;
 
-  // Step 1: Known scores fill
+  // Step 1: Known scores fill (Real recorded match scores)
+  // recentMatches[0] or last40[0] is the MOST RECENT match (GW 0) -> maps to index 39 (right-most)
   for (let k = 0; k < totalMatches; k++) {
-    const targetIdx = 39 - k;
+    const targetIdx = 39 - k; // k=0 (newest) goes to index 39 (right side of graph)
     let scoreVal = -1;
 
-    if (recentMatches && recentMatches[k] && typeof recentMatches[k].score === 'number') {
-      scoreVal = recentMatches[k].score;
+    const mObj = recentMatches && recentMatches[k];
+    const isDummyPlaceholder = mObj && mObj.opponent === 'Match Futur/Passé';
+
+    if (mObj && typeof mObj.score === 'number' && !isDummyPlaceholder) {
+      scoreVal = mObj.score;
     } else if (last40 && typeof last40[k] === 'number') {
       scoreVal = last40[k];
     } else if (k < 15 && last15 && typeof last15[k] === 'number') {
@@ -766,8 +788,8 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
       scoreVal = last5[k];
     }
 
-    if (scoreVal !== -1) {
-      rawScores[targetIdx] = Math.max(0, Math.round(scoreVal * 10) / 10);
+    if (scoreVal >= 0) {
+      rawScores[targetIdx] = Math.max(0, Math.min(100, Math.round(scoreVal * 10) / 10));
     }
   }
 
@@ -777,27 +799,37 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
     const p = Math.abs(Math.sin(seed * 0.13 + targetIdx * 1.618));
     const pDnp = Math.abs(Math.cos(seed * 0.07 + targetIdx * 0.913));
 
-    let dnpProb = 0.12;
-    if (card.status === 'SUBSTITUTE') dnpProb = 0.40;
-    else if (card.status === 'REGULAR') dnpProb = 0.22;
-    else if (card.status === 'STARTER') dnpProb = 0.08;
+    // Realistic participation probability based on status
+    let dnpProb = 0.05;
+    if (card.status === 'SUBSTITUTE') dnpProb = 0.30;
+    else if (card.status === 'REGULAR') dnpProb = 0.15;
+    else if (card.status === 'STARTER') dnpProb = 0.05;
 
-    if (pDnp < dnpProb && targetAvg < 55) {
+    if (pDnp < dnpProb) {
       return 0;
     }
 
     let score = targetAvg;
-    if (p > 0.82) {
-      const boost = 14 + ((seed + targetIdx * 9) % 22);
-      score = Math.min(98, targetAvg + boost);
-    } else if (p > 0.35) {
-      const variance = ((seed + targetIdx * 11) % 19) - 9;
+    if (p > 0.85) {
+      // High decisive game / Masterclass (100 or 90+)
+      const boost = 18 + ((seed + targetIdx * 9) % 25);
+      const calculated = targetAvg + boost;
+      score = calculated >= 95 ? 100 : calculated;
+    } else if (p > 0.70) {
+      // Solid decisive performance (75-90)
+      const boost = 8 + ((seed + targetIdx * 7) % 16);
+      score = targetAvg + boost;
+    } else if (p > 0.30) {
+      // Solid standard performance (50-74)
+      const variance = ((seed + targetIdx * 11) % 17) - 8;
       score = targetAvg + variance;
     } else if (p > 0.10) {
-      const penalty = 10 + ((seed + targetIdx * 7) % 18);
-      score = Math.max(18, targetAvg - penalty);
+      // Tough match or slight malus (30-49)
+      const penalty = 12 + ((seed + targetIdx * 7) % 18);
+      score = Math.max(22, targetAvg - penalty);
     } else {
-      score = 15 + ((seed + targetIdx * 3) % 15);
+      // Off day (20-34)
+      score = 20 + ((seed + targetIdx * 3) % 15);
     }
 
     return Math.max(0, Math.min(100, Math.round(score * 10) / 10));
@@ -814,11 +846,20 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   const fillAndAdjustSegment = (start: number, end: number, targetAvg: number) => {
     const count = end - start + 1;
     const targetSum = targetAvg * count;
+    let generatedCount = 0;
+    const generatedIndices: number[] = [];
 
     for (let i = start; i <= end; i++) {
       if (rawScores[i] === -1) {
         rawScores[i] = scoreGen(i, targetAvg);
+        generatedCount++;
+        generatedIndices.push(i);
       }
+    }
+
+    // If all scores in this segment were authentic real data, do not distort them
+    if (generatedCount === 0) {
+      return;
     }
 
     let currentSum = sumSegment(start, end);
@@ -835,15 +876,19 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
     }
 
     const diff = targetSum - currentSum;
-    if (Math.abs(diff) > 0.1) {
-      const adj = diff / nonZeroIndices.length;
-      nonZeroIndices.forEach((idx) => {
-        rawScores[idx] = Math.max(12, Math.min(99, Math.round((rawScores[idx] + adj) * 10) / 10));
+    const adjustTargets = generatedIndices.filter(i => rawScores[i] > 0);
+    const targets = adjustTargets.length > 0 ? adjustTargets : nonZeroIndices;
+
+    if (Math.abs(diff) > 0.1 && targets.length > 0) {
+      const adj = diff / targets.length;
+      targets.forEach((idx) => {
+        const val = rawScores[idx] + adj;
+        rawScores[idx] = val >= 99.5 ? 100 : Math.max(15, Math.min(100, Math.round(val * 10) / 10));
       });
     }
   };
 
-  // Segment 1: Indices 35..39 (Last 5 matches)
+  // Segment 1: Indices 35..39 (Last 5 matches - most recent)
   fillAndAdjustSegment(35, 39, l5);
 
   // Segment 2: Indices 30..34 (Matches 6..10 ago)
@@ -886,153 +931,360 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
   const finalOpponents = validOpponents.length > 0 ? validOpponents : opponentPool;
 
   rawScores.forEach((score, idx) => {
-    const matchIndex = idx + 1;
-    const apiIdx = (totalMatches - 1) - idx;
+    const matchIndex = idx + 1; // 1 to 40
+    const apiIdx = (totalMatches - 1) - idx; // if idx=39 (right side), apiIdx=0 (newest in recentMatches)
     const realMatch = recentMatches && recentMatches[apiIdx];
 
-    const opp = realMatch?.opponent || finalOpponents[(seed + idx) % finalOpponents.length];
+    const hasValidRealOpponent = realMatch && realMatch.opponent && realMatch.opponent !== 'Match Futur/Passé' && realMatch.opponent !== 'Match Réel';
+    const opp = hasValidRealOpponent ? realMatch.opponent : finalOpponents[(seed + idx) % finalOpponents.length];
     const isHome = realMatch !== undefined && realMatch.isHome !== undefined ? realMatch.isHome : (seed + idx) % 2 === 0;
     
     if (score === 0 || score < 1) {
       // 1. NON JOUÉ (NOIR / BLACK)
+      const dnpReasons = [
+        '0 minute disputée (Joueur sur le banc des remplaçants)',
+        '0 minute disputée (Repos tactique / Rotation d\'effectif)',
+        '0 minute disputée (Légère gêne musculaire / Préservé)',
+        '0 minute disputée (Non retenu dans le groupe du match)'
+      ];
+      const dnpReason = dnpReasons[(seed + idx) % dnpReasons.length];
+
       result.push({
         matchIndex,
         matchLabel: `Match ${matchIndex}`,
         totalScore: 0,
         isDNP: true,
+        isStarter: false,
+        isSub: false,
+        baseScore: 0,
         minutesPlayed: 0,
         opponent: opp,
         isHome,
         result: isHome ? 'V 1-0' : 'N 0-0',
         decisiveScore: 0,
+        decisiveBonus: 0,
         decisiveActions: [],
         allAroundScore: 0,
-        allAroundDetails: ['0 minute disputée (Joueur sur le banc / Hors feuille de match)'],
+        allAroundDetails: [dnpReason],
         negativeMalus: 0,
         negativeActions: [],
+        goals: 0,
+        goalAssists: 0,
+        penaltyAssists: 0,
+        lastManTackles: 0,
+        yellowCards: 0,
+        redCards: 0,
+        cleanSheet: 0,
+        accuratePasses: 0,
+        totalPasses: 0,
+        wonTackles: 0,
+        wonContests: 0,
+        interceptionsWon: 0,
+        setPiecesTaken: 0,
+        bigChancesCreated: 0,
+        errorsLeadToGoal: 0,
+        penaltiesConceded: 0,
+        ownGoals: 0,
+        penaltiesMissed: 0,
+        penaltiesSaved: 0,
+        wasFouled: 0,
       });
       return;
     }
 
     // 2. JOUEUR AYANT PARTICIPÉ AU MATCH
     const totalScore = Math.round(score * 10) / 10;
+    
+    // Check if we have real match stats from Sorare API
+    if (realMatch && (realMatch.minsPlayed !== undefined || realMatch.goals !== undefined || realMatch.decisiveActions !== undefined)) {
+      const minutesPlayed = realMatch.minsPlayed ?? 90;
+      const goals = realMatch.goals ?? 0;
+      const goalAssist = realMatch.goalAssist ?? 0;
+      const yellowCards = realMatch.yellowCards ?? 0;
+      const redCards = realMatch.redCards ?? 0;
+      const cleanSheet = realMatch.cleanSheet ?? 0;
+      const accuratePass = realMatch.accuratePass ?? (totalScore > 50 ? 45 : 30);
+      const totalPass = realMatch.totalPass ?? Math.round(accuratePass * 1.18);
+      const wonContest = realMatch.wonContest ?? (totalScore > 50 ? 5 : 2);
+      const bigChanceCreated = realMatch.bigChanceCreated ?? 0;
+      const errorLeadToGoal = realMatch.errorLeadToGoal ?? 0;
+      const ownGoals = realMatch.ownGoals ?? 0;
+      const penaltyKickMissed = realMatch.penaltyKickMissed ?? 0;
+      const penaltySave = realMatch.penaltySave ?? 0;
+      const wasFouled = realMatch.wasFouled ?? 0;
+
+      // Determine Starter vs Sub
+      const isStarter = realMatch.isStarter !== undefined 
+        ? realMatch.isStarter 
+        : (minutesPlayed >= 45 || totalScore >= 35);
+      const isSub = realMatch.isSub !== undefined 
+        ? realMatch.isSub 
+        : (!isStarter && minutesPlayed > 0);
+      const baseScore = realMatch.baseScore !== undefined
+        ? realMatch.baseScore
+        : (isStarter ? 35 : isSub ? 25 : 0);
+
+      // Decisive actions
+      let decisiveActions = realMatch.decisiveActions && realMatch.decisiveActions.length > 0 
+        ? [...realMatch.decisiveActions] 
+        : [];
+      if (decisiveActions.length === 0) {
+        if (goals > 1) decisiveActions.push(`⚽ Doublé (${goals} buts)`);
+        else if (goals === 1) decisiveActions.push('⚽ But marqué');
+        if (goalAssist > 1) decisiveActions.push(`🅰️ ${goalAssist} Passes décisives`);
+        else if (goalAssist === 1) decisiveActions.push('🅰️ Passe décisive');
+        if (penaltySave > 0) decisiveActions.push(`🧤 Penalty arrêté (${penaltySave})`);
+        if (cleanSheet > 0 && pos === 'GK' && minutesPlayed >= 60) decisiveActions.push('🛡️ Clean Sheet (0 but concédé)');
+        else if (cleanSheet > 0 && pos === 'DEF' && minutesPlayed >= 60) decisiveActions.push('🛡️ Clean Sheet défensif');
+      }
+
+      // Determine if there is a positive decisive action
+      const hasPositiveDecisive = (realMatch.decisiveScore !== undefined && realMatch.decisiveScore >= 60) || (decisiveActions.length > 0) || (goals > 0) || (goalAssist > 0) || (penaltySave > 0);
+      const decisiveScore = hasPositiveDecisive 
+        ? (realMatch.decisiveScore && realMatch.decisiveScore >= 60 ? realMatch.decisiveScore : 60)
+        : 0;
+      const decisiveBonus = hasPositiveDecisive ? Math.max(0, decisiveScore - baseScore) : 0;
+
+      const allAroundScore = realMatch.allAroundScore !== undefined 
+        ? realMatch.allAroundScore 
+        : Math.max(0, Math.round((totalScore - (hasPositiveDecisive ? decisiveScore : baseScore)) * 10) / 10);
+
+      // Negative actions
+      let negativeActions = realMatch.negativeActions && realMatch.negativeActions.length > 0
+        ? [...realMatch.negativeActions]
+        : [];
+      if (negativeActions.length === 0) {
+        if (redCards > 0) negativeActions.push(`🟥 Carton rouge (${redCards})`);
+        if (yellowCards > 0) negativeActions.push(`🟨 Carton jaune (${yellowCards})`);
+        if (ownGoals > 0) negativeActions.push(`❌ But contre son camp (${ownGoals})`);
+        if (errorLeadToGoal > 0) negativeActions.push(`❌ Erreur menant au but (${errorLeadToGoal})`);
+        if (penaltyKickMissed > 0) negativeActions.push(`⚠️ Penalty manqué (${penaltyKickMissed})`);
+      }
+      const negativeMalus = (redCards * 20) + (ownGoals * 15) + (errorLeadToGoal * 15) + (penaltyKickMissed * 15) + (yellowCards * 5);
+
+      // All around details
+      let allAroundDetails = realMatch.allAroundDetails && realMatch.allAroundDetails.length > 0
+        ? [...realMatch.allAroundDetails]
+        : [];
+      if (allAroundDetails.length === 0) {
+        allAroundDetails.push(`⏱️ ${minutesPlayed} mins disputées`);
+        if (totalPass > 0) {
+          const passPct = Math.round((accuratePass / totalPass) * 100);
+          allAroundDetails.push(`🎯 ${accuratePass}/${totalPass} passes réussies (${passPct}%)`);
+        }
+        if (wonContest > 0) allAroundDetails.push(`⚔️ ${wonContest} duels remportés`);
+        if (bigChanceCreated > 0) allAroundDetails.push(`⚡ ${bigChanceCreated} occasion(s) créée(s)`);
+      }
+
+      result.push({
+        matchIndex,
+        matchLabel: `Match ${matchIndex}`,
+        totalScore,
+        isDNP: false,
+        isStarter,
+        isSub,
+        baseScore,
+        minutesPlayed,
+        opponent: opp,
+        isHome,
+        result: totalScore >= 60 ? 'V 2-0' : totalScore < 35 ? 'D 1-2' : 'N 1-1',
+        decisiveScore,
+        decisiveBonus,
+        decisiveActions,
+        allAroundScore,
+        allAroundDetails,
+        negativeMalus,
+        negativeActions,
+        goals,
+        goalAssists: goalAssist,
+        penaltyAssists: 0,
+        lastManTackles: pos === 'DEF' && totalScore > 65 ? 1 : 0,
+        yellowCards,
+        redCards,
+        cleanSheet,
+        accuratePasses: accuratePass,
+        totalPasses: totalPass,
+        wonTackles: Math.round(wonContest * 0.6),
+        wonContests: wonContest,
+        interceptionsWon: pos === 'DEF' || pos === 'MID' ? Math.round((seed + idx) % 4) : 0,
+        setPiecesTaken: pos === 'MID' ? Math.round((seed + idx) % 5) : 0,
+        bigChancesCreated: bigChanceCreated,
+        errorsLeadToGoal: errorLeadToGoal,
+        penaltiesConceded: 0,
+        ownGoals,
+        penaltiesMissed: penaltyKickMissed,
+        penaltiesSaved: penaltySave,
+        wasFouled,
+      });
+      return;
+    }
+
+    // Fallback if real stats object not populated
+    const isStarter = (seed + idx) % 7 !== 0;
+    const isSub = !isStarter;
+    const baseScore = isStarter ? 35 : 25;
+
     const isDecisivePositive = totalScore >= 60;
     const isNegativeEvent = totalScore < 35;
     
     let decisiveScore = 0;
+    let decisiveBonus = 0;
     const decisiveActions: string[] = [];
     let negativeMalus = 0;
     const negativeActions: string[] = [];
     let allAroundScore = 0;
     const allAroundDetails: string[] = [];
-    let minutesPlayed = 90;
+    let minutesPlayed = isStarter ? 90 : 25;
+
+    let goals = 0;
+    let goalAssists = 0;
+    let yellowCards = 0;
+    let redCards = 0;
+    let cleanSheet = 0;
+    let accuratePasses = Math.round(35 + ((seed + idx) % 25));
+    let totalPasses = Math.round(accuratePasses * 1.15);
+    let wonTackles = Math.round(2 + ((seed + idx) % 4));
+    let wonContests = Math.round(wonTackles * 1.5);
+    let interceptionsWon = Math.round(1 + ((seed + idx) % 3));
+    let setPiecesTaken = pos === 'MID' ? Math.round((seed + idx) % 4) : 0;
+    let errorsLeadToGoal = 0;
+    let penaltiesConceded = 0;
+    let ownGoals = 0;
 
     if (isDecisivePositive) {
       // VERT : Action Décisive Positive
+      decisiveScore = totalScore >= 75 ? 70 : 60;
+      decisiveBonus = Math.max(0, decisiveScore - baseScore);
+
       if (pos === 'GK') {
+        cleanSheet = 1;
         if (totalScore >= 75) {
-          decisiveScore = 35;
-          decisiveActions.push('🧤 Penalty arrêté décisif (+30 pts)', '🛡️ Clean Sheet préservé (+25 pts)');
+          decisiveActions.push('🧤 Penalty arrêté décisif', '🛡️ Clean Sheet');
         } else {
-          decisiveScore = 25;
-          decisiveActions.push('🛡️ Clean Sheet gardien (0 but concédé, +25 pts)');
+          decisiveActions.push('🛡️ Clean Sheet gardien (0 but concédé)');
         }
       } else if (pos === 'DEF') {
         if (totalScore >= 75) {
-          decisiveScore = 35;
-          decisiveActions.push('⚽ But marqué de la tête (+25 pts)', '🛡️ Clean Sheet défensif (+25 pts)');
+          goals = 1;
+          cleanSheet = 1;
+          decisiveActions.push('⚽ But marqué de la tête', '🛡️ Clean Sheet');
         } else {
-          decisiveScore = 25;
-          const defActions = [
-            '🅰️ Passe décisive (+25 pts)',
-            '⚽ But sur corner (+25 pts)',
-            '🛑 Sauvetage héroïque sur la ligne (+25 pts)',
-            '🛡️ Clean Sheet défensif (+25 pts)'
-          ];
-          decisiveActions.push(defActions[(seed + idx) % defActions.length]);
+          const isAssist = (seed + idx) % 2 === 0;
+          if (isAssist) {
+            goalAssists = 1;
+            decisiveActions.push('🅰️ Passe décisive');
+          } else {
+            cleanSheet = 1;
+            decisiveActions.push('🛡️ Clean Sheet défensif');
+          }
         }
       } else if (pos === 'MID') {
         if (totalScore >= 75) {
-          decisiveScore = 35;
-          decisiveActions.push('⚽⚽ Doublé magistral (+35 pts)');
+          goals = 2;
+          decisiveActions.push('⚽⚽ Doublé de buts');
         } else {
-          decisiveScore = 25;
-          const midActions = [
-            '⚽ But marqué (+25 pts)',
-            '🅰️ Passe décisive lumineuse (+25 pts)',
-            '⚡ Pénalty provoqué et transformé (+25 pts)'
-          ];
-          decisiveActions.push(midActions[(seed + idx) % midActions.length]);
+          const isGoal = (seed + idx) % 2 === 0;
+          if (isGoal) {
+            goals = 1;
+            decisiveActions.push('⚽ But marqué');
+          } else {
+            goalAssists = 1;
+            decisiveActions.push('🅰️ Passe décisive');
+          }
         }
       } else {
         // FWD
         if (totalScore >= 75) {
-          decisiveScore = 35;
-          decisiveActions.push('⚽⚽ Doublé de l\'attaquant (+35 pts)');
+          goals = 2;
+          decisiveActions.push('⚽⚽ Doublé');
         } else {
-          decisiveScore = 25;
-          const fwdActions = [
-            '⚽ But d\'attaquant (+25 pts)',
-            '🅰️ Passe décisive millimétrée (+25 pts)'
-          ];
-          decisiveActions.push(fwdActions[(seed + idx) % fwdActions.length]);
+          const isGoal = (seed + idx) % 3 !== 0;
+          if (isGoal) {
+            goals = 1;
+            decisiveActions.push('⚽ But d\'attaquant');
+          } else {
+            goalAssists = 1;
+            decisiveActions.push('🅰️ Passe décisive');
+          }
         }
       }
 
-      // All-Around Score (Blanc) = Total - Decisive Level (Level 1: 60)
-      allAroundScore = Math.max(0, Math.round((totalScore - 60) * 10) / 10);
+      // All-Around Score (Blanc) = Total - Decisive Level
+      allAroundScore = Math.max(0, Math.round((totalScore - decisiveScore) * 10) / 10);
       
       // All Around Details
       if (pos === 'GK') {
         allAroundDetails.push('5 arrêts dans la surface', '90% relances réussies', '3 sorties aériennes captées');
       } else if (pos === 'DEF') {
-        allAroundDetails.push('6 duels aériens gagnés (100%)', '4 tacles réussis', '52 passes réussies (91%)');
+        allAroundDetails.push('6 duels aériens gagnés', '4 tacles réussis', `${accuratePasses} passes réussies`);
       } else if (pos === 'MID') {
-        allAroundDetails.push('3 passes clés', '7 duels au sol gagnés', '58 passes complétées (89%)', '2 tirs cadrés');
+        allAroundDetails.push('3 passes clés', '7 duels au sol gagnés', `${accuratePasses} passes complétées`);
       } else {
-        allAroundDetails.push('4 tirs cadrés', '3 dribbles réussis', '3 fautes subies dans le dernier tiers');
+        allAroundDetails.push('4 tirs cadrés', '3 dribbles réussis', '3 fautes subies');
       }
 
     } else if (isNegativeEvent) {
       // ROUGE : Action Négative / Malus
+      decisiveScore = 0;
+      decisiveBonus = 0;
       if (pos === 'GK') {
         negativeMalus = 15;
-        negativeActions.push('💥 3 buts encaissés (-15 pts)', '⚠️ Penalty concédé (-15 pts)');
+        penaltiesConceded = 1;
+        negativeActions.push('💥 3 buts encaissés', '⚠️ Penalty concédé');
       } else if (pos === 'DEF') {
         negativeMalus = 15;
-        const defNegs = [
-          '⚠️ Penalty concédé dans la surface (-15 pts)',
-          '❌ Erreur défensive fatale menant au but (-15 pts)',
-          '🟥 Carton rouge consécutif à 2 jaunes (-20 pts)',
-          '❌ But contre son camp malheureux (-15 pts)'
-        ];
-        negativeActions.push(defNegs[(seed + idx) % defNegs.length]);
+        const negType = (seed + idx) % 4;
+        if (negType === 0) {
+          penaltiesConceded = 1;
+          negativeActions.push('⚠️ Penalty concédé');
+        } else if (negType === 1) {
+          errorsLeadToGoal = 1;
+          negativeActions.push('❌ Erreur menant au but');
+        } else if (negType === 2) {
+          redCards = 1;
+          yellowCards = 2;
+          negativeActions.push('🟥 Carton rouge');
+        } else {
+          ownGoals = 1;
+          negativeActions.push('❌ But contre son camp');
+        }
       } else {
         // MID / FWD
         negativeMalus = 15;
-        const outNegs = [
-          '🟥 Carton rouge direct (-20 pts)',
-          '⚠️ Penalty concédé sur repli (-15 pts)',
-          '❌ Grosse occasion manquée & 14 pertes de balle (-10 pts)',
-          '🟨 Carton jaune & 5 fautes concédées (-8 pts)'
-        ];
-        negativeActions.push(outNegs[(seed + idx) % outNegs.length]);
+        const negType = (seed + idx) % 3;
+        if (negType === 0) {
+          yellowCards = 1;
+          negativeActions.push('🟨 Carton jaune & 5 fautes concédées');
+        } else if (negType === 1) {
+          redCards = 1;
+          negativeActions.push('🟥 Carton rouge direct');
+        } else {
+          penaltiesConceded = 1;
+          negativeActions.push('⚠️ Penalty concédé sur repli');
+        }
       }
 
       // AAS résiduel (Blanc)
-      allAroundScore = Math.max(0, Math.round(totalScore * 0.65 * 10) / 10);
-      allAroundDetails.push('Participation active mitigée', 'Pertes de possession sous pression');
+      allAroundScore = Math.max(0, Math.round((totalScore - baseScore) * 10) / 10);
+      allAroundDetails.push('Participation active mitigée', 'Pertes de possession');
 
     } else {
       // 35 <= score < 60 : BLANC : All-Around Score prédominant (Match complet classique)
-      allAroundScore = Math.round((totalScore - 35) * 10) / 10;
+      decisiveScore = 0;
+      decisiveBonus = 0;
+      allAroundScore = Math.max(0, Math.round((totalScore - baseScore) * 10) / 10);
       
+      if ((seed + idx) % 5 === 0) {
+        yellowCards = 1;
+        negativeActions.push('🟨 Carton jaune');
+      }
+
       if (pos === 'GK') {
         allAroundDetails.push('3 arrêts au sol', '12 relances réussies', '1 but concédé');
       } else if (pos === 'DEF') {
-        allAroundDetails.push('42 passes réussies (86%)', '4 dégagements défensifs', '3 duels gagnés');
+        allAroundDetails.push(`${accuratePasses} passes réussies`, '4 dégagements', `${wonTackles} tacles réussis`);
       } else if (pos === 'MID') {
-        allAroundDetails.push('54 passes réussies (88%)', '5 ballons récupérés', '1 passe clé', '2 centres');
+        allAroundDetails.push(`${accuratePasses} passes réussies`, '5 ballons récupérés', '1 passe clé');
       } else {
         allAroundDetails.push('2 tirs cadrés', '2 dribbles réussis', '2 fautes obtenues');
       }
@@ -1043,16 +1295,40 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
       matchLabel: `Match ${matchIndex}`,
       totalScore,
       isDNP: false,
+      isStarter,
+      isSub,
+      baseScore,
       minutesPlayed,
       opponent: opp,
       isHome,
       result: isDecisivePositive ? 'V 2-0' : isNegativeEvent ? 'D 1-3' : 'N 1-1',
       decisiveScore,
+      decisiveBonus,
       decisiveActions,
       allAroundScore,
       allAroundDetails,
       negativeMalus,
       negativeActions,
+      goals,
+      goalAssists,
+      penaltyAssists: 0,
+      lastManTackles: 0,
+      yellowCards,
+      redCards,
+      cleanSheet,
+      accuratePasses,
+      totalPasses,
+      wonTackles,
+      wonContests,
+      interceptionsWon,
+      setPiecesTaken,
+      bigChancesCreated: 0,
+      errorsLeadToGoal,
+      penaltiesConceded,
+      ownGoals,
+      penaltiesMissed: 0,
+      penaltiesSaved: 0,
+      wasFouled: 0,
     });
   });
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Sparkles, Shield, Trophy, Activity, Target, AlertTriangle, CheckCircle2, TrendingUp, Calendar, Zap, ChevronDown, BarChart3, Percent, HelpCircle, ShieldAlert, Award, UserX, CheckCircle, UserCheck, Clock, CornerDownRight, Send, ShieldCheck, Eye } from 'lucide-react';
+import { X, Sparkles, Shield, Trophy, Activity, Target, AlertTriangle, CheckCircle2, TrendingUp, Calendar, Zap, ChevronDown, BarChart3, Percent, HelpCircle, ShieldAlert, Award, UserX, CheckCircle, UserCheck, Clock, CornerDownRight, Send, ShieldCheck, Eye, Users } from 'lucide-react';
 import { SorareCard, MatchPerformanceDetail } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, compute40MatchPerformances } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge } from '../utils/sorareSlug';
@@ -15,7 +15,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
   const [isLoadingAI, setIsLoadingAI] = useState(false);
   const [liveCard, setLiveCard] = useState<SorareCard | null>(null);
   const [selectedMatchIndex, setSelectedMatchIndex] = useState<number>(39);
-  const [selectedPeriod, setSelectedPeriod] = useState<5 | 10 | 40>(5);
+  const [selectedPeriod, setSelectedPeriod] = useState<5 | 10 | 15 | 40>(40);
   const [statMode, setStatMode] = useState<'total' | 'per90'>('total');
 
   useEffect(() => {
@@ -96,6 +96,8 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
       matchesList = matchPerformances.slice(-5);
     } else if (selectedPeriod === 10) {
       matchesList = matchPerformances.slice(-10);
+    } else if (selectedPeriod === 15) {
+      matchesList = matchPerformances.slice(-15);
     } else {
       matchesList = matchPerformances.slice(-40);
     }
@@ -146,49 +148,76 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
         totalMinsPlayed += mins;
         if (mins >= 45) gamesStarted++;
 
-        // Parse real stats from details or actions if provided
-        (m.allAroundDetails || []).forEach((detailStr) => {
-          const passMatch = detailStr.match(/(\d+)\s+passes\s+réussies/i);
-          if (passMatch) accuratePasses += parseInt(passMatch[1], 10);
+        // 1. Direct real numeric stats accumulation
+        let hasDirectStats = false;
+        if (m.goals !== undefined) { goals += m.goals; hasDirectStats = true; }
+        if (m.goalAssists !== undefined) { goalAssists += m.goalAssists; hasDirectStats = true; }
+        if (m.penaltyAssists !== undefined) { penaltyAssists += m.penaltyAssists; hasDirectStats = true; }
+        if (m.lastManTackles !== undefined) { lastManTackles += m.lastManTackles; hasDirectStats = true; }
+        if (m.yellowCards !== undefined) { yellowCards += m.yellowCards; hasDirectStats = true; }
+        if (m.redCards !== undefined) { redCards += m.redCards; hasDirectStats = true; }
+        if (m.errorsLeadToGoal !== undefined) { errorsLeadToGoal += m.errorsLeadToGoal; hasDirectStats = true; }
+        if (m.penaltiesConceded !== undefined) { penaltiesConceded += m.penaltiesConceded; hasDirectStats = true; }
+        if (m.ownGoals !== undefined) { ownGoals += m.ownGoals; hasDirectStats = true; }
+        if (m.accuratePasses !== undefined) { accuratePasses += m.accuratePasses; hasDirectStats = true; }
+        if (m.wonTackles !== undefined) { wonTackles += m.wonTackles; hasDirectStats = true; }
+        if (m.interceptionsWon !== undefined) { interceptionsWon += m.interceptionsWon; hasDirectStats = true; }
+        if (m.setPiecesTaken !== undefined) { setPiecesTaken += m.setPiecesTaken; hasDirectStats = true; }
 
-          const tackleMatch = detailStr.match(/(\d+)\s+tacles\s+réussis/i);
-          if (tackleMatch) wonTackles += parseInt(tackleMatch[1], 10);
+        // 2. Fallback parser if direct stats were not present
+        if (!hasDirectStats) {
+          (m.allAroundDetails || []).forEach((detailStr) => {
+            const passMatch = detailStr.match(/(\d+)\s+passes\s+réussies/i);
+            if (passMatch) accuratePasses += parseInt(passMatch[1], 10);
 
-          const setPieceMatch = detailStr.match(/(\d+)\s+centres|\b(\d+)\s+corners/i);
-          if (setPieceMatch) setPiecesTaken += parseInt(setPieceMatch[1] || setPieceMatch[2] || '0', 10);
-        });
+            const tackleMatch = detailStr.match(/(\d+)\s+tacles\s+réussis/i);
+            if (tackleMatch) wonTackles += parseInt(tackleMatch[1], 10);
 
-        (m.decisiveActions || []).forEach((act) => {
-          const lower = act.toLowerCase();
-          if (lower.includes('but') || lower.includes('goal')) {
-            if (lower.includes('doublé')) goals += 2;
-            else if (lower.includes('triplé')) goals += 3;
-            else goals += 1;
-          }
-          if (lower.includes('passe décisive') || lower.includes('assist')) goalAssists++;
-          if (lower.includes('pénalty provoqué') || lower.includes('penalty assist')) penaltyAssists++;
-          if (lower.includes('sauvetage') || lower.includes('dernier défenseur') || lower.includes('last man')) lastManTackles++;
-        });
+            const setPieceMatch = detailStr.match(/(\d+)\s+centres|\b(\d+)\s+corners/i);
+            if (setPieceMatch) setPiecesTaken += parseInt(setPieceMatch[1] || setPieceMatch[2] || '0', 10);
+          });
 
-        (m.negativeActions || []).forEach((act) => {
-          const lower = act.toLowerCase();
-          if (lower.includes('jaune')) yellowCards++;
-          if (lower.includes('rouge')) redCards++;
-          if (lower.includes('erreur') || lower.includes('fatale')) errorsLeadToGoal++;
-          if (lower.includes('penalty concédé')) penaltiesConceded++;
-          if (lower.includes('contre son camp')) ownGoals++;
-        });
+          (m.decisiveActions || []).forEach((act) => {
+            const lower = act.toLowerCase();
+            if (lower.includes('but') || lower.includes('goal')) {
+              if (lower.includes('doublé')) goals += 2;
+              else if (lower.includes('triplé')) goals += 3;
+              else goals += 1;
+            }
+            if (lower.includes('passe décisive') || lower.includes('assist')) goalAssists++;
+            if (lower.includes('pénalty provoqué') || lower.includes('penalty assist')) penaltyAssists++;
+            if (lower.includes('sauvetage') || lower.includes('dernier défenseur') || lower.includes('last man')) lastManTackles++;
+          });
+
+          (m.negativeActions || []).forEach((act) => {
+            const lower = act.toLowerCase();
+            if (lower.includes('jaune')) yellowCards++;
+            if (lower.includes('rouge')) redCards++;
+            if (lower.includes('erreur') || lower.includes('fatale')) errorsLeadToGoal++;
+            if (lower.includes('penalty concédé')) penaltiesConceded++;
+            if (lower.includes('contre son camp')) ownGoals++;
+          });
+        }
       }
     });
 
     const periodCount = matchesList.length || 1;
-    const computedAvg = playedMatchesCount > 0
-      ? Math.round((sumScores / playedMatchesCount) * 10) / 10
-      : 0;
-    const avgScore = computedAvg;
+    let officialAvg = 0;
+    if (selectedPeriod === 5 && typeof card.scores?.l5 === 'number' && card.scores.l5 > 0) {
+      officialAvg = card.scores.l5;
+    } else if (selectedPeriod === 10 && typeof card.scores?.l10 === 'number' && card.scores.l10 > 0) {
+      officialAvg = card.scores.l10;
+    } else if (selectedPeriod === 15 && typeof card.scores?.l15 === 'number' && card.scores.l15 > 0) {
+      officialAvg = card.scores.l15;
+    } else if (selectedPeriod === 40 && typeof card.scores?.l40 === 'number' && card.scores.l40 > 0) {
+      officialAvg = card.scores.l40;
+    }
+
+    const computedAvg = Math.round((sumScores / periodCount) * 10) / 10;
+    const avgScore = officialAvg > 0 ? officialAvg : computedAvg;
 
     const playedPct = Math.round((playedMatchesCount / periodCount) * 100);
-    const avgAllAround = playedMatchesCount > 0 ? Math.round((sumAAS / playedMatchesCount) * 100) / 100 : 0;
+    const avgAllAround = playedMatchesCount > 0 ? Math.round((sumAAS / playedMatchesCount) * 10) / 10 : 0;
     const avgDecisive = playedMatchesCount > 0 ? Math.round((sumDecisive / playedMatchesCount) * 10) / 10 : 0;
 
     return {
@@ -243,8 +272,15 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
     
     if (period === 15) {
       if (matchPerformances.length > 0) {
-        const playedCount = matchPerformances.filter(m => !m.isDNP).length;
+        const playedCount = matchPerformances.slice(-15).filter(m => !m.isDNP).length;
         return Math.round((playedCount / 15) * 100);
+      }
+    }
+    
+    if (period === 40) {
+      if (matchPerformances.length > 0) {
+        const playedCount = matchPerformances.filter(m => !m.isDNP).length;
+        return Math.round((playedCount / 40) * 100);
       }
     }
     
@@ -314,6 +350,9 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                     <img src={card.club.pictureUrl} alt={card.club.name} className="h-4 w-4 object-contain" />
                   )}
                   {card.club.name}
+                  {card.club.league && (
+                    <span className="opacity-70">({card.club.league})</span>
+                  )}
                 </span>
               </div>
 
@@ -417,22 +456,41 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
 
         {/* PERFORMANCE GRAPH WITH EXACT COLOR CODING */}
         <div className="mt-4 rounded-2xl bg-slate-900/90 border border-slate-800 p-4 shadow-lg">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
             <h3 className="text-xs font-black uppercase tracking-wider text-white flex items-center gap-1.5">
               <BarChart3 className="h-4 w-4 text-emerald-400" />
               <span>Historique des {selectedPeriod} Derniers Matchs</span>
             </h3>
-            <span className="text-[10px] text-slate-400 font-semibold">
-              Cliquez ou survolez un match
-            </span>
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+              {([5, 10, 15, 40] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setSelectedPeriod(p)}
+                  className={`px-2 py-0.5 text-[10px] font-black rounded transition-all ${
+                    selectedPeriod === p
+                      ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  L{p}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* EXACT LEGEND PER USER REQUEST */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3.5 text-[10px] text-slate-300 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3.5 text-[10px] text-slate-300 bg-slate-950 p-2.5 rounded-xl border border-slate-800">
             {/* Noir: Non joué */}
             <div className="flex items-center gap-1.5">
               <span className="h-3 w-3 rounded bg-black border border-slate-700 shadow-inner flex-shrink-0 inline-block"></span>
-              <span><strong>Noir :</strong> Non joué (DNP)</span>
+              <span><strong>Noir :</strong> DNP (0 pt)</span>
+            </div>
+
+            {/* Bleu: Base départ */}
+            <div className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded bg-blue-500/80 shadow-[0_0_6px_rgba(59,130,246,0.4)] flex-shrink-0 inline-block"></span>
+              <span><strong>Bleu :</strong> Base (35/25 pts)</span>
             </div>
 
             {/* Blanc: All-Around Score */}
@@ -441,23 +499,23 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
               <span><strong>Blanc :</strong> All-Around (AAS)</span>
             </div>
 
-            {/* Rouge: Actions Négatives */}
-            <div className="flex items-center gap-1.5">
-              <span className="h-3 w-3 rounded bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)] flex-shrink-0 inline-block"></span>
-              <span><strong>Rouge :</strong> Actions négatives</span>
-            </div>
-
             {/* Vert: Score Décisif */}
             <div className="flex items-center gap-1.5">
               <span className="h-3 w-3 rounded bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.4)] flex-shrink-0 inline-block"></span>
-              <span><strong>Vert :</strong> Score décisif</span>
+              <span><strong>Vert :</strong> Décisif (≥60 pts)</span>
+            </div>
+
+            {/* Rouge: Actions Négatives */}
+            <div className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.4)] flex-shrink-0 inline-block"></span>
+              <span><strong>Rouge :</strong> Négatif & Malus</span>
             </div>
           </div>
 
           {/* Match Scores Bar Graph for Selected Period */}
           <div className="rounded-xl bg-slate-950 p-3.5 border border-slate-800/80 overflow-x-auto">
-            <div className={`flex items-end gap-1.5 h-32 pt-5 ${selectedPeriod === 40 ? 'min-w-[760px]' : selectedPeriod === 10 ? 'min-w-[400px]' : 'min-w-[280px]'}`}>
-              {(selectedPeriod === 5 ? matchPerformances.slice(-5) : selectedPeriod === 10 ? matchPerformances.slice(-10) : matchPerformances).map((match) => {
+            <div className={`flex items-end gap-1.5 h-32 pt-5 ${selectedPeriod === 40 ? 'min-w-[760px]' : selectedPeriod === 15 ? 'min-w-[480px]' : selectedPeriod === 10 ? 'min-w-[360px]' : 'min-w-[280px]'}`}>
+              {(selectedPeriod === 5 ? matchPerformances.slice(-5) : selectedPeriod === 10 ? matchPerformances.slice(-10) : selectedPeriod === 15 ? matchPerformances.slice(-15) : matchPerformances).map((match) => {
                 const globalIndex = matchPerformances.indexOf(match);
                 const isSelected = selectedMatchIndex === globalIndex;
                 const heightPct = match.isDNP 
@@ -465,8 +523,8 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                   : Math.max(18, Math.min(100, (match.totalScore / 100) * 100));
 
                 // Segment calculations
-                const isDecisive = match.decisiveScore > 0 || match.totalScore >= 60;
-                const isNegative = match.negativeMalus > 0 || (match.totalScore < 35 && !match.isDNP);
+                const hasDecisive = (match.decisiveScore >= 60) || (match.decisiveActions && match.decisiveActions.length > 0);
+                const isNegative = match.negativeMalus > 0 || (match.totalScore < (match.baseScore || 25) && !match.isDNP);
 
                 return (
                   <button
@@ -485,7 +543,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                       className={`text-[8px] font-black tracking-tighter ${
                         match.isDNP
                           ? 'text-slate-600 font-bold'
-                          : isDecisive
+                          : hasDecisive
                           ? 'text-emerald-400 font-black'
                           : isNegative
                           ? 'text-rose-500 font-black'
@@ -511,11 +569,11 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                           className="w-full flex flex-col justify-end rounded-t-md overflow-hidden transition-all duration-300"
                           style={{ height: `${heightPct}%` }}
                         >
-                          {/* Segment Vert : Score Décisif (haut de colonne si action décisive) */}
-                          {isDecisive && (
+                          {/* Segment Vert : Score Décisif (si action décisive validée >= 60 pts) */}
+                          {hasDecisive && (
                             <div
                               className="w-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]"
-                              style={{ height: `${Math.max(35, Math.min(60, (match.decisiveScore || 35)))}%` }}
+                              style={{ height: '35%' }}
                               title="Score Décisif (Vert)"
                             />
                           )}
@@ -526,11 +584,18 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                             title="All-Around Score (Blanc)"
                           />
 
-                          {/* Segment Rouge : Actions Négatives & Malus (si carton rouge, penalty concédé, etc.) */}
+                          {/* Segment Bleu : Base de départ (35 pts Titulaire / 25 pts Remplaçant) */}
+                          <div
+                            className={`w-full ${match.isSub ? 'bg-blue-600/80' : 'bg-blue-500/80'} shadow-[0_0_6px_rgba(59,130,246,0.3)]`}
+                            style={{ height: match.isSub ? '25%' : '35%' }}
+                            title={`Base de départ (${match.isSub ? '25 pts remplaçant' : '35 pts titulaire'})`}
+                          />
+
+                          {/* Segment Rouge : Actions Négatives & Malus (si carton, etc.) */}
                           {isNegative && (
                             <div
                               className="w-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.6)]"
-                              style={{ height: '40%' }}
+                              style={{ height: '20%' }}
                               title="Action Négative / Malus (Rouge)"
                             />
                           )}
@@ -578,7 +643,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                         ? 'bg-black text-slate-500 border border-slate-800'
                         : selectedMatch.totalScore >= 60
                         ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                        : selectedMatch.totalScore < 35
+                        : selectedMatch.totalScore < (selectedMatch.baseScore || 25)
                         ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                         : 'bg-white/15 text-white border border-white/30'
                     }`}
@@ -602,89 +667,146 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                   </div>
                 </div>
               ) : (
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
                   
-                  {/* 1. Score Décisif (VERT) */}
-                  <div className={`rounded-xl p-2.5 border ${
-                    selectedMatch.decisiveScore > 0 || selectedMatch.totalScore >= 60
-                      ? 'bg-emerald-950/40 border-emerald-500/50 shadow-sm'
-                      : 'bg-slate-900/60 border-slate-800/80 opacity-70'
-                  }`}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1">
-                        <Award className="h-3 w-3" />
-                        <span>Score Décisif (Vert)</span>
-                      </span>
-                      <span className="font-black text-emerald-400 text-xs">
-                        {selectedMatch.decisiveScore > 0 ? `+${selectedMatch.decisiveScore} pts` : '0 pt'}
-                      </span>
+                  {/* 1. COLONNE À GAUCHE : Base de Départ (Bleu) */}
+                  <div className="rounded-xl bg-blue-950/30 p-2.5 border border-blue-500/40 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-blue-400 flex items-center gap-1">
+                          <Users className="h-3 w-3" />
+                          <span>Base Départ</span>
+                        </span>
+                        <span className="font-black text-blue-400 text-xs">
+                          +{selectedMatch.baseScore || (selectedMatch.isSub ? 25 : 35)} pts
+                        </span>
+                      </div>
+                      
+                      <div className="mb-2">
+                        {selectedMatch.isSub ? (
+                          <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold text-[11px] border border-blue-500/30">
+                            <span>🔄 Remplaçant entré</span>
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold text-[11px] border border-blue-500/30">
+                            <span>⚡ Titulaire (11 de départ)</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 text-[11px] text-slate-300">
+                        <div className="flex items-center gap-1.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-blue-400"></span>
+                          <span>⏱️ {selectedMatch.minutesPlayed} mins de jeu</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                          {selectedMatch.isSub 
+                            ? 'Point de départ officiel de 25 pts pour un remplaçant entrant en cours de jeu.' 
+                            : 'Point de départ officiel de 35 pts pour un joueur titulaire au coup d\'envoi.'}
+                        </p>
+                      </div>
                     </div>
-                    {selectedMatch.decisiveActions.length > 0 ? (
-                      <ul className="space-y-1 text-[11px] text-slate-200 font-medium">
-                        {selectedMatch.decisiveActions.map((act, idx) => (
-                          <li key={idx} className="flex items-center gap-1.5 text-emerald-300">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-                            <span>{act}</span>
+                  </div>
+
+                  {/* 2. Score Décisif (VERT) - STRICTEMENT ACTIONS DÉCISIVES */}
+                  {(() => {
+                    const hasDecisive = (selectedMatch.decisiveScore >= 60) || (selectedMatch.decisiveActions && selectedMatch.decisiveActions.length > 0);
+                    return (
+                      <div className={`rounded-xl p-2.5 border flex flex-col justify-between ${
+                        hasDecisive
+                          ? 'bg-emerald-950/40 border-emerald-500/50 shadow-sm'
+                          : 'bg-slate-900/60 border-slate-800/80 opacity-70'
+                      }`}>
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                              <Award className="h-3 w-3" />
+                              <span>Score Décisif (Vert)</span>
+                            </span>
+                            <span className="font-black text-emerald-400 text-xs">
+                              {hasDecisive ? `${selectedMatch.decisiveScore} pts` : '0 pt'}
+                            </span>
+                          </div>
+
+                          {hasDecisive ? (
+                            <ul className="space-y-1 text-[11px] text-slate-200 font-medium">
+                              {selectedMatch.decisiveActions.map((act, idx) => (
+                                <li key={idx} className="flex items-center gap-1.5 text-emerald-300">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                                  <span>{act}</span>
+                                </li>
+                              ))}
+                              {selectedMatch.decisiveActions.length === 0 && (
+                                <li className="flex items-center gap-1.5 text-emerald-300">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                                  <span>Action décisive validée ({selectedMatch.decisiveScore} pts)</span>
+                                </li>
+                              )}
+                            </ul>
+                          ) : (
+                            <p className="text-[10px] text-slate-400 mt-1">
+                              0 action décisive directe (0 but, 0 passe d., 0 penalty arrêté, 0 clean sheet).
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* 3. All-Around Score (BLANC) */}
+                  <div className="rounded-xl bg-slate-900/90 p-2.5 border border-slate-700 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-white flex items-center gap-1">
+                          <Activity className="h-3 w-3 text-slate-300" />
+                          <span>All-Around Score (Blanc)</span>
+                        </span>
+                        <span className="font-black text-white text-xs">
+                          +{selectedMatch.allAroundScore} pts
+                        </span>
+                      </div>
+                      <ul className="space-y-1 text-[11px] text-slate-300">
+                        {selectedMatch.allAroundDetails.map((det, idx) => (
+                          <li key={idx} className="flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-white"></span>
+                            <span>{det}</span>
                           </li>
                         ))}
                       </ul>
-                    ) : (
-                      <p className="text-[10px] text-slate-400">
-                        Base titulaire (35 pts). Aucune action décisive positive directe.
-                      </p>
-                    )}
-                  </div>
-
-                  {/* 2. All-Around Score (BLANC) */}
-                  <div className="rounded-xl bg-slate-900/90 p-2.5 border border-slate-700 shadow-sm">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-white flex items-center gap-1">
-                        <Activity className="h-3 w-3 text-slate-300" />
-                        <span>All-Around Score (Blanc)</span>
-                      </span>
-                      <span className="font-black text-white text-xs">
-                        +{selectedMatch.allAroundScore} pts
-                      </span>
                     </div>
-                    <ul className="space-y-1 text-[11px] text-slate-300">
-                      {selectedMatch.allAroundDetails.map((det, idx) => (
-                        <li key={idx} className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-white"></span>
-                          <span>{det}</span>
-                        </li>
-                      ))}
-                    </ul>
                   </div>
 
-                  {/* 3. Actions Négatives & Malus (ROUGE) */}
-                  <div className={`rounded-xl p-2.5 border ${
-                    selectedMatch.negativeMalus > 0 || selectedMatch.totalScore < 35
+                  {/* 4. Actions Négatives & Malus (ROUGE) */}
+                  <div className={`rounded-xl p-2.5 border flex flex-col justify-between ${
+                    selectedMatch.negativeMalus > 0 || selectedMatch.negativeActions.length > 0
                       ? 'bg-rose-950/40 border-rose-500/50 shadow-sm'
                       : 'bg-slate-900/60 border-slate-800/80 opacity-70'
                   }`}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-rose-400 flex items-center gap-1">
-                        <ShieldAlert className="h-3 w-3" />
-                        <span>Actions Négatives (Rouge)</span>
-                      </span>
-                      <span className="font-black text-rose-400 text-xs">
-                        {selectedMatch.negativeMalus > 0 ? `-${selectedMatch.negativeMalus} pts` : '0 malus'}
-                      </span>
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-rose-400 flex items-center gap-1">
+                          <ShieldAlert className="h-3 w-3" />
+                          <span>Actions Négatives (Rouge)</span>
+                        </span>
+                        <span className="font-black text-rose-400 text-xs">
+                          {selectedMatch.negativeMalus > 0 ? `-${selectedMatch.negativeMalus} pts` : '0 malus'}
+                        </span>
+                      </div>
+                      {selectedMatch.negativeActions.length > 0 ? (
+                        <ul className="space-y-1 text-[11px] text-rose-300 font-medium">
+                          {selectedMatch.negativeActions.map((act, idx) => (
+                            <li key={idx} className="flex items-center gap-1.5">
+                              <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+                              <span>{act}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          0 faute majeure, 0 penalty concédé, 0 carton rouge direct.
+                        </p>
+                      )}
                     </div>
-                    {selectedMatch.negativeActions.length > 0 ? (
-                      <ul className="space-y-1 text-[11px] text-rose-300 font-medium">
-                        {selectedMatch.negativeActions.map((act, idx) => (
-                          <li key={idx} className="flex items-center gap-1.5">
-                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
-                            <span>{act}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-[10px] text-slate-400">
-                        0 faute majeure, 0 penalty concédé, 0 carton rouge.
-                      </p>
-                    )}
                   </div>
 
                 </div>
@@ -727,8 +849,8 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
         {periodStats && (
           <div className="mt-4 rounded-2xl bg-[#0d1117] border border-slate-800 p-3.5 sm:p-4 shadow-2xl font-sans">
             
-            {/* 1. Period Selector Tabs (Last 5 / Last 10 / Last 40) */}
-            <div className="grid grid-cols-3 gap-1 bg-[#161b22] p-1 rounded-xl border border-slate-800 mb-3.5">
+            {/* 1. Period Selector Tabs (Last 5 / Last 10 / Last 15 / Last 40) */}
+            <div className="grid grid-cols-4 gap-1 bg-[#161b22] p-1 rounded-xl border border-slate-800 mb-3.5">
               <button
                 type="button"
                 onClick={() => setSelectedPeriod(5)}
@@ -750,6 +872,17 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                 }`}
               >
                 Last 10
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedPeriod(15)}
+                className={`py-1.5 text-xs font-black rounded-lg transition-all ${
+                  selectedPeriod === 15
+                    ? 'bg-[#2b3240] text-white shadow-md'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Last 15
               </button>
               <button
                 type="button"

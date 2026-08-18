@@ -8,6 +8,8 @@ import { AdminPage } from './pages/AdminPage';
 import { PlayerScoutModal } from './components/PlayerScoutModal';
 import { LineupAnalysisDrawer } from './components/LineupAnalysisDrawer';
 import { SlotSwapModal } from './components/SlotSwapModal';
+import { LiveScoringView } from './components/LiveScoringView';
+import { LineupExportModal } from './components/LineupExportModal';
 import { StorageService } from './utils/storage';
 import { optimizeLineup, generateFourDistinctLineups } from './utils/optimizer';
 import { CURRENT_GAME_WEEK } from './data/mockGallery';
@@ -15,9 +17,10 @@ import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters } from './t
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'pitch' | 'gallery' | 'matchups' | 'ai-coach' | 'admin'>('pitch');
+  const [currentTab, setCurrentTab] = useState<'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin'>('pitch');
   const [username, setUsernameState] = useState<string>(StorageService.getUsername());
   const [cards, setCards] = useState<SorareCard[]>([]);
+  const [exportLineupTarget, setExportLineupTarget] = useState<Lineup | null>(null);
   
   const [filters, setFilters] = useState<LineupOptimizationFilters>({
     rarity: 'ALL',
@@ -125,12 +128,34 @@ export default function App() {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
+    // Global error handlers for UI Logs
+    const logClientError = (msg: string, err?: any) => {
+      fetch('/api/admin/logs/client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, error: String(err) })
+      }).catch(console.error);
+    };
+
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const msg = event.reason?.message || String(event.reason);
+      logClientError(msg, event.reason);
+    };
+
+    const handleError = (event: ErrorEvent) => {
+      logClientError(event.message, event.error);
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    window.addEventListener('error', handleError);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+      window.removeEventListener('error', handleError);
     };
   }, []);
 
@@ -143,12 +168,40 @@ export default function App() {
   const handleSyncWithSorare = async (customUsername?: string) => {
     const targetName = customUsername || username;
     setIsSyncing(true);
+    let pollInterval: any;
+
     try {
       const apiKey = StorageService.getApiKey();
-      const url = `/api/sorare/user-cards?username=${encodeURIComponent(targetName)}${apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : ''}`;
+      
+      // Start polling for progress
+      pollInterval = setInterval(async () => {
+        try {
+          const progressRes = await fetch(`/api/sorare/sync-progress?username=${encodeURIComponent(targetName)}`);
+          if (progressRes.ok) {
+            const progressData = await progressRes.json();
+            if (progressData.progress) {
+              const { fetchedPages, estimatedTotalPages, fetchedCards, status } = progressData.progress;
+              if (status === 'fetching') {
+                const pct = estimatedTotalPages > 0 ? Math.min(100, Math.round((fetchedPages / estimatedTotalPages) * 100)) : 0;
+                setToast({ 
+                  message: `Synchronisation en cours: ${fetchedCards} cartes trouvées (~${pct}%)`, 
+                  type: 'info' 
+                });
+              }
+            }
+          }
+        } catch (e) {
+          // ignore poll errors
+        }
+      }, 1500);
+
+      const url = `/api/sorare/user-cards?username=${encodeURIComponent(targetName)}&forceRefresh=true${apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : ''}`;
       const response = await fetch(url);
+      const data = await response.json();
+      
+      if (pollInterval) clearInterval(pollInterval);
+
       if (response.ok) {
-        const data = await response.json();
         if (data.cards && Array.isArray(data.cards) && data.cards.length > 0) {
           StorageService.saveCards(data.cards);
           if (data.user) {
@@ -163,16 +216,17 @@ export default function App() {
           const currentCards = StorageService.getCards();
           setCards(currentCards);
           setLastSynced(new Date().toISOString());
-          showToast(`Galerie synchronisée pour ${targetName}`);
+          showToast(`Aucune carte trouvée pour ${targetName} sur Sorare.`, 'info');
         }
       } else {
-        throw new Error('Erreur de réponse API');
+        throw new Error(data.error || 'Erreur de réponse API');
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (pollInterval) clearInterval(pollInterval);
       console.warn('Sync notice, using offline cards cache', e);
       const cached = StorageService.getCards();
       setCards(cached);
-      showToast('Données chargées depuis la base locale (Mode Hors-Ligne)', 'info');
+      showToast(`Erreur API: ${e.message}. Mode Hors-Ligne utilisé.`, 'error');
     } finally {
       setIsSyncing(false);
     }
@@ -382,6 +436,7 @@ export default function App() {
             compositions={compositions}
             selectedCompoIndex={selectedCompoIndex}
             onSelectComposition={handleSelectComposition}
+            onExportLineup={(l) => setExportLineupTarget(l)}
           />
         )}
 
@@ -404,7 +459,18 @@ export default function App() {
           />
         )}
 
-        {/* Tab 4: AI Coach Chat */}
+        {/* Tab 4: Live Scoring SO5 */}
+        {currentTab === 'live' && (
+          <LiveScoringView
+            cards={cards}
+            lineup={lineup}
+            compositions={compositions}
+            onOpenScout={(c) => setScoutCard(c)}
+            gameWeek={CURRENT_GAME_WEEK.number}
+          />
+        )}
+
+        {/* Tab 5: AI Coach Chat */}
         {currentTab === 'ai-coach' && (
           <AICoachPage
             cards={cards}
@@ -412,11 +478,20 @@ export default function App() {
           />
         )}
 
-        {/* Tab 5: Admin & Console */}
+        {/* Tab 6: Admin & Console */}
         {currentTab === 'admin' && (
           <AdminPage />
         )}
       </main>
+
+      {/* Lineup Export & Direct Submission Modal */}
+      {exportLineupTarget && (
+        <LineupExportModal
+          lineup={exportLineupTarget}
+          onClose={() => setExportLineupTarget(null)}
+          gameWeek={CURRENT_GAME_WEEK.number}
+        />
+      )}
 
       {/* Player Scout Modal */}
       {scoutCard && (

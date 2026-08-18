@@ -16,6 +16,7 @@ interface PitchPageProps {
   compositions: Lineup[];
   selectedCompoIndex: number;
   onSelectComposition: (index: number) => void;
+  onExportLineup?: (lineup: Lineup) => void;
 }
 
 export const PitchPage: React.FC<PitchPageProps> = (props) => {
