@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2 } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters } from '../types';
-import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
+import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getPlayerStars } from '../utils/sorareSlug';
 
 interface PitchViewProps {
@@ -111,6 +111,13 @@ export const PitchView: React.FC<PitchViewProps> = ({
     const winProb = getPlayerWinProbability(card.upcomingFixture);
     const recentStats = getPlayerRecentMatchAnalysis(card);
 
+    // Conflict and synergy detection with rest of lineup
+    const otherPlayers = Object.entries(targetLineup.slots)
+      .filter(([k, p]) => k !== slotKey && p !== null)
+      .map(([_, p]) => p as SorareCard);
+    const opposingTeammate = otherPlayers.find(other => areOpponents(card, other));
+    const stackedTeammates = otherPlayers.filter(other => isSameClub(card.club?.name, other.club?.name));
+
     return (
       <div
         onClick={() => onOpenScout(card)}
@@ -162,10 +169,10 @@ export const PitchView: React.FC<PitchViewProps> = ({
               referrerPolicy="no-referrer"
               className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl object-contain bg-slate-950/60 border-2 border-slate-700/80 shadow-md transition-transform group-hover/card:scale-105 p-1"
             />
-            {card.club.pictureUrl && (
+            {card.club?.pictureUrl && (
               <img
                 src={card.club.pictureUrl}
-                alt={card.club.name}
+                alt={card.club.name || 'Club'}
                 referrerPolicy="no-referrer"
                 className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full border border-slate-700 bg-slate-950 p-0.5 shadow"
               />
@@ -177,7 +184,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
           </h3>
           
           <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="text-[10px] text-slate-400 truncate max-w-[90px]">{card.club.name}</span>
+            <span className="text-[10px] text-slate-400 truncate max-w-[90px]">{card.club?.name || 'Club'}</span>
             {statusInfo && (
               <span className={`text-[9px] font-bold ${statusInfo.color}`}>
                 • {statusInfo.label}
@@ -206,6 +213,27 @@ export const PitchView: React.FC<PitchViewProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Tactical Club Synergy or Opponent Conflict Badge */}
+            {stackedTeammates.length > 0 && (
+              <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
+                <span className="flex items-center gap-1">
+                  <Users className="h-2.5 w-2.5" />
+                  <span>Stack Club ({stackedTeammates.length + 1}x)</span>
+                </span>
+                <span className="text-[8px] text-emerald-400">Synergie</span>
+              </div>
+            )}
+
+            {opposingTeammate && (
+              <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-950/80 border border-rose-500/40 text-rose-300">
+                <span className="flex items-center gap-1">
+                  <Swords className="h-2.5 w-2.5 text-rose-400" />
+                  <span>Duel direct</span>
+                </span>
+                <span className="text-[8px] text-rose-400 truncate max-w-[65px]">vs {opposingTeammate.displayName.split(' ').pop()}</span>
+              </div>
+            )}
 
             {/* Last Match Status Badge */}
             <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-800">
@@ -342,14 +370,18 @@ export const PitchView: React.FC<PitchViewProps> = ({
         </div>
 
         {/* Pitch Legend Bottom */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-emerald-800/40 pt-4 text-xs text-emerald-300/80">
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-emerald-800/40 pt-4 text-xs text-emerald-300/80">
           <div className="flex items-center gap-2">
             <Crown className="h-4 w-4 text-emerald-400" />
             <span>Capitaine avec <strong>+20% de bonus</strong> (cliquez sur le badge C pour changer)</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="flex h-2 w-2 rounded-full bg-emerald-400"></span>
-            <span>Règle SO5 : 1 GK, 1 DEF, 1 MID, 1 FWD + 1 Extra (DEF/MID/FWD)</span>
+            <ShieldCheck className="h-4 w-4 text-emerald-400" />
+            <span><strong>Anti-conflit actif</strong> : 0 joueur adverse dans la même compo</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-cyan-400" />
+            <span><strong>Synergie de club</strong> : Stacking priorisé à score projeté proche</span>
           </div>
         </div>
       </div>
@@ -376,7 +408,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
             <div>
               <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
                 <span>Filtres et Contraintes d'Optimisation</span>
-                {(!isFiltersOpen && (filters.maxMatchDate || (filters.minWinProb && filters.minWinProb > 0) || filters.minL5 || filters.minL15 || filters.starterOnly || filters.homeOnly)) && (
+                {(!isFiltersOpen && (filters.maxMatchDate || (filters.minWinProb && filters.minWinProb > 0) || filters.minL5 || filters.minL15 || filters.minAasL15 || filters.minDsL15 || filters.starterOnly || filters.homeOnly)) && (
                   <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
                     Filtres actifs
                   </span>
@@ -519,6 +551,44 @@ export const PitchView: React.FC<PitchViewProps> = ({
                 </select>
               </div>
 
+              {/* Min DS L15 */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                  <Flame className="h-3 w-3 text-amber-400" />
+                  <span>Score Décisif (DS) L15</span>
+                </label>
+                <select
+                  value={filters.minDsL15 || 0}
+                  onChange={(e) => setFilters(prev => ({ ...prev, minDsL15: Number(e.target.value) }))}
+                  className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-400"
+                >
+                  <option value={0}>Aucun minimum</option>
+                  <option value={20}>&ge; 20 pts</option>
+                  <option value={30}>&ge; 30 pts</option>
+                  <option value={40}>&ge; 40 pts</option>
+                  <option value={50}>&ge; 50 pts</option>
+                </select>
+              </div>
+
+              {/* Min AAS L15 */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                  <Activity className="h-3 w-3 text-blue-400" />
+                  <span>Score All-Around (AAS) L15</span>
+                </label>
+                <select
+                  value={filters.minAasL15 || 0}
+                  onChange={(e) => setFilters(prev => ({ ...prev, minAasL15: Number(e.target.value) }))}
+                  className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-400"
+                >
+                  <option value={0}>Aucun minimum</option>
+                  <option value={10}>&ge; 10 pts</option>
+                  <option value={15}>&ge; 15 pts</option>
+                  <option value={20}>&ge; 20 pts</option>
+                  <option value={25}>&ge; 25 pts</option>
+                </select>
+              </div>
+
               {/* Preferred Extra Position */}
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Poste EXTRA (Joker)</label>
@@ -531,6 +601,23 @@ export const PitchView: React.FC<PitchViewProps> = ({
                   <option value="FWD">Forcer Attaquant (2 FWD)</option>
                   <option value="MID">Forcer Milieu (2 MID)</option>
                   <option value="DEF">Forcer Défenseur (2 DEF)</option>
+                </select>
+              </div>
+
+              {/* Scoring Focus Profile (AAS vs DS vs Équilibré) */}
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1">
+                  <Scale className="h-3 w-3 text-blue-400" />
+                  <span>Orientation Tactique (AAS / DS)</span>
+                </label>
+                <select
+                  value={filters.scoringFocus || 'BALANCED'}
+                  onChange={(e) => setFilters(prev => ({ ...prev, scoringFocus: e.target.value as any }))}
+                  className="w-full rounded-lg bg-slate-900 border border-blue-500/40 px-3 py-1.5 text-xs text-blue-300 font-bold focus:outline-none focus:border-blue-400"
+                >
+                  <option value="BALANCED">⚖️ Équilibré (AAS + DS)</option>
+                  <option value="AAS">🛡️ Focus AAS (Volume & Régularité)</option>
+                  <option value="DS">⚡ Focus DS (Scores Décisifs & Plafond)</option>
                 </select>
               </div>
 
@@ -572,6 +659,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
                     selectedClub: 'ALL',
                     maxMatchDate: undefined,
                     minWinProb: 0,
+                    scoringFocus: 'BALANCED',
                   })}
                   className="text-xs font-bold text-emerald-400 hover:text-emerald-300 underline"
                 >
@@ -583,57 +671,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
         )}
       </div>
 
-      {/* 2. SUMMARY METRIC TILES: 4 TILES ON A SINGLE ROW */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {/* Tile 1: Score Total Projeté */}
-        <div className="rounded-2xl bg-slate-900/90 p-4 border border-slate-800 shadow-md">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Score Total Projeté</span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-emerald-400">{activeLineupForSummary.projectedTotalWithCaptain}</span>
-            <span className="text-xs text-slate-500 font-bold">pts</span>
-          </div>
-          <span className="text-[10px] text-slate-400 mt-0.5 block">{activeLineupForSummary.name}</span>
-        </div>
 
-        {/* Tile 2: Bonus Capitaine */}
-        <div className="rounded-2xl bg-slate-900/90 p-4 border border-slate-800 shadow-md">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Bonus Capitaine (+20%)</span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-emerald-400">
-              +{Math.round((activeLineupForSummary.projectedTotalWithCaptain - activeLineupForSummary.projectedTotal) * 10) / 10}
-            </span>
-            <span className="text-xs text-slate-500 font-bold">pts</span>
-          </div>
-          <span className="text-[10px] text-emerald-400 font-semibold truncate block mt-0.5">
-            {activeLineupForSummary.slots[activeLineupForSummary.captainSlot]?.displayName || 'Capitaine'} (Cap)
-          </span>
-        </div>
-
-        {/* Tile 3: Sécurité Titularisation */}
-        <div className="rounded-2xl bg-slate-900/90 p-4 border border-slate-800 shadow-md">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Sécurité Titularisation</span>
-          <div className="flex items-center gap-1.5 my-1">
-            <CheckCircle2 className="h-5 w-5 text-emerald-400 flex-shrink-0" />
-            <span className="text-base sm:text-lg font-black text-emerald-400">100% Floor</span>
-          </div>
-          <span className="text-[10px] text-slate-400 block">5 titulaires confirmés</span>
-        </div>
-
-        {/* Tile 4: Clean Sheet Outlook */}
-        <div className="rounded-2xl bg-slate-900/90 p-4 border border-slate-800 shadow-md">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Clean Sheet Outlook</span>
-          <div className="flex items-baseline gap-1.5 my-1">
-            <span className="text-2xl sm:text-3xl font-black text-blue-400">
-              {activeLineupForSummary.slots.gk?.upcomingFixture?.bookmaker?.cleanSheetProb || 60}%
-            </span>
-          </div>
-          <span className="text-[10px] text-slate-400 block truncate">
-            {activeLineupForSummary.slots.gk?.displayName ? `Gardien : ${activeLineupForSummary.slots.gk.displayName}` : 'Défense hermétique'}
-          </span>
-        </div>
-      </div>
-
-      {/* 3. 4 COMPOSITIONS WITH EXPANDABLE PITCH DIRECTLY BENEATH EACH */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
@@ -646,6 +684,8 @@ export const PitchView: React.FC<PitchViewProps> = ({
           {compositions.map((comp, idx) => {
             const isSelected = idx === selectedCompoIndex;
             const isPitchOpen = expandedPitchIndex === idx;
+            const conflicts = getLineupOpponentConflicts(comp.slots);
+            const stacks = getLineupClubStacks(comp.slots);
 
             return (
               <div key={comp.id || idx} className="space-y-2">
@@ -678,12 +718,37 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
                     <h4 className="font-black text-base sm:text-lg text-white">{comp.name || `Compo ${idx + 1}`}</h4>
                     
-                    <div className="mt-1 flex items-baseline gap-1.5">
+                    <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
                       <span className="text-xl sm:text-2xl font-black text-emerald-400">{comp.projectedTotalWithCaptain}</span>
                       <span className="text-xs text-slate-400 font-semibold">pts projetés</span>
                       <span className="text-xs text-slate-500">
-                        (Cap: {comp.slots[comp.captainSlot]?.displayName || 'Capitaine'})
+                        (Cap: {comp.slots[comp.captainSlot]?.displayName || 'Capitaine'} | <span className="text-amber-400 font-bold">+{Math.round((comp.projectedTotalWithCaptain - comp.projectedTotal) * 10) / 10} pts</span>)
                       </span>
+                      <span className="text-xs text-blue-400 font-semibold ml-1">
+                        CS: {comp.slots.gk?.upcomingFixture?.bookmaker?.cleanSheetProb || 60}%
+                      </span>
+                    </div>
+
+                    {/* Tactical synergy & conflict summary chips */}
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      {conflicts.length === 0 ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-300 bg-emerald-950/70 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                          <ShieldCheck className="h-3 w-3 text-emerald-400" />
+                          <span>0 duel direct (aucun adversaire)</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-300 bg-rose-950/70 border border-rose-500/30 px-2 py-0.5 rounded-full">
+                          <Swords className="h-3 w-3 text-rose-400" />
+                          <span>{conflicts.length} duel direct</span>
+                        </span>
+                      )}
+
+                      {stacks.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-cyan-300 bg-cyan-950/70 border border-cyan-500/30 px-2 py-0.5 rounded-full">
+                          <Users className="h-3 w-3 text-cyan-400" />
+                          <span>Synergie {stacks.map(s => `${s.count}x ${s.clubName}`).join(', ')}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
 

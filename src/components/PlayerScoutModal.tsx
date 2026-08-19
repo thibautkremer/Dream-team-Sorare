@@ -16,7 +16,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
   const [aiReport, setAiReport] = useState<any>(null);
   const [isLoadingAI, setIsLoadingAI] = useState(false);
   const [liveCard, setLiveCard] = useState<SorareCard | null>(null);
-  const [selectedMatchIndex, setSelectedMatchIndex] = useState<number>(39);
+  const [selectedMatchIndex, setSelectedMatchIndex] = useState<number>(0);
   const [selectedPeriod, setSelectedPeriod] = useState<5 | 10 | 15 | 40>(40);
   const [statMode, setStatMode] = useState<'total' | 'per90'>('total');
   const [showProjectionBreakdown, setShowProjectionBreakdown] = useState(false);
@@ -25,7 +25,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
     if (!initialCard) return;
     setAiReport(null);
     setLiveCard(null);
-    setSelectedMatchIndex(39); // Default to the most recent match (40th match)
+    setSelectedMatchIndex(0); // Default to the most recent match (M1 = 1st match in array)
     fetchScoutReport(initialCard);
     fetchLivePlayerDetails(initialCard);
   }, [initialCard]);
@@ -81,29 +81,19 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
     });
   };
 
-  // 40 detailed match performances
+  // 40 detailed match performances (index 0 = most recent match, index 39 = oldest)
   const matchPerformances = useMemo(() => {
     if (!card) return [];
     return compute40MatchPerformances(card);
   }, [card]);
 
-  const selectedMatch: MatchPerformanceDetail | undefined = matchPerformances[selectedMatchIndex] || matchPerformances[matchPerformances.length - 1];
+  const selectedMatch: MatchPerformanceDetail | undefined = matchPerformances[selectedMatchIndex] || matchPerformances[0];
 
-  // Period Detailed Statistics (L5, L10, L40)
+  // Period Detailed Statistics (L5, L10, L15, L40) - Most recent first
   const periodStats = useMemo(() => {
     if (!card) return null;
 
-    let matchesList: Array<MatchPerformanceDetail> = [];
-
-    if (selectedPeriod === 5) {
-      matchesList = matchPerformances.slice(-5);
-    } else if (selectedPeriod === 10) {
-      matchesList = matchPerformances.slice(-10);
-    } else if (selectedPeriod === 15) {
-      matchesList = matchPerformances.slice(-15);
-    } else {
-      matchesList = matchPerformances.slice(-40);
-    }
+    const matchesList: Array<MatchPerformanceDetail> = matchPerformances.slice(0, selectedPeriod);
 
     let s100 = 0, s75_99 = 0, s60_74 = 0, s50_59 = 0, s35_49 = 0, s20_34 = 0, s0_19 = 0, dnp = 0;
     let sumScores = 0;
@@ -275,7 +265,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
     
     if (period === 15) {
       if (matchPerformances.length > 0) {
-        const playedCount = matchPerformances.slice(-15).filter(m => !m.isDNP).length;
+        const playedCount = matchPerformances.slice(0, 15).filter(m => !m.isDNP).length;
         return Math.round((playedCount / 15) * 100);
       }
     }
@@ -363,11 +353,11 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                   <span className="text-[10px] font-bold text-amber-400 ml-1.5">{getPlayerStars(card)}★</span>
                 </div>
                 <span className="text-xs font-semibold text-slate-400 flex items-center gap-1">
-                  {card.club.pictureUrl && (
-                    <img src={card.club.pictureUrl} alt={card.club.name} className="h-4 w-4 object-contain" />
+                  {card.club?.pictureUrl && (
+                    <img src={card.club.pictureUrl} alt={card.club?.name || 'Club'} className="h-4 w-4 object-contain" />
                   )}
-                  {card.club.name}
-                  {card.club.league && (
+                  {card.club?.name || 'Club'}
+                  {card.club?.league && (
                     <span className="opacity-70">({card.club.league})</span>
                   )}
                 </span>
@@ -415,7 +405,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
             <div>
               <div className="text-sm font-black text-emerald-400">{formattedDate}</div>
               <div className="text-xs text-slate-300 mt-0.5">
-                {card.club.name} {card.upcomingFixture?.isHome ? '(Domicile 🏠)' : '(Extérieur ✈️)'} vs <strong className="text-white">{card.upcomingFixture?.opponent || 'Adversaire'}</strong>
+                {card.club?.name || 'Club'} {card.upcomingFixture?.isHome ? '(Domicile 🏠)' : '(Extérieur ✈️)'} vs <strong className="text-white">{card.upcomingFixture?.opponent || 'Adversaire'}</strong>
               </div>
             </div>
             <div className="flex items-center gap-3 text-right">
@@ -602,7 +592,12 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                 <button
                   key={p}
                   type="button"
-                  onClick={() => setSelectedPeriod(p)}
+                  onClick={() => {
+                    setSelectedPeriod(p);
+                    if (selectedMatchIndex >= p) {
+                      setSelectedMatchIndex(0);
+                    }
+                  }}
                   className={`px-2 py-0.5 text-[10px] font-black rounded transition-all ${
                     selectedPeriod === p
                       ? 'bg-emerald-500 text-slate-950 shadow-sm'
@@ -613,6 +608,16 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Orientation indication: Most recent to oldest */}
+          <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-2 px-1">
+            <span className="inline-flex items-center gap-1 text-emerald-400">
+              <span className="text-xs">←</span> Plus récents (M1 = Dernier match)
+            </span>
+            <span className="inline-flex items-center gap-1 text-slate-500">
+              Plus anciens <span className="text-xs">→</span>
+            </span>
           </div>
 
           {/* EXACT LEGEND PER USER REQUEST */}
@@ -648,11 +653,11 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
             </div>
           </div>
 
-          {/* Match Scores Bar Graph for Selected Period */}
+          {/* Match Scores Bar Graph for Selected Period (Most Recent First) */}
           <div className="rounded-xl bg-slate-950 p-3.5 border border-slate-800/80 overflow-x-auto">
             <div className={`flex items-end gap-1.5 h-32 pt-5 ${selectedPeriod === 40 ? 'min-w-[760px]' : selectedPeriod === 15 ? 'min-w-[480px]' : selectedPeriod === 10 ? 'min-w-[360px]' : 'min-w-[280px]'}`}>
-              {(selectedPeriod === 5 ? matchPerformances.slice(-5) : selectedPeriod === 10 ? matchPerformances.slice(-10) : selectedPeriod === 15 ? matchPerformances.slice(-15) : matchPerformances).map((match) => {
-                const globalIndex = matchPerformances.indexOf(match);
+              {matchPerformances.slice(0, selectedPeriod).map((match, localIdx) => {
+                const globalIndex = localIdx;
                 const isSelected = selectedMatchIndex === globalIndex;
                 const heightPct = match.isDNP 
                   ? 12 
@@ -744,10 +749,12 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                       className={`text-[8px] font-mono ${
                         isSelected
                           ? 'text-emerald-400 font-black underline'
+                          : globalIndex === 0
+                          ? 'text-emerald-400 font-bold'
                           : 'text-slate-500'
                       }`}
                     >
-                      M{match.matchIndex}
+                      {globalIndex === 0 ? 'M1 (Dernier)' : `M${match.matchIndex}`}
                     </span>
                   </button>
                 );

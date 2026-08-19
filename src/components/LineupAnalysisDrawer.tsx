@@ -55,7 +55,7 @@ export const LineupAnalysisDrawer: React.FC<LineupAnalysisDrawerProps> = ({ line
             </h3>
           </div>
           <p className="text-xs font-bold text-white mt-1">
-            {captain?.displayName} ({captain?.club.name})
+            {captain?.displayName} ({captain?.club?.name || 'Club'})
           </p>
           <p className="text-xs text-slate-300 mt-1 leading-relaxed">
             {lineup.analysis.captainReasoning}

@@ -133,20 +133,43 @@ export default function App() {
 
     // Global error handlers for UI Logs
     const logClientError = (msg: string, err?: any) => {
-      fetch('/api/admin/logs/client', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, error: String(err) })
-      }).catch(console.error);
+      try {
+        if (!msg || msg.trim() === '' || msg === 'Uncaught ' || msg === 'Script error.') return;
+        if (
+          msg.includes('websocket') ||
+          msg.includes('Failed to fetch') ||
+          msg.includes('AbortError') ||
+          msg.includes('NetworkError') ||
+          msg.includes('Load failed') ||
+          msg.includes('ResizeObserver')
+        ) {
+          return;
+        }
+        fetch('/api/admin/logs/client', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, error: String(err || '') })
+        }).catch(() => {});
+      } catch {
+        // Safe silence
+      }
     };
 
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const msg = event.reason?.message || String(event.reason);
-      logClientError(msg, event.reason);
+      try {
+        const msg = event.reason?.message || String(event.reason || '');
+        if (msg) {
+          logClientError(msg, event.reason);
+        }
+      } catch {}
     };
 
     const handleError = (event: ErrorEvent) => {
-      logClientError(event.message, event.error);
+      try {
+        if (event.message) {
+          logClientError(event.message, event.error);
+        }
+      } catch {}
     };
 
     window.addEventListener('online', handleOnline);
@@ -408,6 +431,8 @@ export default function App() {
         totalCardsCount={cards.length}
         strategy={strategy}
         setStrategy={setStrategy}
+        scoringFocus={filters.scoringFocus || 'BALANCED'}
+        setScoringFocus={(focus) => setFilters(prev => ({ ...prev, scoringFocus: focus }))}
       />
 
       {/* Main Container */}
@@ -534,6 +559,7 @@ export default function App() {
           slot={slotToSwap}
           cards={cards}
           filters={filters}
+          currentLineup={compositions[selectedCompoIndex] || lineup}
           onSelectPlayer={handleSwapPlayerInSlot}
           onClose={() => setSlotToSwap(null)}
         />

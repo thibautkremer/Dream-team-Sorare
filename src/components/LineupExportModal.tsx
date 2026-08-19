@@ -57,11 +57,11 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
 ⭐ *Stratégie :* ${lineup.name}
 📊 *Score Projeté Total :* ${lineup.projectedTotalWithCaptain} pts (avec Bonus Cap +20%)
 
-🧤 *GK :* ${slots.gk?.displayName || 'N/A'} (${slots.gk?.club.name}) - vs ${slots.gk?.upcomingFixture?.opponent || 'N/A'} [${slots.gk?.scores.l5 || 0} pts]
-🛡️ *DEF :* ${slots.def?.displayName || 'N/A'} (${slots.def?.club.name}) - vs ${slots.def?.upcomingFixture?.opponent || 'N/A'} [${slots.def?.scores.l5 || 0} pts]
-⚙️ *MID :* ${slots.mid?.displayName || 'N/A'} (${slots.mid?.club.name}) - vs ${slots.mid?.upcomingFixture?.opponent || 'N/A'} [${slots.mid?.scores.l5 || 0} pts]
-⚡ *FWD :* ${slots.fwd?.displayName || 'N/A'} (${slots.fwd?.club.name}) - vs ${slots.fwd?.upcomingFixture?.opponent || 'N/A'} [${slots.fwd?.scores.l5 || 0} pts]
-🃏 *EXTRA :* ${slots.extra?.displayName || 'N/A'} (${slots.extra?.club.name}) - vs ${slots.extra?.upcomingFixture?.opponent || 'N/A'} [${slots.extra?.scores.l5 || 0} pts]
+🧤 *GK :* ${slots.gk?.displayName || 'N/A'} (${slots.gk?.club?.name || 'Club'}) - vs ${slots.gk?.upcomingFixture?.opponent || 'N/A'} [${slots.gk?.scores?.l5 || 0} pts]
+🛡️ *DEF :* ${slots.def?.displayName || 'N/A'} (${slots.def?.club?.name || 'Club'}) - vs ${slots.def?.upcomingFixture?.opponent || 'N/A'} [${slots.def?.scores?.l5 || 0} pts]
+⚙️ *MID :* ${slots.mid?.displayName || 'N/A'} (${slots.mid?.club?.name || 'Club'}) - vs ${slots.mid?.upcomingFixture?.opponent || 'N/A'} [${slots.mid?.scores?.l5 || 0} pts]
+⚡ *FWD :* ${slots.fwd?.displayName || 'N/A'} (${slots.fwd?.club?.name || 'Club'}) - vs ${slots.fwd?.upcomingFixture?.opponent || 'N/A'} [${slots.fwd?.scores?.l5 || 0} pts]
+🃏 *EXTRA :* ${slots.extra?.displayName || 'N/A'} (${slots.extra?.club?.name || 'Club'}) - vs ${slots.extra?.upcomingFixture?.opponent || 'N/A'} [${slots.extra?.scores?.l5 || 0} pts]
 
 👑 *Capitaine (+20%) :* ${captainCard?.displayName || 'N/A'}
 🚀 *Généré par Assistant IA Sorare SO5 Pro*`;

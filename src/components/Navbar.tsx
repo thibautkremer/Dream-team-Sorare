@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal, Radio } from 'lucide-react';
-import { GameWeekInfo, StrategyType } from '../types';
+import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal, Radio, Scale, Zap } from 'lucide-react';
+import { GameWeekInfo, StrategyType, ScoringFocus } from '../types';
 import { StorageService, SorareUserMeta } from '../utils/storage';
 
 interface NavbarProps {
@@ -16,6 +16,8 @@ interface NavbarProps {
   totalCardsCount: number;
   strategy: StrategyType;
   setStrategy: (strategy: StrategyType) => void;
+  scoringFocus: ScoringFocus;
+  setScoringFocus: (focus: ScoringFocus) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -31,6 +33,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   totalCardsCount,
   strategy,
   setStrategy,
+  scoringFocus,
+  setScoringFocus,
 }) => {
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [tempUsername, setTempUsername] = useState(username);
@@ -114,13 +118,28 @@ export const Navbar: React.FC<NavbarProps> = ({
             <select
               value={strategy}
               onChange={(e) => setStrategy(e.target.value as StrategyType)}
-              title="Changer la stratégie de calcul des scores projetés"
+              title="Stratégie temporelle de calcul des scores projetés (répartition L5 / L15 / L40)"
               className="bg-transparent font-bold text-emerald-300 focus:outline-none cursor-pointer text-xs"
             >
-              <option value="BALANCED" className="bg-slate-900 text-slate-100">🎯 Stratégie : Équilibrée (50/35/15)</option>
-              <option value="SAFE_TITULAR" className="bg-slate-900 text-slate-100">🛡️ Stratégie : Sécurité Titulaire</option>
-              <option value="HIGH_CEILING" className="bg-slate-900 text-slate-100">🚀 Stratégie : Haut Plafond</option>
-              <option value="PURE_FORM" className="bg-slate-900 text-slate-100">🔥 Stratégie : Forme Pure (L5 75%)</option>
+              <option value="BALANCED" className="bg-slate-900 text-slate-100">🎯 Stratégie : Équilibrée (L5: 50% | L15: 35% | L40: 15%)</option>
+              <option value="SAFE_TITULAR" className="bg-slate-900 text-slate-100">🛡️ Stratégie : Titulaires Sûrs (L5: 35% | L15: 40% | L40: 25%)</option>
+              <option value="HIGH_CEILING" className="bg-slate-900 text-slate-100">🚀 Stratégie : Haut Plafond (L5: 60% | L15: 30% | L40: 10%)</option>
+              <option value="PURE_FORM" className="bg-slate-900 text-slate-100">🔥 Stratégie : Forme Pure (L5: 75% | L15: 20% | L40: 5%)</option>
+            </select>
+          </div>
+
+          {/* Scoring Profile Focus Selector (AAS vs DS vs Equilibre) */}
+          <div className="hidden md:flex items-center gap-1.5 rounded-xl border border-blue-500/40 bg-slate-900/90 px-2.5 py-1.5 text-xs font-semibold text-slate-200 shadow-sm transition-all hover:border-blue-400">
+            <Scale className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+            <select
+              value={scoringFocus}
+              onChange={(e) => setScoringFocus(e.target.value as ScoringFocus)}
+              title="Orientation tactique des scores : All-Around (AAS), Décisifs (DS) ou Équilibré"
+              className="bg-transparent font-bold text-blue-300 focus:outline-none cursor-pointer text-xs"
+            >
+              <option value="BALANCED" className="bg-slate-900 text-slate-100">⚖️ Profil : Équilibré (AAS + DS)</option>
+              <option value="AAS" className="bg-slate-900 text-slate-100">🛡️ Profil : Focus AAS (Volume / Régularité)</option>
+              <option value="DS" className="bg-slate-900 text-slate-100">⚡ Profil : Focus DS (Scores Décisifs / Plafond)</option>
             </select>
           </div>
 

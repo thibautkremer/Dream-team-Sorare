@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus } from '../types';
-import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate } from '../utils/optimizer';
+import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15 } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
 
 interface GalleryViewProps {
@@ -35,10 +35,14 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     | 'CLUB_ASC' | 'CLUB_DESC'
     | 'BONUS_ASC' | 'BONUS_DESC'
     | 'STARS_DESC' | 'STARS_ASC'
+    | 'AAS_L15_DESC'
+    | 'DS_L15_DESC'
   >('L5_DESC');
   const [maxMatchDate, setMaxMatchDate] = useState<string>('');
   const [minWinProb, setMinWinProb] = useState<number>(0);
   const [minProjectedScore, setMinProjectedScore] = useState<number>(0);
+  const [minAasL15, setMinAasL15] = useState<number>(0);
+  const [minDsL15, setMinDsL15] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -73,8 +77,35 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         (card.club?.name && card.club.name.toLowerCase().includes(q)) ||
         (card.matchName && card.matchName.toLowerCase().includes(q));
       
+      const getStatusLevel = (status: string) => {
+        switch (status) {
+          case 'STARTER': return 5;
+          case 'REGULAR': return 4;
+          case 'SUBSTITUTE':
+          case 'SUPER_SUBSTITUTE': return 3;
+          case 'DOUBTFUL':
+          case 'BENCH': return 2;
+          case 'NOT_PLAYING':
+          case 'INJURED':
+          case 'SUSPENDED': return 1;
+          default: return 0;
+        }
+      };
+
       const matchesPos = selectedPosition === 'ALL' || card.positionCode === selectedPosition;
-      const matchesStatus = selectedStatus === 'ALL' || card.status === selectedStatus;
+      
+      let matchesStatus = true;
+      if (selectedStatus !== 'ALL') {
+        const requiredLevel = getStatusLevel(selectedStatus);
+        const cardLevel = getStatusLevel(card.status);
+        if (selectedStatus === 'NOT_PLAYING') {
+          const isNotPlaying = (card.status as string) === 'NOT_PLAYING' || card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED';
+          if (!isNotPlaying) matchesStatus = false;
+        } else if (cardLevel < requiredLevel) {
+          matchesStatus = false;
+        }
+      }
+
       const matchesRarity = selectedRarity === 'ALL' || card.rarity.toUpperCase() === selectedRarity.toUpperCase();
 
       let matchesDate = true;
@@ -109,9 +140,19 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         matchesScore = projectedScore >= minProjectedScore;
       }
 
-      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore;
+      let matchesAas = true;
+      if (minAasL15 > 0) {
+        matchesAas = getCardAasL15(card) >= minAasL15;
+      }
+
+      let matchesDs = true;
+      if (minDsL15 > 0) {
+        matchesDs = getCardDsL15(card) >= minDsL15;
+      }
+
+      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore && matchesAas && matchesDs;
     });
-  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore]);
+  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore, minAasL15, minDsL15]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
@@ -162,6 +203,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           return getPlayerStars(b) - getPlayerStars(a);
         case 'STARS_ASC':
           return getPlayerStars(a) - getPlayerStars(b);
+        case 'AAS_L15_DESC':
+          return getCardAasL15(b) - getCardAasL15(a);
+        case 'DS_L15_DESC':
+          return getCardDsL15(b) - getCardDsL15(a);
         default:
           return 0;
       }
@@ -441,7 +486,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               onChange={(e) => { setMinProjectedScore(Number(e.target.value)); setCurrentPage(1); }}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
             >
-              <option value={0}>Tous les scores</option>
+              <option value={0}>Tous les scores projetés</option>
               <option value={30}>&ge; 30 pts projetés</option>
               <option value={35}>&ge; 35 pts projetés</option>
               <option value={40}>&ge; 40 pts projetés</option>
@@ -451,6 +496,34 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <option value={60}>&ge; 60 pts projetés</option>
               <option value={65}>&ge; 65 pts projetés</option>
               <option value={70}>&ge; 70 pts projetés</option>
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={minDsL15}
+              onChange={(e) => { setMinDsL15(Number(e.target.value)); setCurrentPage(1); }}
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-amber-400 focus:outline-none"
+            >
+              <option value={0}>Toutes les DS (L15)</option>
+              <option value={20}>DS L15 &ge; 20 pts</option>
+              <option value={30}>DS L15 &ge; 30 pts</option>
+              <option value={40}>DS L15 &ge; 40 pts</option>
+              <option value={50}>DS L15 &ge; 50 pts</option>
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={minAasL15}
+              onChange={(e) => { setMinAasL15(Number(e.target.value)); setCurrentPage(1); }}
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-blue-400 focus:outline-none"
+            >
+              <option value={0}>Toutes les AAS (L15)</option>
+              <option value={10}>AAS L15 &ge; 10 pts</option>
+              <option value={15}>AAS L15 &ge; 15 pts</option>
+              <option value={20}>AAS L15 &ge; 20 pts</option>
+              <option value={25}>AAS L15 &ge; 25 pts</option>
             </select>
           </div>
 
@@ -496,9 +569,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             >
               <option value="ALL">Tous les statuts</option>
               <option value="STARTER">Titulaires indiscutables</option>
-              <option value="REGULAR">Réguliers / Rotation</option>
-              <option value="SUBSTITUTE">Remplaçants</option>
-              <option value="DOUBTFUL">Incertains / Risque DNP</option>
+              <option value="REGULAR">Réguliers (ou mieux)</option>
+              <option value="SUBSTITUTE">Remplaçants (ou mieux)</option>
+              <option value="DOUBTFUL">Incertains (ou mieux)</option>
+              <option value="NOT_PLAYING">DNP (Ne joue pas)</option>
             </select>
           </div>
 
@@ -511,6 +585,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             >
               <option value="PROJ_DESC">Score Projeté (Décroissant)</option>
               <option value="PROJ_ASC">Score Projeté (Croissant)</option>
+              <option value="AAS_L15_DESC">Score All-Around L15 (Décroissant)</option>
+              <option value="DS_L15_DESC">Score Décisif L15 (Décroissant)</option>
               <option value="STARS_DESC">Nombre d'étoiles (Décroissant)</option>
               <option value="STARS_ASC">Nombre d'étoiles (Croissant)</option>
               <option value="L5_DESC">Forme L5 (Décroissant)</option>
@@ -530,7 +606,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
 
         {/* Filter Badges Active */}
-        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0) && (
+        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0 || minAasL15 > 0 || minDsL15 > 0) && (
           <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/60">
             <span className="text-[11px] text-slate-400">Filtres actifs :</span>
             {maxMatchDate && (
@@ -547,6 +623,16 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             {minProjectedScore > 0 && (
               <span className="rounded-md bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
                 Score &ge; {minProjectedScore}
+              </span>
+            )}
+            {minDsL15 > 0 && (
+              <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400">
+                DS &ge; {minDsL15}
+              </span>
+            )}
+            {minAasL15 > 0 && (
+              <span className="rounded-md bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
+                AAS &ge; {minAasL15}
               </span>
             )}
             {selectedBonusTier !== 'ALL' && (
@@ -571,6 +657,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 setSelectedBonusTier('ALL');
                 setSelectedStarsFilter('ALL');
                 setMinProjectedScore(0);
+                setMinAasL15(0);
+                setMinDsL15(0);
               }}
               className="text-[10px] font-bold text-slate-400 hover:text-white underline ml-auto"
             >
@@ -676,7 +764,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                         {card.displayName}
                       </h4>
                       <div className="flex items-center justify-between gap-1 mt-0.5">
-                        <p className="truncate text-xs text-slate-400">{card.club.name}</p>
+                        <p className="truncate text-xs text-slate-400">{card.club?.name || 'Club'}</p>
                         {/* Star Rating Miniature */}
                         <div className="flex items-center gap-0.5 shrink-0 bg-slate-950/40 px-1 py-0.5 rounded border border-slate-800/50">
                           {Array.from({ length: 5 }).map((_, i) => (

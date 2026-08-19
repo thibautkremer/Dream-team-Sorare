@@ -1,4 +1,5 @@
 import { SorareCard, Lineup } from '../types';
+import { MOCK_GALLERY } from '../data/mockGallery';
 
 const STORAGE_KEYS = {
   CARDS: 'team_sorare_cards_v5_1019_real',
@@ -112,6 +113,10 @@ export class StorageService {
       }
     } catch {
       // Ignored
+    }
+    if (MOCK_GALLERY && Array.isArray(MOCK_GALLERY) && MOCK_GALLERY.length > 0) {
+      memoryCardsCache = MOCK_GALLERY;
+      return MOCK_GALLERY;
     }
     return memoryCardsCache || [];
   }

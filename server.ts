@@ -94,8 +94,8 @@ async function generateContentWithRetry(params: {
   }
 
   const ai = getAI();
-  const modelsToTry = [params.model, 'gemini-2.0-flash', 'gemini-1.5-flash'];
-  const uniqueModels = Array.from(new Set(modelsToTry));
+  const modelsToTry = [params.model, 'gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-3.1-flash-lite'];
+  const uniqueModels = Array.from(new Set(modelsToTry.filter(Boolean)));
   let lastError: any = null;
 
   for (const modelName of uniqueModels) {
@@ -677,6 +677,117 @@ app.get('/api/sorare/sync-progress', (req, res) => {
   res.json({ success: true, progress });
 });
 
+// Real Odds API Cache
+const realOddsCache = new Map<string, { 
+  win: number; 
+  draw: number; 
+  loss: number; 
+  cleanSheetProb: number; 
+  goalExpectancy: number; 
+  opponentGoalExpectancy: number;
+  bttsProb: number;
+}>();
+let lastOddsFetch = 0;
+const ODDS_CACHE_TTL = 1000 * 60 * 60 * 4; // 4 hours
+
+async function fetchRealBookmakerOdds() {
+  const apiKey = process.env.ODDS_API_KEY;
+  if (!apiKey) {
+    return;
+  }
+  
+  if (Date.now() - lastOddsFetch < ODDS_CACHE_TTL && realOddsCache.size > 0) {
+    return;
+  }
+  
+  try {
+    const leagues = [
+      'soccer_france_ligue_one', 
+      'soccer_epl', 
+      'soccer_spain_la_liga', 
+      'soccer_italy_serie_a', 
+      'soccer_germany_bundesliga',
+      'soccer_uefa_champs_league',
+      'soccer_usa_mls'
+    ];
+    
+    await Promise.allSettled(
+      leagues.map(async (league) => {
+        try {
+          const url = `https://api.the-odds-api.com/v4/sports/${league}/odds/?apiKey=${apiKey}&regions=eu&markets=h2h,totals,btts`;
+          const res = await fetch(url);
+          if (res.ok) {
+            const data = await res.json();
+            data.forEach((match: any) => {
+              const h2hMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'h2h');
+              const totalsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'totals');
+              const bttsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'btts');
+              
+              if (h2hMarket) {
+                const homeOdds = h2hMarket.outcomes.find((o: any) => o.name === match.home_team)?.price || 2.5;
+                const awayOdds = h2hMarket.outcomes.find((o: any) => o.name === match.away_team)?.price || 2.5;
+                const drawOdds = h2hMarket.outcomes.find((o: any) => o.name === 'Draw')?.price || 3.0;
+                
+                let over25Odds = 1.85;
+                if (totalsMarket) {
+                  over25Odds = totalsMarket.outcomes.find((o: any) => o.name === 'Over' && o.point === 2.5)?.price || 1.85;
+                }
+
+                let bttsProb = 52;
+                if (bttsMarket) {
+                  const bttsYesOdds = bttsMarket.outcomes.find((o: any) => o.name === 'Yes')?.price;
+                  const bttsNoOdds = bttsMarket.outcomes.find((o: any) => o.name === 'No')?.price;
+                  if (bttsYesOdds && bttsNoOdds) {
+                    const invYes = 1 / bttsYesOdds;
+                    const invNo = 1 / bttsNoOdds;
+                    bttsProb = Math.round((invYes / (invYes + invNo)) * 100);
+                  }
+                }
+                
+                const totalMatchXG = Math.max(1.5, Math.min(4.5, (1.9 / over25Odds) * 1.5 + 1.25));
+                const homeWinProb = 1 / homeOdds;
+                const awayWinProb = 1 / awayOdds;
+                const totalProb = homeWinProb + awayWinProb;
+                
+                const homeXG = Math.round((totalMatchXG * (homeWinProb / totalProb) * 1.05) * 100) / 100;
+                const awayXG = Math.round((totalMatchXG * (awayWinProb / totalProb) * 0.95) * 100) / 100;
+                
+                const homeCSPoisson = Math.exp(-awayXG) * 100;
+                const awayCSPoisson = Math.exp(-homeXG) * 100;
+                
+                const homeCS = Math.max(5, Math.min(85, Math.round(homeCSPoisson * 0.7 + (100 - bttsProb) * 0.6)));
+                const awayCS = Math.max(5, Math.min(85, Math.round(awayCSPoisson * 0.7 + (100 - bttsProb) * 0.4)));
+                
+                realOddsCache.set(normalizeClubName(match.home_team), { 
+                  win: homeOdds, 
+                  draw: drawOdds, 
+                  loss: awayOdds, 
+                  cleanSheetProb: homeCS, 
+                  goalExpectancy: homeXG,
+                  opponentGoalExpectancy: awayXG,
+                  bttsProb
+                });
+                realOddsCache.set(normalizeClubName(match.away_team), { 
+                  win: awayOdds, 
+                  draw: drawOdds, 
+                  loss: homeOdds, 
+                  cleanSheetProb: awayCS, 
+                  goalExpectancy: awayXG, 
+                  opponentGoalExpectancy: homeXG,
+                  bttsProb
+                });
+              }
+            });
+          }
+        } catch {}
+      })
+    );
+    lastOddsFetch = Date.now();
+  } catch (err) {
+    console.warn('[Odds API] Non-fatal background fetch notice:', err);
+  }
+}
+
 // 2. Sorare GraphQL API Cards Fetcher / Sync
 app.get('/api/sorare/user-cards', async (req, res) => {
   const rawUsername = (req.query.username as string) || 'Thib 8';
@@ -704,6 +815,9 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       syncedAt: new Date(cached.timestamp).toISOString(),
     });
   }
+
+  // Pre-fetch real odds in background if API key is present
+  fetchRealBookmakerOdds().catch(() => {});
 
   console.log(`[Sorare Sync] Fetching exhaustive live gallery for slug: "${slug}" (forceRefresh: ${forceRefresh})`);
 
@@ -826,6 +940,10 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       }
 
       const result = responseResult.data;
+      if (!result) {
+        console.log(`[Sorare Sync] No result data on page ${page}`);
+        break;
+      }
       if (result.errors && result.errors.length > 0) {
         console.log(`[Sorare Sync] GraphQL errors on page ${page}:`, result.errors[0]?.message);
         if (page === 1) throw new Error(result.errors[0]?.message);
@@ -1049,13 +1167,23 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           const normClub = normalizeClubName(clubName);
           const clubCatalog = FIXTURES_CATALOG[normClub];
           let diffRating = 3;
-          let bookmakerData = {
+          let bookmakerData: {
+            win: number;
+            draw: number;
+            loss: number;
+            cleanSheetProb: number;
+            goalExpectancy: number;
+            anytimeScorerOdds?: number;
+            anytimeAssistOdds?: number;
+            winProbability?: number;
+          } = {
             win: isHome ? 1.95 : 2.70,
             draw: 3.40,
             loss: isHome ? 3.80 : 2.40,
             cleanSheetProb: posCode === 'GK' || posCode === 'DEF' ? (isHome ? 45 : 32) : 30,
             goalExpectancy: posCode === 'FWD' || posCode === 'MID' ? 1.85 : 1.2,
             anytimeScorerOdds: posCode === 'FWD' ? 2.40 : 4.50,
+            anytimeAssistOdds: posCode === 'MID' ? 3.20 : 5.50,
           };
 
           if (clubCatalog) {
@@ -1071,6 +1199,39 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           } else {
             // Fallback intelligent basé sur les chances réelles
             const winProbVal = isHome ? 51 : 33;
+            diffRating = winProbVal >= 60 ? 1 : winProbVal >= 48 ? 2 : winProbVal >= 35 ? 3 : winProbVal >= 22 ? 4 : 5;
+          }
+
+          // Override with REAL Odds API if available
+          const realOdds = realOddsCache.get(normClub);
+          if (realOdds) {
+            bookmakerData.win = realOdds.win;
+            bookmakerData.draw = realOdds.draw;
+            bookmakerData.loss = realOdds.loss;
+            if (realOdds.cleanSheetProb) {
+              bookmakerData.cleanSheetProb = posCode === 'GK' || posCode === 'DEF' ? realOdds.cleanSheetProb : Math.min(45, realOdds.cleanSheetProb);
+            }
+            if (realOdds.goalExpectancy) {
+              bookmakerData.goalExpectancy = realOdds.goalExpectancy;
+              // Derive anytimeScorerOdds heuristically based on team xG and position
+              if (posCode === 'FWD') bookmakerData.anytimeScorerOdds = Math.round(Math.max(1.75, 4.8 - realOdds.goalExpectancy * 1.1) * 10) / 10;
+              else if (posCode === 'MID') bookmakerData.anytimeScorerOdds = Math.round(Math.max(2.4, 6.8 - realOdds.goalExpectancy * 0.9) * 10) / 10;
+              else if (posCode === 'DEF') bookmakerData.anytimeScorerOdds = Math.round(Math.max(5.5, 14.0 - realOdds.goalExpectancy * 1.5) * 10) / 10;
+              else bookmakerData.anytimeScorerOdds = 35.0;
+
+              // Derive anytimeAssistOdds heuristically based on team xG and position
+              if (posCode === 'MID') bookmakerData.anytimeAssistOdds = Math.round(Math.max(2.2, 5.2 - realOdds.goalExpectancy * 0.8) * 10) / 10;
+              else if (posCode === 'FWD') bookmakerData.anytimeAssistOdds = Math.round(Math.max(2.8, 6.2 - realOdds.goalExpectancy * 0.7) * 10) / 10;
+              else if (posCode === 'DEF') bookmakerData.anytimeAssistOdds = Math.round(Math.max(4.5, 9.5 - realOdds.goalExpectancy * 0.5) * 10) / 10;
+              else bookmakerData.anytimeAssistOdds = 25.0;
+            }
+            
+            // Recalculate diffRating based on real win probability
+            const invWin = 1 / realOdds.win;
+            const invDraw = 1 / realOdds.draw;
+            const invLoss = 1 / realOdds.loss;
+            const winProbVal = Math.round((invWin / (invWin + invDraw + invLoss)) * 100);
+            bookmakerData.winProbability = winProbVal;
             diffRating = winProbVal >= 60 ? 1 : winProbVal >= 48 ? 2 : winProbVal >= 35 ? 3 : winProbVal >= 22 ? 4 : 5;
           }
 
@@ -1582,7 +1743,7 @@ app.post('/api/ai/optimize-lineup', async (req, res) => {
 
   try {
     const ai = getAI();
-    const model = 'gemini-2.0-flash';
+    const model = 'gemini-2.5-flash';
 
     // Apply active optimization filters to the player pool
     let filteredCandidates = cards.filter((c: any) => {
@@ -1858,7 +2019,7 @@ app.post('/api/ai/scout-player', async (req, res) => {
 
   try {
     const ai = getAI();
-    const model = 'gemini-2.0-flash';
+    const model = 'gemini-2.5-flash';
 
     const systemInstruction = `Tu es un recruteur expert Sorare SO5. Analyse la carte du joueur, sa forme récente (L5), sa régularité (L15/L40), son statut de titulaire, son adversaire et les cotes bookmakers pour délivrer une fiche de scouting ultra précise.`;
 
@@ -1947,7 +2108,7 @@ app.post('/api/ai/chat', async (req, res) => {
 
   try {
     const ai = getAI();
-    const model = 'gemini-2.0-flash';
+    const model = 'gemini-2.5-flash';
 
     const systemInstruction = `Tu es l'Assistant Tactique IA personnel de Thib 8 pour Sorare SO5 (Fantasy Football).
 Tu as accès en temps réel à l'ensemble de ses cartes de jeu, leurs statistiques L5/L15/L40, leurs statuts de titulaires, blessures et leurs matchs à venir avec cotes bookmakers.

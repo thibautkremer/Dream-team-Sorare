@@ -131,9 +131,9 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       result = result.filter(f => 
-        f.club.toLowerCase().includes(q) || 
-        f.opponent.toLowerCase().includes(q) ||
-        f.players.some(p => p.displayName.toLowerCase().includes(q))
+        (f.club || '').toLowerCase().includes(q) || 
+        (f.opponent || '').toLowerCase().includes(q) ||
+        f.players.some(p => (p.displayName || '').toLowerCase().includes(q))
       );
     }
 

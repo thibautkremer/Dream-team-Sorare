@@ -3,6 +3,7 @@ export type SlotPosition = 'GK' | 'DEF' | 'MID' | 'FWD' | 'EXTRA';
 export type PlayingStatus = 'STARTER' | 'REGULAR' | 'SUPER_SUBSTITUTE' | 'SUBSTITUTE' | 'NOT_PLAYING' | 'BENCH' | 'DOUBTFUL';
 export type InjuryStatus = 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED';
 export type StrategyType = 'BALANCED' | 'SAFE_TITULAR' | 'HIGH_CEILING' | 'PURE_FORM';
+export type ScoringFocus = 'BALANCED' | 'AAS' | 'DS';
 export type CardRarity = 'common' | 'limited' | 'rare' | 'super_rare' | 'unique' | 'custom' | 'COMMON' | 'LIMITED' | 'RARE' | 'SUPER_RARE' | 'UNIQUE' | string;
 
 export interface BookmakerOdds {
@@ -193,12 +194,15 @@ export interface LineupOptimizationFilters {
   maxFixtureDifficulty?: number; // 1 to 5 (e.g. 3 = only easy/medium FDR <= 3)
   minL5?: number; // 0, 40, 45, 50, 55, 60
   minL15?: number; // 0, 40, 45, 50, 55, 60
+  minAasL15?: number; // 0, 10, 15, 20, 25
+  minDsL15?: number; // 0, 35, 45, 55, 60
   preferredExtraPosition?: 'AUTO' | 'FWD' | 'MID' | 'DEF'; // Choice of extra slot
   selectedClub?: string; // e.g. 'ALL' or specific club name
   onlyWithUpcomingMatch?: boolean; // Must have an upcoming fixture in GW
   stackClub?: boolean; // Favor teammates / team stack
   maxMatchDate?: string; // YYYY-MM-DD
   minWinProb?: number; // 25, 30, 35, 40, 45, 50
+  scoringFocus?: ScoringFocus; // 'BALANCED' | 'AAS' | 'DS'
 }
 
 export interface LineupSlotData {
@@ -215,6 +219,7 @@ export interface Lineup {
   id: string;
   name: string;
   strategy: StrategyType;
+  scoringFocus?: ScoringFocus;
   gameWeek: number;
   slots: {
     gk: SorareCard | null;

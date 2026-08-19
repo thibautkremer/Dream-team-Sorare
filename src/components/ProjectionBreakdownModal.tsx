@@ -23,12 +23,12 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
 
   const getStrategyName = (s: StrategyType) => {
     switch (s) {
-      case 'PURE_FORM': return 'Pure Forme (75% L5)';
-      case 'SAFE_TITULAR': return 'Titulaire Sécurisé (Moyennes lissées)';
-      case 'HIGH_CEILING': return 'Plafond Élevé (Potentiel décisif)';
+      case 'PURE_FORM': return 'Forme Pure (L5: 75% | L15: 20% | L40: 5%)';
+      case 'SAFE_TITULAR': return 'Titulaires Sûrs (L5: 35% | L15: 40% | L40: 25%)';
+      case 'HIGH_CEILING': return 'Haut Plafond (L5: 60% | L15: 30% | L40: 10%)';
       case 'BALANCED':
       default:
-        return 'Équilibrée (50% L5, 35% L15, 15% L40)';
+        return 'Équilibrée (L5: 50% | L15: 35% | L40: 15%)';
     }
   };
 
@@ -254,7 +254,7 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
                   breakdown.reliantType === 'DECISIVE_RELIANT' ? 'border-rose-500/50 bg-rose-500/10' :
                   'border-slate-500/50 bg-slate-500/10'
                 }`}>
-                  {breakdown.reliantType === 'AA_RELIANT' ? <Activity className="w-5 h-5 text-sky-400" /> :
+                  {breakdown.reliantType === 'AA_RELIANT' ? <Zap className="w-5 h-5 text-sky-400" /> :
                    breakdown.reliantType === 'DECISIVE_RELIANT' ? <Award className="w-5 h-5 text-rose-400" /> :
                    <Info className="w-5 h-5 text-slate-400" />}
                 </div>

@@ -1,4 +1,4 @@
-import { SorareCard, Lineup, StrategyType, PositionCode, LineupOptimizationFilters, UpcomingFixture, MatchPerformanceDetail } from '../types';
+import { SorareCard, Lineup, StrategyType, ScoringFocus, PositionCode, LineupOptimizationFilters, UpcomingFixture, MatchPerformanceDetail } from '../types';
 import { getCardTotalBonus, getCardBonusBreakdown, CardBonusBreakdown } from './sorareSlug';
 
 export interface ScoreBreakdown {
@@ -32,6 +32,7 @@ export interface ScoreBreakdown {
   l15Boosted: number;           // L15 * (1 + bonus %)
   l40Boosted: number;           // L40 * (1 + bonus %)
   strategyUsed: StrategyType;
+  scoringFocusUsed?: ScoringFocus;
   strategyWeights: { l5: number; l15: number; l40: number };
   rawBaseFormScore: number;     // Forme brute de base
   boostedBaseFormScore: number; // Forme de base boostée par la carte
@@ -273,7 +274,8 @@ export function calculatePlayerProjectedScore(
   card: SorareCard,
   strategy: StrategyType = 'BALANCED',
   allGalleryCards: SorareCard[] = [],
-  precomputedClubContext?: Record<string, ClubContext>
+  precomputedClubContext?: Record<string, ClubContext>,
+  scoringFocus: ScoringFocus = 'BALANCED'
 ): ScoreBreakdown {
   const recentStats = getPlayerRecentMatchAnalysis(card);
   const bonusPct = getCardTotalBonus(card);
@@ -305,6 +307,7 @@ export function calculatePlayerProjectedScore(
     l15Boosted: Math.round((card.scores?.l15 || 0) * (1 + bonusPct / 100) * 10) / 10,
     l40Boosted: Math.round((card.scores?.l40 || 0) * (1 + bonusPct / 100) * 10) / 10,
     strategyUsed: strategy,
+    scoringFocusUsed: scoringFocus,
     strategyWeights: { l5: 0.5, l15: 0.35, l40: 0.15 },
     rawBaseFormScore: 0,
     boostedBaseFormScore: 0,
@@ -349,10 +352,28 @@ export function calculatePlayerProjectedScore(
 
   baseForm = (l5 * strategyWeights.l5) + (l15 * strategyWeights.l15) + (l40 * strategyWeights.l40);
 
-  // --- NEW: Regression to the Mean ---
+  // --- NEW: Regression to the Mean & Ponderation DS ---
   let regressionPenalty = 0;
-  if (l5 > l40 + 12 && l40 > 0) {
-    // Si la forme récente est bcp plus haute que le long terme, on tempère de 30% l'excédent
+  if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
+     const matchesPlayed = card.scores.recentMatches.filter(m => m.score > 0);
+     const l5Matches = matchesPlayed.slice(0, 5);
+     
+     if (l5Matches.length > 0 && matchesPlayed.length >= 10) {
+         const dsCountL5 = l5Matches.filter(m => (m.decisiveScore || 0) >= 60).length;
+         const dsCountHistorical = matchesPlayed.filter(m => (m.decisiveScore || 0) >= 60).length;
+         const expectedDsInL5 = (dsCountHistorical / matchesPlayed.length) * l5Matches.length;
+         
+         if (dsCountL5 > expectedDsInL5) {
+             const mitigationFactor = card.positionCode === 'DEF' || card.positionCode === 'GK' ? 0.8 
+                                  : card.positionCode === 'MID' ? 0.6 
+                                  : 0.3; // FWD streaky allowed
+             const overperformance = dsCountL5 - expectedDsInL5;
+             regressionPenalty = overperformance * 15 * mitigationFactor;
+             baseForm -= regressionPenalty;
+         }
+     }
+  } else if (l5 > l40 + 12 && l40 > 0) {
+    // Fallback if no recent matches details
     regressionPenalty = (l5 - l40 - 12) * 0.3;
     baseForm -= regressionPenalty;
   }
@@ -431,6 +452,15 @@ export function calculatePlayerProjectedScore(
         matchupFactor = 0.85;
         matchupImpactLabel = 'Très Difficile (FDR 5 : -15%)';
         break;
+    }
+
+    // --- HOME / AWAY FACTOR ---
+    if (fixture.isHome) {
+      matchupFactor *= 1.03; // +3% Domicile
+      matchupImpactLabel += ' • Domicile (+3%)';
+    } else {
+      matchupFactor *= 0.97; // -3% Extérieur
+      matchupImpactLabel += ' • Extérieur (-3%)';
     }
 
     // --- NEW: Opponent Style Proxies ---
@@ -582,6 +612,28 @@ export function calculatePlayerProjectedScore(
   }
   projected += bookmakerActionBonus;
 
+  // 6. Orientation Stratégique AAS vs DS vs Équilibré
+  let scoringFocusBonus = 0;
+  if (scoringFocus === 'AAS') {
+    // Profil AAS / Plancher régulier : valorise les gros gratteurs de points et le volume défensif/collectif
+    const aasScore = card.scores?.avgAllAroundScore || (card.scores?.l15 ? card.scores.l15 * 0.48 : 18);
+    const aaRatio = card.scores?.allAroundContributionPct || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'MID' ? 55 : 40);
+    if (aasScore >= 20 || aaRatio >= 58) {
+      scoringFocusBonus += Math.min(5.0, (aasScore - 14) * 0.35 + (aaRatio > 58 ? 1.5 : 0));
+    } else if (aaRatio < 35) {
+      scoringFocusBonus -= 2.5; // Malus sur les joueurs dépendants exclusivement d'une action décisive
+    }
+  } else if (scoringFocus === 'DS') {
+    // Profil DS / Haut Plafond : valorise les buteurs, passeurs et joueurs avec un fort taux de score décisif
+    const dsRate = card.scores?.decisiveRateL15 || (card.scores?.decisiveRateL5 || 25);
+    const ceiling = card.scores?.ceilingScore || 65;
+    const decRatio = card.scores?.decisiveContributionPct || (card.positionCode === 'FWD' ? 60 : card.positionCode === 'MID' ? 40 : 25);
+    if (dsRate >= 25 || ceiling >= 75 || decRatio >= 50) {
+      scoringFocusBonus += Math.min(5.5, (dsRate / 10) * 0.7 + (ceiling > 75 ? 2.0 : 0));
+    }
+  }
+  projected += scoringFocusBonus;
+
   if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker?.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
     projected += 4;
   }
@@ -663,50 +715,161 @@ export function calculatePlayerProjectedScore(
   };
 }
 
-export function areOpponents(p1: SorareCard, p2: SorareCard): boolean {
-  if (!p1.club?.name || !p2.club?.name || !p1.upcomingFixture?.opponent || !p2.upcomingFixture?.opponent) {
-    return false;
-  }
-  const clean = (s: string) => s.toLowerCase().replace(/(fc|sc|as|olympique|real|united|city|atletico|de|la|le|the)/gi, '').trim();
-  const c1 = clean(p1.club.name);
-  const c2 = clean(p2.club.name);
-  const o1 = clean(p1.upcomingFixture.opponent);
-  const o2 = clean(p2.upcomingFixture.opponent);
-  return c1 === o2 || c2 === o1;
+export function normalizeClubName(name?: string): string {
+  if (!name) return '';
+  return name
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\b(fc|cf|rc|as|sc|cd|ss|ssc|ogc|afc|us|sv|vfl|rb|tsg|bvb|ca|rcd|sd|ud|de|la|le|the|club|calcio|balompie|sporting|olympique|olympic|real|united|city|hotspur|town|athletic|atletico|internazionale|inter)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function selectPlayerForPosition(
+export function isSameClub(name1?: string, name2?: string): boolean {
+  if (!name1 || !name2) return false;
+  const n1 = name1.toLowerCase().trim();
+  const n2 = name2.toLowerCase().trim();
+  if (n1 === n2) return true;
+  
+  const norm1 = normalizeClubName(name1);
+  const norm2 = normalizeClubName(name2);
+  if (norm1 && norm2) {
+    if (norm1 === norm2) return true;
+    if (norm1.length >= 3 && norm2.length >= 3 && (norm1.includes(norm2) || norm2.includes(norm1))) return true;
+  }
+  return false;
+}
+
+export function areOpponents(p1: SorareCard, p2: SorareCard): boolean {
+  if (!p1 || !p2) return false;
+  if (p1.id === p2.id) return false;
+
+  const c1 = p1.club?.name;
+  const c2 = p2.club?.name;
+  if (!c1 || !c2) return false;
+
+  // Deux joueurs de la même équipe sont coéquipiers, PAS adversaires
+  if (isSameClub(c1, c2)) return false;
+
+  const o1 = p1.upcomingFixture?.opponent;
+  const o2 = p2.upcomingFixture?.opponent;
+  if (!o1 && !o2) return false;
+
+  // Vérifier si le club de p1 affronte le club de p2
+  const c1MatchesO2 = o2 ? isSameClub(c1, o2) : false;
+  const c2MatchesO1 = o1 ? isSameClub(c2, o1) : false;
+
+  return c1MatchesO2 || c2MatchesO1;
+}
+
+export function getLineupOpponentConflicts(slots: {
+  gk: SorareCard | null;
+  def: SorareCard | null;
+  mid: SorareCard | null;
+  fwd: SorareCard | null;
+  extra: SorareCard | null;
+}): { player1: SorareCard; player2: SorareCard; reason: string }[] {
+  const players = [slots.gk, slots.def, slots.mid, slots.fwd, slots.extra].filter(Boolean) as SorareCard[];
+  const conflicts: { player1: SorareCard; player2: SorareCard; reason: string }[] = [];
+
+  for (let i = 0; i < players.length; i++) {
+    for (let j = i + 1; j < players.length; j++) {
+      const p1 = players[i];
+      const p2 = players[j];
+      if (areOpponents(p1, p2)) {
+        conflicts.push({
+          player1: p1,
+          player2: p2,
+          reason: `${p1.displayName} (${p1.club?.name || 'Club'}) affronte ${p2.displayName} (${p2.club?.name || 'Adversaire'}) cette Game Week`
+        });
+      }
+    }
+  }
+
+  return conflicts;
+}
+
+export function getLineupClubStacks(slots: {
+  gk: SorareCard | null;
+  def: SorareCard | null;
+  mid: SorareCard | null;
+  fwd: SorareCard | null;
+  extra: SorareCard | null;
+}): { clubName: string; count: number; players: SorareCard[] }[] {
+  const players = [slots.gk, slots.def, slots.mid, slots.fwd, slots.extra].filter(Boolean) as SorareCard[];
+  const map = new Map<string, SorareCard[]>();
+
+  players.forEach(p => {
+    const club = p.club?.name || 'Inconnu';
+    if (!map.has(club)) {
+      map.set(club, []);
+    }
+    map.get(club)!.push(p);
+  });
+
+  const stacks: { clubName: string; count: number; players: SorareCard[] }[] = [];
+  map.forEach((clubPlayers, clubName) => {
+    if (clubPlayers.length >= 2) {
+      stacks.push({ clubName, count: clubPlayers.length, players: clubPlayers });
+    }
+  });
+
+  return stacks.sort((a, b) => b.count - a.count);
+}
+
+export function selectPlayerForPosition(
   candidates: ScoreBreakdown[],
   selectedPlayers: SorareCard[],
-  ignoreOpponentsConstraint: boolean = false
+  ignoreOpponentsConstraint: boolean = false,
+  proximityThreshold: number = 4.0
 ): SorareCard | null {
   if (candidates.length === 0) return null;
 
-  // Filtrer les candidats qui ne jouent pas contre des joueurs déjà sélectionnés
+  // 1. RÈGLE 1 : Éliminer les candidats qui affrontent un joueur déjà présent dans l'équipe
   let filtered = candidates;
-  if (!ignoreOpponentsConstraint) {
-    filtered = candidates.filter(cand => {
+  if (!ignoreOpponentsConstraint && selectedPlayers.length > 0) {
+    const nonOpponents = candidates.filter(cand => {
       return !selectedPlayers.some(sel => areOpponents(cand.player, sel));
     });
-  }
-
-  // Fallback si aucun joueur ne respecte la contrainte d'adversaire
-  if (filtered.length === 0) {
-    filtered = candidates;
+    // Si au moins une option n'est pas un adversaire, on applique strictement la règle
+    if (nonOpponents.length > 0) {
+      filtered = nonOpponents;
+    }
   }
 
   if (filtered.length === 0) return null;
 
-  // Stacking logic: si deux joueurs sont très proches en score (diff <= 3), privilégier le club déjà représenté
+  // 2. RÈGLE 2 : Si des joueurs sont proches en terme de score projeté, PRIVILÉGIER les joueurs d'une même équipe
   const topCandidate = filtered[0];
   const topScore = topCandidate.projectedScore;
-  const closeCandidates = filtered.filter(cand => topScore - cand.projectedScore <= 3);
 
-  const clubMatchedCandidate = closeCandidates.find(cand => {
-    return selectedPlayers.some(sel => sel.club.name.toLowerCase() === cand.player.club.name.toLowerCase());
-  });
+  // Trouver tous les candidats dont le score est proche du top (écart <= 4 pts)
+  const closeCandidates = filtered.filter(cand => (topScore - cand.projectedScore) <= proximityThreshold);
 
-  return clubMatchedCandidate ? clubMatchedCandidate.player : topCandidate.player;
+  if (closeCandidates.length > 1 && selectedPlayers.length > 0) {
+    // Calculer le nombre de coéquipiers déjà dans l'équipe pour chaque candidat
+    const candidateClubScores = closeCandidates.map(cand => {
+      const candClub = cand.player.club?.name;
+      const teammates = selectedPlayers.filter(sel => isSameClub(sel.club?.name, candClub));
+      const teammateCount = teammates.length;
+      return {
+        cand,
+        teammateCount,
+        // Score effectif bonifié pour prioriser le stacking même club
+        effectiveScore: cand.projectedScore + (teammateCount * 2.0)
+      };
+    });
+
+    const withTeammates = candidateClubScores.filter(item => item.teammateCount > 0);
+    if (withTeammates.length > 0) {
+      // Trier par nombre de coéquipiers puis score effectif
+      withTeammates.sort((a, b) => b.teammateCount - a.teammateCount || b.effectiveScore - a.effectiveScore);
+      return withTeammates[0].cand.player;
+    }
+  }
+
+  return topCandidate.player;
 }
 
 /**
@@ -761,7 +924,7 @@ export function optimizeLineup(
   });
 
   // Score chaque carte
-  const scoredCards = cards.map(c => calculatePlayerProjectedScore(c, strategy, cards, clubContext));
+  const scoredCards = cards.map(c => calculatePlayerProjectedScore(c, strategy, cards, clubContext, filters.scoringFocus || 'BALANCED'));
 
   // Filtrer selon les critères de base et les filtres actifs du manager
   const eligible = scoredCards.filter(sc => {
@@ -784,6 +947,8 @@ export function optimizeLineup(
     if (filters.maxFixtureDifficulty && (c.upcomingFixture?.difficultyRating || 3) > filters.maxFixtureDifficulty) return false;
     if (filters.minL5 && (c.scores?.l5 || 0) < filters.minL5) return false;
     if (filters.minL15 && (c.scores?.l15 || 0) < filters.minL15) return false;
+    if (filters.minAasL15 && getCardAasL15(c) < filters.minAasL15) return false;
+    if (filters.minDsL15 && getCardDsL15(c) < filters.minDsL15) return false;
     if (filters.selectedClub && filters.selectedClub !== 'ALL' && c.club?.name !== filters.selectedClub) return false;
     if (filters.minWinProb && filters.minWinProb > 0) {
       const winProb = getPlayerWinProbability(c.upcomingFixture);
@@ -822,92 +987,182 @@ export function optimizeLineup(
     ? availableGKCandidates 
     : finalEligible.filter(sc => sc.player.positionCode === 'GK').sort(compareCandidates);
 
-  const selectedGk = gkCandidates[0]?.player || null;
+  const focus = filters.scoringFocus || 'BALANCED';
 
-  const selectedPlayersList: SorareCard[] = [];
-  if (selectedGk) selectedPlayersList.push(selectedGk);
+  // Explorer les meilleures options de racine GK (jusqu'à 3) pour trouver l'équipe au stacking optimal sans duel opposant
+  const gkRootsToTry: (SorareCard | null)[] = gkCandidates.length > 0
+    ? gkCandidates.slice(0, Math.min(3, gkCandidates.length)).map(sc => sc.player)
+    : [null];
 
-  // DEF
-  const defCandidates = finalEligible.filter(sc => sc.player.positionCode === 'DEF' && !usedCardIds.has(sc.player.id))
-    .sort(compareCandidates);
-  const selectedDef = selectPlayerForPosition(defCandidates, selectedPlayersList);
-  if (selectedDef) selectedPlayersList.push(selectedDef);
-
-  // MID
-  const midCandidates = finalEligible.filter(sc => sc.player.positionCode === 'MID' && !usedCardIds.has(sc.player.id))
-    .sort(compareCandidates);
-  const selectedMid = selectPlayerForPosition(midCandidates, selectedPlayersList);
-  if (selectedMid) selectedPlayersList.push(selectedMid);
-
-  // FWD
-  const fwdCandidates = finalEligible.filter(sc => sc.player.positionCode === 'FWD' && !usedCardIds.has(sc.player.id))
-    .sort(compareCandidates);
-  const selectedFwd = selectPlayerForPosition(fwdCandidates, selectedPlayersList);
-  if (selectedFwd) selectedPlayersList.push(selectedFwd);
-
-  // EXTRA : le meilleur joueur restant parmi DEF, MID, FWD (ou respectant preferredExtraPosition)
-  const localUsedIds = new Set<string>(selectedPlayersList.map(p => p.id));
-  let outfieldCandidates = finalEligible
-    .filter(sc => sc.player.positionCode !== 'GK' && !usedCardIds.has(sc.player.id) && !localUsedIds.has(sc.player.id));
-
-  if (filters.preferredExtraPosition && filters.preferredExtraPosition !== 'AUTO') {
-    outfieldCandidates = outfieldCandidates.filter(sc => sc.player.positionCode === filters.preferredExtraPosition);
+  interface CandidateLineupResult {
+    selectedGk: SorareCard | null;
+    selectedDef: SorareCard | null;
+    selectedMid: SorareCard | null;
+    selectedFwd: SorareCard | null;
+    selectedExtra: SorareCard | null;
+    conflicts: ReturnType<typeof getLineupOpponentConflicts>;
+    stacks: ReturnType<typeof getLineupClubStacks>;
+    rawSum: number;
+    bestCaptainSlot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra';
+    captainBonusPoints: number;
+    projectedTotalWithCaptain: number;
+    teamPlayers: { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; player: SorareCard | null; score: number; ceiling: number }[];
+    evalScore: number;
   }
 
-  outfieldCandidates.sort(compareCandidates);
-  const selectedExtra = selectPlayerForPosition(outfieldCandidates, selectedPlayersList);
+  let bestResult: CandidateLineupResult | null = null;
 
-  // Calcul du capitaine (+20% bonus SO5)
-  const teamPlayers: { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; player: SorareCard | null; score: number; ceiling: number }[] = [
-    {
-      slot: 'gk', player: selectedGk,
-      score: selectedGk ? calculatePlayerProjectedScore(selectedGk, strategy, cards, clubContext).projectedScore : 0,
-      ceiling: selectedGk ? calculatePlayerProjectedScore(selectedGk, strategy, cards, clubContext).projectedCeiling : 0
-    },
-    {
-      slot: 'def', player: selectedDef,
-      score: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext).projectedScore : 0,
-      ceiling: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext).projectedCeiling : 0
-    },
-    {
-      slot: 'mid', player: selectedMid,
-      score: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext).projectedScore : 0,
-      ceiling: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext).projectedCeiling : 0
-    },
-    {
-      slot: 'fwd', player: selectedFwd,
-      score: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext).projectedScore : 0,
-      ceiling: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext).projectedCeiling : 0
-    },
-    {
-      slot: 'extra', player: selectedExtra,
-      score: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext).projectedScore : 0,
-      ceiling: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext).projectedCeiling : 0
-    },
-  ];
+  for (const rootGk of gkRootsToTry) {
+    const currentList: SorareCard[] = [];
+    if (rootGk) currentList.push(rootGk);
 
-  // Smart Captaincy: In HIGH_CEILING mode, pick captain by Ceiling
-  const sortedForCaptain = [...teamPlayers]
-    .filter(p => p.player !== null)
-    .sort((a, b) => {
-      if (strategy === 'HIGH_CEILING') return b.ceiling - a.ceiling;
-      return b.score - a.score;
-    });
+    // DEF
+    const defCandidates = finalEligible
+      .filter(sc => sc.player.positionCode === 'DEF' && !usedCardIds.has(sc.player.id) && !currentList.some(p => p.id === sc.player.id))
+      .sort(compareCandidates);
+    const selectedDef = selectPlayerForPosition(defCandidates, currentList, false, 4.0);
+    if (selectedDef) currentList.push(selectedDef);
 
-  const bestCaptainSlot = sortedForCaptain[0]?.slot || 'fwd';
+    // MID
+    const midCandidates = finalEligible
+      .filter(sc => sc.player.positionCode === 'MID' && !usedCardIds.has(sc.player.id) && !currentList.some(p => p.id === sc.player.id))
+      .sort(compareCandidates);
+    const selectedMid = selectPlayerForPosition(midCandidates, currentList, false, 4.0);
+    if (selectedMid) currentList.push(selectedMid);
 
-  const rawSum = teamPlayers.reduce((acc, curr) => acc + curr.score, 0);
-  const captainObj = teamPlayers.find(p => p.slot === bestCaptainSlot);
-  const captainBonusPoints = captainObj ? Math.round((captainObj.score * 0.20) * 10) / 10 : 0;
-  const projectedTotalWithCaptain = Math.round((rawSum + captainBonusPoints) * 10) / 10;
+    // FWD
+    const fwdCandidates = finalEligible
+      .filter(sc => sc.player.positionCode === 'FWD' && !usedCardIds.has(sc.player.id) && !currentList.some(p => p.id === sc.player.id))
+      .sort(compareCandidates);
+    const selectedFwd = selectPlayerForPosition(fwdCandidates, currentList, false, 4.0);
+    if (selectedFwd) currentList.push(selectedFwd);
 
+    // EXTRA : le meilleur joueur restant parmi DEF, MID, FWD (ou respectant preferredExtraPosition)
+    const localUsed = new Set<string>(currentList.map(p => p.id));
+    let outfieldCandidates = finalEligible
+      .filter(sc => sc.player.positionCode !== 'GK' && !usedCardIds.has(sc.player.id) && !localUsed.has(sc.player.id));
+
+    if (filters.preferredExtraPosition && filters.preferredExtraPosition !== 'AUTO') {
+      outfieldCandidates = outfieldCandidates.filter(sc => sc.player.positionCode === filters.preferredExtraPosition);
+    }
+    outfieldCandidates.sort(compareCandidates);
+    const selectedExtra = selectPlayerForPosition(outfieldCandidates, currentList, false, 4.0);
+
+    const tempSlots = {
+      gk: rootGk,
+      def: selectedDef,
+      mid: selectedMid,
+      fwd: selectedFwd,
+      extra: selectedExtra,
+    };
+
+    const conflicts = getLineupOpponentConflicts(tempSlots);
+    const stacks = getLineupClubStacks(tempSlots);
+    const totalStackedPlayers = stacks.reduce((sum, s) => sum + s.count, 0);
+
+    const teamPlayers: { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; player: SorareCard | null; score: number; ceiling: number }[] = [
+      {
+        slot: 'gk', player: rootGk,
+        score: rootGk ? calculatePlayerProjectedScore(rootGk, strategy, cards, clubContext, focus).projectedScore : 0,
+        ceiling: rootGk ? calculatePlayerProjectedScore(rootGk, strategy, cards, clubContext, focus).projectedCeiling : 0
+      },
+      {
+        slot: 'def', player: selectedDef,
+        score: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext, focus).projectedScore : 0,
+        ceiling: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext, focus).projectedCeiling : 0
+      },
+      {
+        slot: 'mid', player: selectedMid,
+        score: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext, focus).projectedScore : 0,
+        ceiling: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext, focus).projectedCeiling : 0
+      },
+      {
+        slot: 'fwd', player: selectedFwd,
+        score: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext, focus).projectedScore : 0,
+        ceiling: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext, focus).projectedCeiling : 0
+      },
+      {
+        slot: 'extra', player: selectedExtra,
+        score: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext, focus).projectedScore : 0,
+        ceiling: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext, focus).projectedCeiling : 0
+      },
+    ];
+
+    const sortedForCaptain = [...teamPlayers]
+      .filter(p => p.player !== null)
+      .sort((a, b) => {
+        if (strategy === 'HIGH_CEILING' || focus === 'DS') return b.ceiling - a.ceiling;
+        return b.score - a.score;
+      });
+
+    const bestCaptainSlot = sortedForCaptain[0]?.slot || 'fwd';
+    const rawSum = teamPlayers.reduce((acc, curr) => acc + curr.score, 0);
+    const captainObj = teamPlayers.find(p => p.slot === bestCaptainSlot);
+    const captainBonusPoints = captainObj ? Math.round((captainObj.score * 0.20) * 10) / 10 : 0;
+    const projectedTotalWithCaptain = Math.round((rawSum + captainBonusPoints) * 10) / 10;
+
+    // Score d'évaluation : pénalise lourdement tout conflit d'adversaires et récompense le stacking de club
+    const evalScore = projectedTotalWithCaptain + (totalStackedPlayers * 1.5) - (conflicts.length * 100);
+
+    const candResult: CandidateLineupResult = {
+      selectedGk: rootGk,
+      selectedDef,
+      selectedMid,
+      selectedFwd,
+      selectedExtra,
+      conflicts,
+      stacks,
+      rawSum,
+      bestCaptainSlot,
+      captainBonusPoints,
+      projectedTotalWithCaptain,
+      teamPlayers,
+      evalScore,
+    };
+
+    if (!bestResult || candResult.evalScore > bestResult.evalScore) {
+      bestResult = candResult;
+    }
+  }
+
+  // Fallback de sécurité
+  const selectedGk = bestResult ? bestResult.selectedGk : (gkCandidates[0]?.player || null);
+  const selectedDef = bestResult ? bestResult.selectedDef : null;
+  const selectedMid = bestResult ? bestResult.selectedMid : null;
+  const selectedFwd = bestResult ? bestResult.selectedFwd : null;
+  const selectedExtra = bestResult ? bestResult.selectedExtra : null;
+  const bestCaptainSlot = bestResult ? bestResult.bestCaptainSlot : 'fwd';
+  const rawSum = bestResult ? bestResult.rawSum : 0;
+  const captainBonusPoints = bestResult ? bestResult.captainBonusPoints : 0;
+  const projectedTotalWithCaptain = bestResult ? bestResult.projectedTotalWithCaptain : 0;
+  const conflicts = bestResult ? bestResult.conflicts : [];
+  const stacks = bestResult ? bestResult.stacks : [];
+
+  const captainObj = bestResult?.teamPlayers.find(p => p.slot === bestCaptainSlot);
   const captainName = captainObj?.player?.displayName || 'Attaquant';
+
+  // Synthèse des points forts
+  const strengthsList: string[] = [];
+  if (conflicts.length === 0) {
+    strengthsList.push('🛡️ 0 duel direct entre vos joueurs (aucune confrontation interne sur la GW)');
+  } else {
+    strengthsList.push(`⚠️ ${conflicts.length} duel direct détecté`);
+  }
+
+  if (stacks.length > 0) {
+    const stackDesc = stacks.map(s => `${s.count}x ${s.clubName}`).join(', ');
+    strengthsList.push(`✨ Stacking d'équipe actif : ${stackDesc} (synergie appliquée sur scores proches)`);
+  }
+
+  strengthsList.push(`👑 Capitaine : ${captainName} avec bonus +20% (+${captainBonusPoints} pts)`);
 
   return {
     id: `lineup-${strategy.toLowerCase()}-${Date.now()}`,
     name: `Compo 1`,
     strategy,
+    scoringFocus: focus,
     gameWeek,
+    filtersUsed: filters,
     slots: {
       gk: selectedGk,
       def: selectedDef,
@@ -919,12 +1174,8 @@ export function optimizeLineup(
     projectedTotal: Math.round(rawSum * 10) / 10,
     projectedTotalWithCaptain,
     analysis: {
-      summary: `Composition optimisée basée sur la titularisation réelle (100% titulaires), le blocage de duels directs opposants, et le stacking d'équipes proches en score.`,
-      strengths: [
-        `0 duel direct entre vos joueurs (pas de contre-performance auto-annulante)`,
-        `Capitaine désigné : ${captainName} avec bonus +20% (+${captainBonusPoints} pts)`,
-        `Stacking tactique appliqué sur les joueurs proches en score`,
-      ],
+      summary: `Composition optimisée respectant le blocage strict des duels directs opposants, et la priorité au stacking d'équipe pour les joueurs aux scores proches.`,
+      strengths: strengthsList,
       risks: [
         `Vérifier l'annonce des XI officiels de départ 1h avant la deadline.`,
       ],
@@ -1124,9 +1375,9 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   const recentMatches = card.scores?.recentMatches;
 
   // Step 1: Known scores fill (Real recorded match scores)
-  // recentMatches[0] or last40[0] is the MOST RECENT match (GW 0) -> maps to index 39 (right-most)
+  // recentMatches[0] or last40[0] is the MOST RECENT match (GW 0) -> maps to index 0 (left-most / most recent)
   for (let k = 0; k < totalMatches; k++) {
-    const targetIdx = 39 - k; // k=0 (newest) goes to index 39 (right side of graph)
+    const targetIdx = k; // k=0 (newest) goes to index 0 (left side / most recent)
     let scoreVal = -1;
 
     const mObj = recentMatches && recentMatches[k];
@@ -1244,23 +1495,23 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
     }
   };
 
-  // Segment 1: Indices 35..39 (Last 5 matches - most recent)
-  fillAndAdjustSegment(35, 39, l5);
+  // Segment 1: Indices 0..4 (Last 5 matches - most recent)
+  fillAndAdjustSegment(0, 4, l5);
 
-  // Segment 2: Indices 30..34 (Matches 6..10 ago)
-  const sum35_39 = sumSegment(35, 39);
-  const targetSum30_34 = Math.max(0, (l10 * 10) - sum35_39);
-  fillAndAdjustSegment(30, 34, targetSum30_34 / 5);
+  // Segment 2: Indices 5..9 (Matches 6..10 ago)
+  const sum0_4 = sumSegment(0, 4);
+  const targetSum5_9 = Math.max(0, (l10 * 10) - sum0_4);
+  fillAndAdjustSegment(5, 9, targetSum5_9 / 5);
 
-  // Segment 3: Indices 25..29 (Matches 11..15 ago)
-  const sum30_39 = sumSegment(30, 39);
-  const targetSum25_29 = Math.max(0, (l15 * 15) - sum30_39);
-  fillAndAdjustSegment(25, 29, targetSum25_29 / 5);
+  // Segment 3: Indices 10..14 (Matches 11..15 ago)
+  const sum0_9 = sumSegment(0, 9);
+  const targetSum10_14 = Math.max(0, (l15 * 15) - sum0_9);
+  fillAndAdjustSegment(10, 14, targetSum10_14 / 5);
 
-  // Segment 4: Indices 0..24 (Matches 16..40 ago)
-  const sum25_39 = sumSegment(25, 39);
-  const targetSum0_24 = Math.max(0, (l40 * 40) - sum25_39);
-  fillAndAdjustSegment(0, 24, targetSum0_24 / 25);
+  // Segment 4: Indices 15..39 (Matches 16..40 ago)
+  const sum0_14 = sumSegment(0, 14);
+  const targetSum15_39 = Math.max(0, (l40 * 40) - sum0_14);
+  fillAndAdjustSegment(15, 39, targetSum15_39 / 25);
 
   return rawScores;
 }
@@ -1287,8 +1538,8 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
   const finalOpponents = validOpponents.length > 0 ? validOpponents : opponentPool;
 
   rawScores.forEach((score, idx) => {
-    const matchIndex = idx + 1; // 1 to 40
-    const apiIdx = (totalMatches - 1) - idx; // if idx=39 (right side), apiIdx=0 (newest in recentMatches)
+    const matchIndex = idx + 1; // 1 to 40 (1 is most recent match)
+    const apiIdx = idx; // idx=0 is newest in recentMatches
     const realMatch = recentMatches && recentMatches[apiIdx];
 
     const hasValidRealOpponent = realMatch && realMatch.opponent && realMatch.opponent !== 'Match Futur/Passé' && realMatch.opponent !== 'Match Réel';
@@ -1307,7 +1558,7 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
 
       result.push({
         matchIndex,
-        matchLabel: `Match ${matchIndex}`,
+        matchLabel: idx === 0 ? 'Dernier match (M1)' : `Match M${matchIndex}`,
         totalScore: 0,
         isDNP: true,
         isStarter: false,
@@ -1648,7 +1899,7 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
 
     result.push({
       matchIndex,
-      matchLabel: `Match ${matchIndex}`,
+      matchLabel: idx === 0 ? 'Dernier match (M1)' : `Match M${matchIndex}`,
       totalScore,
       isDNP: false,
       isStarter,
@@ -1692,6 +1943,20 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
 }
 
 export function compute15MatchPerformances(card: SorareCard): MatchPerformanceDetail[] {
-  return compute40MatchPerformances(card).slice(-15);
+  return compute40MatchPerformances(card).slice(0, 15);
+}
+
+export function getCardAasL15(card: SorareCard): number {
+  if (!card.scores?.recentMatches) return 0;
+  const matches = card.scores.recentMatches.filter(m => m.score > 0).slice(0, 15);
+  if (matches.length === 0) return 0;
+  return matches.reduce((sum, m) => sum + (m.allAroundScore || 0), 0) / matches.length;
+}
+
+export function getCardDsL15(card: SorareCard): number {
+  if (!card.scores?.recentMatches) return 0;
+  const matches = card.scores.recentMatches.filter(m => m.score > 0).slice(0, 15);
+  if (matches.length === 0) return 0;
+  return matches.reduce((sum, m) => sum + (m.decisiveScore || 0), 0) / matches.length;
 }
 
