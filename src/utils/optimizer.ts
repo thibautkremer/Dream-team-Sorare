@@ -52,6 +52,8 @@ export interface ScoreBreakdown {
   contextualImpactLabel?: string;
   regressionPenalty: number;
 
+  filterLabel?: string;
+
   bonusBreakdown: CardBonusBreakdown;
 }
 
@@ -267,6 +269,135 @@ export interface ClubContext {
   avgClubScore: number;
 }
 
+export function isNationalTeamMatch(match: { competitionName?: string; opponent?: string }): boolean {
+  const comp = (match.competitionName || '').toLowerCase().trim();
+  const opp = (match.opponent || '').toLowerCase().trim();
+  
+  // Exclure explicitement les compétitions européennes de clubs
+  if (
+    comp.includes('europa') || 
+    comp.includes('champions league') || 
+    comp.includes('ucl') || 
+    comp.includes('uel') || 
+    comp.includes('uecl') || 
+    comp.includes('conference league') ||
+    comp.includes('club')
+  ) {
+    return false;
+  }
+
+  // Liste de mots-clés robustes pour les compétitions et équipes nationales
+  const intlKeywords = [
+    'nations league', 'euro', 'world cup', 'mondial', 'qualif', 'friendly', 
+    'friendlies', 'amical', 'amicaux', 'international', 'copa america', 'copa américa', 
+    'can ', 'africa cup', 'conmebol', 'gold cup', 'asian cup', 'national team',
+    'championship', 'sélection', 'selection', 'pays'
+  ];
+
+  if (intlKeywords.some(kw => comp.includes(kw) || opp.includes(kw))) {
+    return true;
+  }
+
+  // Si l'un des deux côtés contient un pays européen ou mondial bien connu
+  const countries = [
+    'france', 'spain', 'espagne', 'england', 'angleterre', 'germany', 'allemagne', 
+    'italy', 'italie', 'belgium', 'belgique', 'portugal', 'croatia', 'croatie', 
+    'netherlands', 'pays-bas', 'switzerland', 'suisse', 'denmark', 'danemark', 
+    'austria', 'autriche', 'poland', 'pologne', 'scotland', 'écosse', 'ecosse', 
+    'albania', 'albanie', 'georgia', 'géorgie', 'romania', 'roumanie', 'turkey', 'turquie', 
+    'ukraine', 'slovakia', 'slovaquie', 'slovenia', 'slovénie', 'czech', 'république tchèque', 
+    'brazil', 'brésil', 'argentina', 'argentine', 'uruguay', 'colombia', 'colombie', 
+    'chile', 'chili', 'usa', 'etats-unis', 'mexico', 'mexique', 'canada', 'morocco', 'maroc', 
+    'senegal', 'sénégal', 'japan', 'japon', 'korea', 'corée', 'australia', 'australie'
+  ];
+
+  if (countries.some(c => comp === c || opp === c || opp.includes(c) || comp.includes(c))) {
+    // S'assurer que ce n'est pas un nom de club contenant un pays/ville par coïncidence (ex: Austria Wien)
+    const isClub = /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg)\b/i.test(opp);
+    if (!isClub) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function isPlayerNewTransfer(card: SorareCard): boolean {
+  if ((card as any).isRecentTransfer || (card as any).isNewClub) {
+    return true;
+  }
+  
+  const notes = (card.tacticalNotes || '').toLowerCase();
+  const keywords = [
+    'transfert', 'transféré', 'transfere', 'recrue', 'nouveau club', 
+    'nouvelle équipe', 'nouvelle equipe', 'rejoint', 'signature', 
+    'signé', 'arrivé cet été', 'arriver cet ete', 'nouveau maillot',
+    'adapt', 'prêté', 'prete', 'nouveau renfort'
+  ];
+  
+  return keywords.some(kw => notes.includes(kw));
+}
+
+export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: SorareCard, isNational = false): PlayerRecentMatchStats {
+  const labelSuffix = isNational ? 'sélection' : 'club';
+  
+  if (clubScores.length === 0) {
+    const isStarter = !isNational && card.status === 'STARTER';
+    const isRegular = !isNational && card.status === 'REGULAR';
+    return {
+      playedLastMatch: isStarter || isRegular,
+      lastMatchScore: isStarter ? 50 : 0,
+      lastMatchLabel: isStarter ? `Titulaire (${labelSuffix})` : `DNP (${labelSuffix})`,
+      playedCountL5: isStarter ? 5 : isRegular ? 3 : 0,
+      consecutiveDnpCount: isNational ? 5 : 0,
+      recentPlayingFactor: isStarter ? 1.0 : isRegular ? 0.90 : 0.05,
+    };
+  }
+
+  const lastMatchScore = clubScores[0]; // Le premier élément est le plus récent (historique inversé)
+  const playedLastMatch = typeof lastMatchScore === 'number' && lastMatchScore > 0;
+  const playedCountL5 = clubScores.slice(0, 5).filter(s => s > 0).length;
+
+  let consecutiveDnpCount = 0;
+  for (let i = 0; i < clubScores.length; i++) {
+    if (clubScores[i] <= 0) {
+      consecutiveDnpCount++;
+    } else {
+      break;
+    }
+  }
+
+  let recentPlayingFactor = 1.0;
+  if (playedCountL5 === 0) {
+    recentPlayingFactor = 0.05;
+  } else if (consecutiveDnpCount >= 3) {
+    recentPlayingFactor = 0.20;
+  } else if (consecutiveDnpCount === 2) {
+    recentPlayingFactor = 0.45;
+  } else if (consecutiveDnpCount === 1 || !playedLastMatch) {
+    recentPlayingFactor = 0.65;
+  } else {
+    if (isNational) {
+      recentPlayingFactor = playedCountL5 >= 2 ? 1.05 : 0.95;
+    } else {
+      if (playedCountL5 >= 4) {
+        recentPlayingFactor = 1.04;
+      } else {
+        recentPlayingFactor = 1.0;
+      }
+    }
+  }
+
+  return {
+    playedLastMatch,
+    lastMatchScore: typeof lastMatchScore === 'number' ? lastMatchScore : 0,
+    lastMatchLabel: playedLastMatch ? `Dernier match ${labelSuffix} (${lastMatchScore} pts)` : `DNP ${labelSuffix} (0 min)`,
+    playedCountL5,
+    consecutiveDnpCount,
+    recentPlayingFactor,
+  };
+}
+
 /**
  * Calcule le score projeté SO5 pour une carte selon la stratégie
  */
@@ -277,9 +408,82 @@ export function calculatePlayerProjectedScore(
   precomputedClubContext?: Record<string, ClubContext>,
   scoringFocus: ScoringFocus = 'BALANCED'
 ): ScoreBreakdown {
-  const recentStats = getPlayerRecentMatchAnalysis(card);
   const bonusPct = getCardTotalBonus(card);
   const bonusBreakdown = getCardBonusBreakdown(card);
+
+  // 1. Détermination de la nature de la prochaine échéance (Nationale vs Club)
+  const upcomingIsNational = card.upcomingFixture?.competitionName && isNationalTeamMatch({ competitionName: card.upcomingFixture.competitionName });
+
+  let l5 = card.scores?.l5 || (card.scores?.last5Scores?.length ? card.scores.last5Scores.reduce((a, b) => a + b, 0) / card.scores.last5Scores.length : 40);
+  let l15 = card.scores?.l15 || l5;
+  let l40 = card.scores?.l40 || l15;
+  let recentStats = getPlayerRecentMatchAnalysis(card);
+  let filterLabel = '';
+
+  // 2. Dissociation des matchs Équipe Nationale et Club
+  if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
+    // On ne conserve que les matchs cohérents avec le type d'échéance à venir
+    const filteredMatches = card.scores.recentMatches.filter(m => {
+      const matchIsNational = isNationalTeamMatch(m);
+      if (upcomingIsNational) {
+        return matchIsNational;
+      } else {
+        return !matchIsNational;
+      }
+    });
+
+    if (filteredMatches.length > 0) {
+      const filteredScores = filteredMatches.map(m => m.score);
+      const calcAverage = (scores: number[], count: number) => {
+        const slice = scores.slice(0, count);
+        return slice.length > 0 ? slice.reduce((a, b) => a + b, 0) / slice.length : 40;
+      };
+
+      l5 = calcAverage(filteredScores, 5);
+      l15 = calcAverage(filteredScores, 15);
+      l40 = calcAverage(filteredScores, 40);
+      recentStats = getClubOnlyRecentMatchAnalysis(filteredScores, card, upcomingIsNational);
+      
+      if (!upcomingIsNational) {
+        const removedCount = card.scores.recentMatches.length - filteredMatches.length;
+        if (removedCount > 0) {
+          filterLabel = `Forme club uniquement (hors ${removedCount} match(s) sélection nationale)`;
+        }
+      } else {
+        filterLabel = `Forme sélection nationale uniquement`;
+      }
+    } else {
+      // Aucun match de ce type trouvé (ex: trêve nationale ayant effacé l'historique club de l'API)
+      if (!upcomingIsNational) {
+        // Échéance CLUB mais pas de match club trouvé dans l'historique récent
+        if (l15 > 45 || l40 > 45 || card.status === 'STARTER' || card.status === 'REGULAR') {
+          // On restaure ses moyennes historiques réelles de club en ignorant l'absence récente en sélection
+          l5 = l15 > 0 ? l15 : l40;
+          recentStats = {
+            playedLastMatch: true,
+            lastMatchScore: l5,
+            lastMatchLabel: 'Titulaire Club (Forme Rétrospective)',
+            playedCountL5: 5,
+            consecutiveDnpCount: 0,
+            recentPlayingFactor: 1.0,
+          };
+          filterLabel = 'Données club rétrospectives (trêve nationale exclue)';
+        }
+      } else {
+        // Échéance NATIONALE mais pas de match de sélection dans l'historique récent
+        l5 = 0;
+        recentStats = {
+          playedLastMatch: false,
+          lastMatchScore: 0,
+          lastMatchLabel: 'DNP Sélection (Aucune sélection récente)',
+          playedCountL5: 0,
+          consecutiveDnpCount: 5,
+          recentPlayingFactor: 0.05,
+        };
+        filterLabel = 'Forme sélection (Aucun match trouvé)';
+      }
+    }
+  }
 
   const emptyBreakdown: ScoreBreakdown = {
     player: card,
@@ -297,15 +501,15 @@ export function calculatePlayerProjectedScore(
     cleanSheetFactor: 0,
     starterSafety: 0,
     riskRating: 'HIGH',
-    playedLastMatch: false,
-    lastMatchScore: 0,
-    recentPlayingFactor: 0,
-    l5: card.scores?.l5 || 0,
-    l15: card.scores?.l15 || 0,
-    l40: card.scores?.l40 || 0,
-    l5Boosted: Math.round((card.scores?.l5 || 0) * (1 + bonusPct / 100) * 10) / 10,
-    l15Boosted: Math.round((card.scores?.l15 || 0) * (1 + bonusPct / 100) * 10) / 10,
-    l40Boosted: Math.round((card.scores?.l40 || 0) * (1 + bonusPct / 100) * 10) / 10,
+    playedLastMatch: recentStats.playedLastMatch,
+    lastMatchScore: recentStats.lastMatchScore,
+    recentPlayingFactor: recentStats.recentPlayingFactor,
+    l5: Math.round(l5 * 10) / 10,
+    l15: Math.round(l15 * 10) / 10,
+    l40: Math.round(l40 * 10) / 10,
+    l5Boosted: Math.round(l5 * (1 + bonusPct / 100) * 10) / 10,
+    l15Boosted: Math.round(l15 * (1 + bonusPct / 100) * 10) / 10,
+    l40Boosted: Math.round(l40 * (1 + bonusPct / 100) * 10) / 10,
     strategyUsed: strategy,
     scoringFocusUsed: scoringFocus,
     strategyWeights: { l5: 0.5, l15: 0.35, l40: 0.15 },
@@ -321,23 +525,42 @@ export function calculatePlayerProjectedScore(
     bookmakerActionBonus: 0,
     contextualBonus: 0,
     regressionPenalty: 0,
+    filterLabel,
     bonusBreakdown,
   };
 
+  let playerStatus = card.status || 'REGULAR';
+
+  // Correction dynamique du statut si l'analyse récente contredit le statut de la carte
+  if (upcomingIsNational) {
+    if (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2) {
+      playerStatus = 'STARTER';
+    } else if (recentStats.playedLastMatch) {
+      playerStatus = 'STARTER'; // Titulaire au dernier match de sélection = probable titulaire
+    } else if (recentStats.playedCountL5 >= 1) {
+      playerStatus = 'SUBSTITUTE';
+    } else {
+      playerStatus = 'NOT_PLAYING';
+    }
+  } else {
+    if (recentStats.playedCountL5 >= 4 && recentStats.playedLastMatch) {
+      playerStatus = 'STARTER';
+    } else if (recentStats.playedCountL5 >= 2 && (playerStatus === 'NOT_PLAYING' || playerStatus === 'SUBSTITUTE' || playerStatus === 'BENCH')) {
+      playerStatus = 'REGULAR';
+    } else if (recentStats.playedCountL5 === 1 && playerStatus === 'NOT_PLAYING') {
+      playerStatus = 'SUBSTITUTE';
+    }
+  }
+
   // 1. Élimination d'office des joueurs blessés, suspendus ou hors groupe
-  if (card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED' || card.status === 'NOT_PLAYING') {
+  if (card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED' || playerStatus === 'NOT_PLAYING') {
     return emptyBreakdown;
   }
 
   // Si le joueur n'a disputé aucun match sur les 5 derniers, le risque DNP est maximal (score 0)
-  if (recentStats.playedCountL5 === 0 && card.status !== 'STARTER') {
+  if (recentStats.playedCountL5 === 0 && playerStatus !== 'STARTER') {
     return emptyBreakdown;
   }
-
-  // 2. Pondération des moyennes historiques selon la stratégie avec fallbacks robustes
-  const l5 = card.scores?.l5 || (card.scores?.last5Scores?.length ? card.scores.last5Scores.reduce((a, b) => a + b, 0) / card.scores.last5Scores.length : 40);
-  const l15 = card.scores?.l15 || l5;
-  const l40 = card.scores?.l40 || l15;
 
   let baseForm = 0;
   let strategyWeights = { l5: 0.50, l15: 0.35, l40: 0.15 };
@@ -382,16 +605,16 @@ export function calculatePlayerProjectedScore(
   let starterFactor = 1.0;
   let starterImpactLabel = 'Titulaire indiscutable (100%)';
 
-  if (card.status === 'STARTER') {
+  if (playerStatus === 'STARTER') {
     starterFactor = 1.0;
     starterImpactLabel = 'Titulaire garanti (100%)';
-  } else if (card.status === 'REGULAR') {
+  } else if (playerStatus === 'REGULAR') {
     starterFactor = 0.90;
     starterImpactLabel = 'Joueur régulier (-10%)';
-  } else if (card.status === 'SUPER_SUBSTITUTE') {
+  } else if (playerStatus === 'SUPER_SUBSTITUTE') {
     starterFactor = 0.50;
     starterImpactLabel = 'Super Sub (-50%)';
-  } else if (card.status === 'SUBSTITUTE') {
+  } else if (playerStatus === 'SUBSTITUTE') {
     starterFactor = 0.20;
     starterImpactLabel = 'Remplaçant (-80%)';
   }
@@ -406,6 +629,14 @@ export function calculatePlayerProjectedScore(
 
   // Application de la pénalité liée au dernier match et aux DNP récents
   starterFactor *= recentStats.recentPlayingFactor;
+
+  // Pénalité d'adaptation pour transfert / nouveau club
+  const hasChangedClub = isPlayerNewTransfer(card);
+  if (hasChangedClub) {
+    const adaptationPenaltyPct = 15; // -15% sur la probabilité de titularisation de base
+    starterFactor *= (1 - (adaptationPenaltyPct / 100));
+    starterImpactLabel += ` • Adaptation nouveau club (-${adaptationPenaltyPct}%)`;
+  }
 
   // 4. Facteur adversaire et cotes bookmakers
   const fixture = card.upcomingFixture;
@@ -698,7 +929,7 @@ export function calculatePlayerProjectedScore(
     rawBaseFormScore: Math.round(baseForm * 10) / 10,
     boostedBaseFormScore: Math.round(baseForm * (1 + bonusPct / 100) * 10) / 10,
 
-    status: card.status || 'STARTER',
+    status: playerStatus,
     starterFactor: Math.round(starterFactor * 100) / 100,
     starterImpactLabel,
 
@@ -710,7 +941,7 @@ export function calculatePlayerProjectedScore(
     contextualBonus: Math.round(contextualBonus * 10) / 10,
     contextualImpactLabel,
     regressionPenalty: Math.round(regressionPenalty * 10) / 10,
-
+    filterLabel,
     bonusBreakdown,
   };
 }
@@ -1176,9 +1407,15 @@ export function optimizeLineup(
     analysis: {
       summary: `Composition optimisée respectant le blocage strict des duels directs opposants, et la priorité au stacking d'équipe pour les joueurs aux scores proches.`,
       strengths: strengthsList,
-      risks: [
-        `Vérifier l'annonce des XI officiels de départ 1h avant la deadline.`,
-      ],
+      risks: (() => {
+        const rList = [`Vérifier l'annonce des XI officiels de départ 1h avant la deadline.`];
+        const activePlayers = [selectedGk, selectedDef, selectedMid, selectedFwd, selectedExtra].filter((p): p is SorareCard => p !== null);
+        const transferPlayers = activePlayers.filter(isPlayerNewTransfer);
+        if (transferPlayers.length > 0) {
+          rList.push(`🔄 Intégration nouveau club : ${transferPlayers.map(p => p.displayName).join(', ')} (temps d'adaptation et risque de banc à surveiller).`);
+        }
+        return rList;
+      })(),
       captainReasoning: `${captainName} présente le meilleur score projeté (${captainObj?.score} pts) de l'équipe.`,
       cleanSheetOutlook: selectedGk?.upcomingFixture ? `${selectedGk.upcomingFixture.bookmaker?.cleanSheetProb || 45}% de clean sheet pour ${selectedGk.displayName}` : 'Favorable',
       tacticalPerPosition: {
@@ -1354,7 +1591,9 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   const totalMatches = 40;
   const rawScores: number[] = new Array(totalMatches).fill(-1);
 
-  const l5 = card.scores?.l5 || 0;
+  const upcomingIsNational = card.upcomingFixture?.competitionName && isNationalTeamMatch({ competitionName: card.upcomingFixture.competitionName });
+
+  let l5 = card.scores?.l5 || 0;
   let l15 = card.scores?.l15;
   let l10 = card.scores?.l10;
   let l40 = card.scores?.l40;
@@ -1363,7 +1602,13 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   if (typeof l10 !== 'number' || l10 <= 0) l10 = Math.round(((l5 + l15) / 2) * 10) / 10;
   if (typeof l40 !== 'number' || l40 <= 0) l40 = l15;
 
-  const isNotPlaying = card.status === 'NOT_PLAYING' || (l5 === 0 && l10 === 0 && l15 === 0 && l40 === 0);
+  // Correction trêve nationale (DNP-crowding)
+  if (!upcomingIsNational && (l15 > 45 || l40 > 45 || card.status === 'STARTER' || card.status === 'REGULAR')) {
+    if (l5 === 0) l5 = l15 > 0 ? l15 : l40;
+    if (l10 === 0) l10 = l15 > 0 ? l15 : l40;
+  }
+
+  const isNotPlaying = (l5 === 0 && l10 === 0 && l15 === 0 && l40 === 0);
   if (isNotPlaying) {
     return new Array(totalMatches).fill(0);
   }
@@ -1372,7 +1617,18 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   const last15 = card.scores?.last15Scores;
   const last10 = card.scores?.last10Scores;
   const last5 = card.scores?.last5Scores;
-  const recentMatches = card.scores?.recentMatches;
+  
+  let recentMatches = card.scores?.recentMatches;
+  if (recentMatches && recentMatches.length > 0) {
+    recentMatches = recentMatches.filter(m => {
+      const matchIsNational = isNationalTeamMatch(m);
+      if (upcomingIsNational) {
+        return matchIsNational;
+      } else {
+        return !matchIsNational;
+      }
+    });
+  }
 
   // Step 1: Known scores fill (Real recorded match scores)
   // recentMatches[0] or last40[0] is the MOST RECENT match (GW 0) -> maps to index 0 (left-most / most recent)
@@ -1385,14 +1641,14 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
 
     if (mObj && typeof mObj.score === 'number' && !isDummyPlaceholder) {
       scoreVal = mObj.score;
-    } else if (last40 && typeof last40[k] === 'number') {
-      scoreVal = last40[k];
-    } else if (k < 15 && last15 && typeof last15[k] === 'number') {
-      scoreVal = last15[k];
-    } else if (k < 10 && last10 && typeof last10[k] === 'number') {
-      scoreVal = last10[k];
-    } else if (k < 5 && last5 && typeof last5[k] === 'number') {
-      scoreVal = last5[k];
+    } else if (last40 && typeof last40[last40.length - 1 - k] === 'number') {
+      scoreVal = last40[last40.length - 1 - k];
+    } else if (last15 && typeof last15[last15.length - 1 - k] === 'number') {
+      scoreVal = last15[last15.length - 1 - k];
+    } else if (last10 && typeof last10[last10.length - 1 - k] === 'number') {
+      scoreVal = last10[last10.length - 1 - k];
+    } else if (last5 && typeof last5[last5.length - 1 - k] === 'number') {
+      scoreVal = last5[last5.length - 1 - k];
     }
 
     if (scoreVal >= 0) {

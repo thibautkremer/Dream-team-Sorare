@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star } from 'lucide-react';
+import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15 } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
@@ -9,6 +9,8 @@ interface GalleryViewProps {
   onOpenScout: (card: SorareCard) => void;
   onAssignToSlot: (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   onAddCard: (card: SorareCard) => void;
+  compositions?: any[];
+  onReplacePlayerInCompo?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => void;
 }
 
 const CARDS_PER_PAGE = 36;
@@ -18,6 +20,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   onOpenScout,
   onAssignToSlot,
   onAddCard,
+  compositions = [],
+  onReplacePlayerInCompo,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPosition, setSelectedPosition] = useState<PositionCode | 'ALL'>('ALL');
@@ -46,6 +50,14 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+
+  // States for advanced interactive player replacement flow
+  const [selectedCardForReplace, setSelectedCardForReplace] = useState<SorareCard | null>(null);
+  const [selectedCompoIndexForReplace, setSelectedCompoIndexForReplace] = useState<number>(0);
+  const [showReplacePopup, setShowReplacePopup] = useState(false);
+  const [playerToReplaceSlot, setPlayerToReplaceSlot] = useState<'gk' | 'def' | 'mid' | 'fwd' | 'extra' | null>(null);
+  const [playerToReplaceCard, setPlayerToReplaceCard] = useState<SorareCard | null>(null);
+  const [showComparisonModal, setShowComparisonModal] = useState(false);
 
   // New card form state
   const [newCardName, setNewCardName] = useState('');
@@ -323,10 +335,15 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 <button
                   onClick={async () => {
                     import('../utils/storage').then(async mod => {
-                      const username = mod.StorageService.getUsername();
-                      await fetch(`/api/sorare/user-cards?username=${encodeURIComponent(username)}&clearCache=true`);
-                      mod.StorageService.clearCards();
-                      window.location.reload();
+                      try {
+                        const username = mod.StorageService.getUsername();
+                        await fetch(`/api/sorare/user-cards?username=${encodeURIComponent(username)}&clearCache=true`).catch(() => {});
+                        mod.StorageService.clearCards();
+                        window.location.reload();
+                      } catch (err) {
+                        console.error('Failed to clear cache safely', err);
+                        window.location.reload();
+                      }
                     });
                   }}
                   className="flex items-center gap-2 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-600/20 hover:bg-red-500 transition active:scale-95 whitespace-nowrap"
@@ -842,74 +859,18 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                     Cliquer pour analyser
                   </span>
 
-                  <div className="relative group/dropdown">
-                    <button
-                      onClick={(e) => e.stopPropagation()}
-                      className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 transition"
-                    >
-                      Aligner ▾
-                    </button>
-                    
-                    {/* Position dropdown */}
-                    <div className="absolute right-0 bottom-full mb-1 hidden group-hover/dropdown:flex flex-col rounded-xl border border-slate-700 bg-slate-900 p-1 shadow-2xl z-20 min-w-[120px]">
-                      {card.positionCode === 'GK' && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'gk'); }}
-                          className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                        >
-                          En Gardien (GK)
-                        </button>
-                      )}
-                      {card.positionCode === 'DEF' && (
-                        <>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'def'); }}
-                            className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                          >
-                            En Défenseur (DEF)
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'extra'); }}
-                            className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                          >
-                            En Joker (EXTRA)
-                          </button>
-                        </>
-                      )}
-                      {card.positionCode === 'MID' && (
-                        <>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'mid'); }}
-                            className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                          >
-                            En Milieu (MID)
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'extra'); }}
-                            className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                          >
-                            En Joker (EXTRA)
-                          </button>
-                        </>
-                      )}
-                      {card.positionCode === 'FWD' && (
-                        <>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'fwd'); }}
-                            className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                          >
-                            En Attaquant (FWD)
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onAssignToSlot(card, 'extra'); }}
-                            className="rounded-lg px-3 py-1.5 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:text-emerald-400"
-                          >
-                            En Joker (EXTRA)
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedCardForReplace(card);
+                      setShowReplacePopup(true);
+                      setSelectedCompoIndexForReplace(0);
+                    }}
+                    className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 hover:shadow-lg hover:shadow-emerald-500/20 active:scale-95 transition flex items-center gap-1 shrink-0"
+                  >
+                    <span>Remplacer</span>
+                    <ArrowUpDown className="h-3 w-3" />
+                  </button>
                 </div>
               </div>
             );
@@ -1038,6 +999,561 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1: Compositions & Target Slot Chooser */}
+      {showReplacePopup && selectedCardForReplace && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-fade-in">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                  <ArrowUpDown className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Intégrer dans une composition</h3>
+                  <p className="text-xs text-slate-400">Choisissez la composition et le joueur à remplacer</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowReplacePopup(false);
+                  setSelectedCardForReplace(null);
+                }}
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Selected Card Preview */}
+            <div className="flex items-center gap-4 rounded-xl bg-slate-950/60 p-3.5 border border-slate-800/80">
+              <div className="relative h-12 w-12 flex-shrink-0">
+                {selectedCardForReplace.pictureUrl ? (
+                  <img
+                    src={selectedCardForReplace.pictureUrl}
+                    alt={selectedCardForReplace.displayName}
+                    referrerPolicy="no-referrer"
+                    className="h-12 w-12 rounded-lg object-contain bg-slate-900 p-0.5 border border-slate-700"
+                  />
+                ) : (
+                  <div className="h-12 w-12 rounded-lg bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-400">
+                    {selectedCardForReplace.positionCode}
+                  </div>
+                )}
+                <span className={`absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-black border ${formatPositionBadge(selectedCardForReplace.positionCode).bg} ${formatPositionBadge(selectedCardForReplace.positionCode).text} border-slate-950`}>
+                  {selectedCardForReplace.positionCode}
+                </span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-bold text-white truncate">{selectedCardForReplace.displayName}</h4>
+                  <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-bold text-emerald-400 uppercase">
+                    {selectedCardForReplace.rarity || 'Common'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 truncate">{selectedCardForReplace.club?.name || 'Club'}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <span className="block text-[10px] text-slate-500 font-semibold">Forme L5</span>
+                <span className="text-sm font-black text-emerald-400">{selectedCardForReplace.scores?.l5 || '0.0'}</span>
+              </div>
+              <div className="text-right shrink-0 border-l border-slate-800/80 pl-4">
+                <span className="block text-[10px] text-slate-500 font-semibold">Proj. Match</span>
+                <span className="text-sm font-black text-amber-300">
+                  {calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards).projectedScore} pts
+                </span>
+              </div>
+            </div>
+
+            {/* Compositions Selector */}
+            {compositions.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-slate-500">
+                <Info className="h-8 w-8 mx-auto text-slate-600 mb-2" />
+                <p className="text-xs">Aucune composition optimisée n'a été créée pour le moment.</p>
+                <p className="text-[11px] text-slate-600 mt-1">Lisez d'abord vos compositions automatiques dans l'onglet principal.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Tabs */}
+                <div className="flex border-b border-slate-800/80 p-1 bg-slate-950/40 rounded-xl">
+                  {compositions.map((compo, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setSelectedCompoIndexForReplace(idx)}
+                      className={`flex-1 text-center py-2 text-xs font-bold rounded-lg transition ${
+                        selectedCompoIndexForReplace === idx
+                          ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/10'
+                          : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                      }`}
+                    >
+                      {compo.name || `Compo ${idx + 1}`}
+                      <span className="block text-[10px] font-normal opacity-80">
+                        {compo.projectedTotalWithCaptain || compo.projectedTotal || 0} pts
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Slots Rows */}
+                <div className="space-y-2">
+                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider pl-1">Sélectionnez le poste à remplacer :</p>
+                  
+                  {(() => {
+                    const activeCompo = compositions[selectedCompoIndexForReplace];
+                    if (!activeCompo) return null;
+
+                    const slotsList = [
+                      { key: 'gk', label: 'Gardien', code: 'GK', allowed: ['GK'] },
+                      { key: 'def', label: 'Défenseur', code: 'DEF', allowed: ['DEF'] },
+                      { key: 'mid', label: 'Milieu de Terrain', code: 'MID', allowed: ['MID'] },
+                      { key: 'fwd', label: 'Attaquant', code: 'FWD', allowed: ['FWD'] },
+                      { key: 'extra', label: 'Joker', code: 'EXTRA', allowed: ['DEF', 'MID', 'FWD'] },
+                    ];
+
+                    return slotsList.map((slot) => {
+                      const currentAlignedPlayer = activeCompo.slots[slot.key];
+                      const isCompatible = slot.allowed.includes(selectedCardForReplace.positionCode);
+                      
+                      const alignedBadge = formatPositionBadge(slot.code);
+
+                      return (
+                        <div
+                          key={slot.key}
+                          className={`flex items-center justify-between p-3 rounded-xl border transition-all duration-150 ${
+                            isCompatible
+                              ? 'border-slate-800 bg-slate-900/40 hover:bg-slate-850 hover:border-slate-700/80 cursor-pointer'
+                              : 'border-slate-800/40 bg-slate-950/20 opacity-45 cursor-not-allowed'
+                          }`}
+                          onClick={() => {
+                            if (!isCompatible) return;
+                            setPlayerToReplaceSlot(slot.key as any);
+                            setPlayerToReplaceCard(currentAlignedPlayer || null);
+                            setShowReplacePopup(false);
+                            setShowComparisonModal(true);
+                          }}
+                        >
+                          {/* Slot Badge & current player details */}
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className={`flex h-8 w-14 shrink-0 items-center justify-center rounded-lg text-xs font-black border ${alignedBadge.bg} ${alignedBadge.text} border-slate-700/50 shadow-inner`}>
+                              {slot.code}
+                            </span>
+
+                            {currentAlignedPlayer ? (
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                {currentAlignedPlayer.pictureUrl ? (
+                                  <img
+                                    src={currentAlignedPlayer.pictureUrl}
+                                    alt={currentAlignedPlayer.displayName}
+                                    referrerPolicy="no-referrer"
+                                    className="h-8 w-8 rounded object-contain bg-slate-950/60 p-0.5"
+                                  />
+                                ) : null}
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <h5 className="text-xs font-bold text-white truncate">{currentAlignedPlayer.displayName}</h5>
+                                    {currentAlignedPlayer.upcomingFixture?.opponent && (
+                                      <span className="text-[9px] text-slate-400 bg-slate-950/80 px-1 py-0.5 rounded">
+                                        vs {currentAlignedPlayer.upcomingFixture.opponent}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 truncate">
+                                    L5: {currentAlignedPlayer.scores?.l5 || 0} • Proj: {calculatePlayerProjectedScore(currentAlignedPlayer, 'BALANCED', cards).projectedScore} pts
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs italic text-slate-500 font-medium">Poste vacant • Aucun joueur aligné</span>
+                            )}
+                          </div>
+
+                          {/* Compat/Replace Actions */}
+                          <div className="shrink-0 pl-2">
+                            {isCompatible ? (
+                              <button
+                                type="button"
+                                className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-400 hover:bg-emerald-500 hover:text-slate-950 transition active:scale-95 flex items-center gap-1"
+                              >
+                                <span>Choisir</span>
+                                <ArrowRight className="h-3.5 w-3.5" />
+                              </button>
+                            ) : (
+                              <span className="text-[10px] font-semibold text-slate-600 bg-slate-950/40 px-2 py-1 rounded border border-slate-900/80 uppercase">
+                                Incompatible
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {/* Cancel Button */}
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReplacePopup(false);
+                  setSelectedCardForReplace(null);
+                }}
+                className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-2 text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-850 transition"
+              >
+                Fermer
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: Full Comparison & Replace Confirmation */}
+      {showComparisonModal && selectedCardForReplace && playerToReplaceSlot && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-fade-in">
+          <div className="w-full max-w-3xl rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl space-y-5 max-h-[95vh] overflow-y-auto">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  <ArrowUpDown className="h-5 w-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Comparatif de remplacement</h3>
+                  <p className="text-xs text-slate-400">Validez les statistiques avant d'assigner la nouvelle carte</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowComparisonModal(false);
+                  setShowReplacePopup(true); // Return to Chooser Modal
+                }}
+                className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Comparison Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              
+              {/* CURRENT PLAYER (LEFT) */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 space-y-4 relative overflow-hidden">
+                <div className="absolute top-0 right-0 rounded-bl-xl bg-slate-800/80 px-2.5 py-1 text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                  Actuel
+                </div>
+
+                {playerToReplaceCard ? (
+                  <>
+                    {/* Identity */}
+                    <div className="flex items-center gap-3">
+                      {playerToReplaceCard.pictureUrl ? (
+                        <img
+                          src={playerToReplaceCard.pictureUrl}
+                          alt={playerToReplaceCard.displayName}
+                          referrerPolicy="no-referrer"
+                          className="h-12 w-12 rounded-lg object-contain bg-slate-900 border border-slate-700"
+                        />
+                      ) : (
+                        <div className="h-12 w-12 rounded-lg bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-400">
+                          {playerToReplaceCard.positionCode}
+                        </div>
+                      )}
+                      <div>
+                        <h4 className="text-sm font-bold text-white">{playerToReplaceCard.displayName}</h4>
+                        <p className="text-xs text-slate-400">{playerToReplaceCard.club?.name || 'Club'}</p>
+                        <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-black border ${formatPositionBadge(playerToReplaceCard.positionCode).bg} ${formatPositionBadge(playerToReplaceCard.positionCode).text} border-slate-800`}>
+                          {playerToReplaceCard.positionCode}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Stats */}
+                    <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-900/60 p-2.5 border border-slate-800 text-center">
+                      <div>
+                        <span className="block text-[10px] font-semibold text-slate-500">L5 (Forme)</span>
+                        <span className="text-xs font-black text-slate-300">{playerToReplaceCard.scores?.l5 || '0.0'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] font-semibold text-slate-500">L15</span>
+                        <span className="text-xs font-black text-slate-300">{playerToReplaceCard.scores?.l15 || '0.0'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] font-semibold text-slate-500">L40</span>
+                        <span className="text-xs font-black text-slate-300">{playerToReplaceCard.scores?.l40 || '0.0'}</span>
+                      </div>
+                    </div>
+
+                    {/* Projected score */}
+                    {(() => {
+                      const breakdown = calculatePlayerProjectedScore(playerToReplaceCard, 'BALANCED', cards);
+                      return (
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-400">Score de base :</span>
+                            <span className="font-bold text-slate-300">{breakdown.baseProjectedScore} pts</span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-slate-400">Bonus de carte :</span>
+                            <span className="font-bold text-amber-300">+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs border-t border-slate-800/80 pt-1.5">
+                            <span className="text-slate-300 font-bold">Projection totale :</span>
+                            <span className="font-black text-emerald-400 text-sm">{breakdown.projectedScore} pts</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-48 border border-dashed border-slate-800 rounded-xl text-slate-500 space-y-1.5">
+                    <Info className="h-6 w-6 text-slate-600" />
+                    <p className="text-xs italic">Aucun joueur aligné</p>
+                    <p className="text-[10px] text-slate-600">Le score actuel pour ce poste est de 0 pts</p>
+                  </div>
+                )}
+              </div>
+
+              {/* NEW REPLACEMENT PLAYER (RIGHT) */}
+              <div className="rounded-xl border border-slate-700/80 bg-slate-900/60 p-4 space-y-4 relative overflow-hidden ring-1 ring-emerald-500/30 shadow-emerald-950/20 shadow-lg">
+                <div className="absolute top-0 right-0 rounded-bl-xl bg-emerald-500 px-2.5 py-1 text-[9px] font-bold text-slate-950 uppercase tracking-wider">
+                  Nouveau
+                </div>
+
+                {/* Identity */}
+                <div className="flex items-center gap-3">
+                  {selectedCardForReplace.pictureUrl ? (
+                    <img
+                      src={selectedCardForReplace.pictureUrl}
+                      alt={selectedCardForReplace.displayName}
+                      referrerPolicy="no-referrer"
+                      className="h-12 w-12 rounded-lg object-contain bg-slate-950 border border-slate-700"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded-lg bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-400">
+                      {selectedCardForReplace.positionCode}
+                    </div>
+                  )}
+                  <div>
+                    <h4 className="text-sm font-bold text-white">{selectedCardForReplace.displayName}</h4>
+                    <p className="text-xs text-slate-400">{selectedCardForReplace.club?.name || 'Club'}</p>
+                    <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[9px] font-black border ${formatPositionBadge(selectedCardForReplace.positionCode).bg} ${formatPositionBadge(selectedCardForReplace.positionCode).text} border-slate-800`}>
+                      {selectedCardForReplace.positionCode}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Stats */}
+                <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-950 p-2.5 border border-slate-800 text-center">
+                  <div>
+                    <span className="block text-[10px] font-semibold text-slate-500">L5 (Forme)</span>
+                    <span className="text-xs font-black text-emerald-400">{selectedCardForReplace.scores?.l5 || '0.0'}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-semibold text-slate-500">L15</span>
+                    <span className="text-xs font-black text-slate-300">{selectedCardForReplace.scores?.l15 || '0.0'}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] font-semibold text-slate-500">L40</span>
+                    <span className="text-xs font-black text-slate-300">{selectedCardForReplace.scores?.l40 || '0.0'}</span>
+                  </div>
+                </div>
+
+                {/* Projected score */}
+                {(() => {
+                  const breakdown = calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards);
+                  return (
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400">Score de base :</span>
+                        <span className="font-bold text-slate-300">{breakdown.baseProjectedScore} pts</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400">Bonus de carte :</span>
+                        <span className="font-bold text-amber-300">+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs border-t border-slate-800 pt-1.5">
+                        <span className="text-slate-200 font-bold font-semibold">Projection totale :</span>
+                        <span className="font-black text-emerald-400 text-sm">{breakdown.projectedScore} pts</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+            </div>
+
+            {/* COMPARATIVE METRICS & DELTAS */}
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 space-y-3">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider pl-0.5">Indicateurs de comparaison :</h4>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* L5 Delta */}
+                {(() => {
+                  const oldL5 = playerToReplaceCard?.scores?.l5 || 0;
+                  const newL5 = selectedCardForReplace.scores?.l5 || 0;
+                  const diff = Math.round((newL5 - oldL5) * 10) / 10;
+                  return (
+                    <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-lg text-center">
+                      <span className="block text-[10px] text-slate-400 font-medium mb-1">Moyenne L5</span>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-300">{oldL5}</span>
+                        <ArrowRight className="h-3 w-3 text-slate-600" />
+                        <span className="text-xs font-bold text-white">{newL5}</span>
+                      </div>
+                      <span className={`inline-block mt-1 text-[10px] font-bold ${
+                        diff > 0 ? 'text-emerald-400' : diff < 0 ? 'text-rose-400' : 'text-slate-500'
+                      }`}>
+                        {diff > 0 ? `+${diff}` : diff === 0 ? '=' : diff} pts
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* Projected score Delta */}
+                {(() => {
+                  const oldProj = playerToReplaceCard ? calculatePlayerProjectedScore(playerToReplaceCard, 'BALANCED', cards).projectedScore : 0;
+                  const newProj = calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards).projectedScore;
+                  const diff = Math.round((newProj - oldProj) * 10) / 10;
+                  return (
+                    <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-lg text-center">
+                      <span className="block text-[10px] text-slate-400 font-medium mb-1">Projection Match</span>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-300">{oldProj}</span>
+                        <ArrowRight className="h-3 w-3 text-slate-600" />
+                        <span className="text-xs font-bold text-white">{newProj}</span>
+                      </div>
+                      <span className={`inline-block mt-1 text-[10px] font-black ${
+                        diff > 0 ? 'text-emerald-400' : diff < 0 ? 'text-rose-400' : 'text-slate-500'
+                      }`}>
+                        {diff > 0 ? `+${diff}` : diff === 0 ? '=' : diff} pts
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* FDR delta */}
+                {(() => {
+                  const oldFdr = playerToReplaceCard?.upcomingFixture?.difficultyRating || 3;
+                  const newFdr = selectedCardForReplace.upcomingFixture?.difficultyRating || 3;
+                  const diff = newFdr - oldFdr;
+                  // lower fdr is easier (better)
+                  return (
+                    <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-lg text-center">
+                      <span className="block text-[10px] text-slate-400 font-medium mb-1">Difficulté FDR</span>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-300">{playerToReplaceCard ? `${oldFdr}/5` : 'N/A'}</span>
+                        <ArrowRight className="h-3 w-3 text-slate-600" />
+                        <span className="text-xs font-bold text-white">{newFdr}/5</span>
+                      </div>
+                      <span className={`inline-block mt-1 text-[10px] font-bold ${
+                        diff < 0 ? 'text-emerald-400' : diff > 0 ? 'text-amber-500' : 'text-slate-500'
+                      }`}>
+                        {diff < 0 ? `${diff} (Plus simple)` : diff > 0 ? `+${diff} (Plus dur)` : '='}
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* Starter Security Delta */}
+                {(() => {
+                  const oldConf = playerToReplaceCard?.starterConfidence || 0;
+                  const newConf = selectedCardForReplace.starterConfidence || 0;
+                  const diff = newConf - oldConf;
+                  return (
+                    <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-lg text-center">
+                      <span className="block text-[10px] text-slate-400 font-medium mb-1">Confiance Titulaire</span>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-300">{playerToReplaceCard ? `${oldConf}%` : 'N/A'}</span>
+                        <ArrowRight className="h-3 w-3 text-slate-600" />
+                        <span className="text-xs font-bold text-white">{newConf}%</span>
+                      </div>
+                      <span className={`inline-block mt-1 text-[10px] font-bold ${
+                        diff > 0 ? 'text-emerald-400' : diff < 0 ? 'text-rose-400' : 'text-slate-500'
+                      }`}>
+                        {diff > 0 ? `+${diff}%` : diff === 0 ? '=' : `${diff}%`}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Composition Score Outlook */}
+              {(() => {
+                const oldProj = playerToReplaceCard ? calculatePlayerProjectedScore(playerToReplaceCard, 'BALANCED', cards).projectedScore : 0;
+                const newProj = calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards).projectedScore;
+                const diff = Math.round((newProj - oldProj) * 10) / 10;
+                const currentCompo = compositions[selectedCompoIndexForReplace];
+                const currentCompoScore = currentCompo?.projectedTotalWithCaptain || currentCompo?.projectedTotal || 0;
+                const nextCompoScore = Math.round((currentCompoScore + diff) * 10) / 10;
+
+                return (
+                  <div className="mt-3 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl bg-slate-900 p-3 border border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-emerald-400" />
+                      <span className="text-xs text-slate-300 font-medium">Impact sur le score total de la composition :</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-sm font-bold text-slate-400">{currentCompoScore} pts</span>
+                      <ArrowRight className="h-3.5 w-3.5 text-slate-600" />
+                      <span className="text-sm font-black text-emerald-400">{nextCompoScore} pts</span>
+                      <span className={`ml-1 rounded px-2 py-0.5 text-xs font-black ${
+                        diff >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                      }`}>
+                        {diff >= 0 ? `+${diff}` : diff} pts
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowComparisonModal(false);
+                  setShowReplacePopup(true); // Return to Chooser Modal
+                }}
+                className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-2.5 text-xs font-bold text-slate-400 hover:text-white hover:bg-slate-850 transition flex items-center gap-1"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                <span>Retour au choix</span>
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => {
+                  // Perform the actual replacement!
+                  if (onReplacePlayerInCompo) {
+                    onReplacePlayerInCompo(
+                      selectedCompoIndexForReplace,
+                      playerToReplaceSlot,
+                      selectedCardForReplace
+                    );
+                  }
+                  // Reset State and Close all modals
+                  setShowComparisonModal(false);
+                  setShowReplacePopup(false);
+                  setSelectedCardForReplace(null);
+                  setPlayerToReplaceSlot(null);
+                  setPlayerToReplaceCard(null);
+                }}
+                className="rounded-xl bg-emerald-500 px-5 py-2.5 text-xs font-black text-slate-950 hover:bg-emerald-400 transition hover:shadow-lg hover:shadow-emerald-500/20 active:scale-95 flex items-center gap-1.5"
+              >
+                <span>Confirmer le remplacement</span>
+                <CheckCircle2 className="h-4 w-4" />
+              </button>
+            </div>
+
           </div>
         </div>
       )}

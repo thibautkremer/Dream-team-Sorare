@@ -157,6 +157,15 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
                   <span>-{breakdown.regressionPenalty} pts</span>
                 </div>
               )}
+              {breakdown.filterLabel && (
+                <div className="flex items-center justify-between text-indigo-400 font-semibold border-t border-slate-800 pt-1.5 mt-0.5">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3 h-3 text-indigo-400" />
+                    Filtre d'historique :
+                  </span>
+                  <span className="text-[11px] text-indigo-300 font-medium">{breakdown.filterLabel}</span>
+                </div>
+              )}
             </div>
           </div>
 

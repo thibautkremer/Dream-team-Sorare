@@ -407,6 +407,47 @@ export default function App() {
     setCurrentTab('pitch');
   };
 
+  const handleReplacePlayerInCompo = (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => {
+    setCompositions(comps => {
+      const copy = [...comps];
+      if (!copy[compoIndex]) return comps;
+      
+      const compo = copy[compoIndex];
+      const updatedSlots = {
+        ...compo.slots,
+        [slot]: player,
+      };
+
+      const baseSum = (
+        (updatedSlots.gk?.upcomingFixture?.projectedScore || 0) +
+        (updatedSlots.def?.upcomingFixture?.projectedScore || 0) +
+        (updatedSlots.mid?.upcomingFixture?.projectedScore || 0) +
+        (updatedSlots.fwd?.upcomingFixture?.projectedScore || 0) +
+        (updatedSlots.extra?.upcomingFixture?.projectedScore || 0)
+      );
+
+      const capPlayer = updatedSlots[compo.captainSlot];
+      const capBonus = capPlayer ? Math.round((capPlayer.upcomingFixture?.projectedScore || 0) * 0.20 * 10) / 10 : 0;
+
+      const updated = {
+        ...compo,
+        slots: updatedSlots,
+        projectedTotal: Math.round(baseSum * 10) / 10,
+        projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
+      };
+
+      copy[compoIndex] = updated;
+
+      if (compoIndex === selectedCompoIndex) {
+        setLineup(updated);
+      }
+
+      return copy;
+    });
+
+    showToast(`${player.displayName} a remplacé le joueur dans la Compo ${compoIndex + 1} !`, 'success');
+  };
+
   const handleSelectComposition = (index: number) => {
     setSelectedCompoIndex(index);
     if (compositions[index]) {
@@ -477,6 +518,8 @@ export default function App() {
             onOpenScout={(c) => setScoutCard(c)}
             onAssignToSlot={handleAssignToSlot}
             onAddCard={handleAddCard}
+            compositions={compositions}
+            onReplacePlayerInCompo={handleReplacePlayerInCompo}
           />
         )}
 
