@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info } from 'lucide-react';
+import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15 } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
@@ -80,6 +80,15 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return res;
   }, [cards]);
 
+  // Memoized Map of card projected scores to avoid re-evaluating calculatePlayerProjectedScore inside loops
+  const projectionsMap = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof calculatePlayerProjectedScore>>();
+    cards.forEach(card => {
+      map.set(card.id, calculatePlayerProjectedScore(card, 'BALANCED', cards));
+    });
+    return map;
+  }, [cards]);
+
   const filteredCards = useMemo(() => {
     return cards.filter(card => {
       const q = searchTerm.toLowerCase().trim();
@@ -148,8 +157,9 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
       let matchesScore = true;
       if (minProjectedScore > 0) {
-        const { projectedScore } = calculatePlayerProjectedScore(card);
-        matchesScore = projectedScore >= minProjectedScore;
+        const cached = projectionsMap.get(card.id);
+        const projScore = cached ? cached.projectedScore : calculatePlayerProjectedScore(card).projectedScore;
+        matchesScore = projScore >= minProjectedScore;
       }
 
       let matchesAas = true;
@@ -164,7 +174,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
       return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore && matchesAas && matchesDs;
     });
-  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore, minAasL15, minDsL15]);
+  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore, minAasL15, minDsL15, projectionsMap]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
@@ -337,7 +347,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                     import('../utils/storage').then(async mod => {
                       try {
                         const username = mod.StorageService.getUsername();
-                        await fetch(`/api/sorare/user-cards?username=${encodeURIComponent(username)}&clearCache=true`).catch(() => {});
+                        const apiKey = mod.StorageService.getApiKey();
+                        await fetch(`/api/sorare/user-cards?username=${encodeURIComponent(username)}&clearCache=true`, {
+                          headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
+                        }).catch(() => {});
                         mod.StorageService.clearCards();
                         window.location.reload();
                       } catch (err) {
@@ -464,7 +477,13 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               type="date"
               value={maxMatchDate}
               onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
-              onClick={(e) => e.currentTarget.showPicker?.()}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  // Browser opens picker natively
+                }
+              }}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
               title="Match inclus jusqu'à cette date"
             />
@@ -698,7 +717,26 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center">
           <Filter className="mx-auto h-8 w-8 text-slate-600 mb-2" />
           <p className="text-sm font-semibold text-slate-300">Aucune carte ne correspond à vos filtres</p>
-          <p className="text-xs text-slate-500 mt-1">Essayez d'élargir la date ou de réduire le pourcentage de victoire minimum.</p>
+          <p className="text-xs text-slate-500 mt-1 mb-4">Essayez de réinitialiser vos recherches ou d'assouplir vos filtres.</p>
+          <button
+            onClick={() => {
+              setSearchTerm('');
+              setSelectedPosition('ALL');
+              setSelectedStatus('ALL');
+              setSelectedRarity('ALL');
+              setMaxMatchDate('');
+              setMinWinProb(0);
+              setSelectedBonusTier('ALL');
+              setSelectedStarsFilter('ALL');
+              setMinProjectedScore(0);
+              setMinAasL15(0);
+              setMinDsL15(0);
+            }}
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-4 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30 transition"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Réinitialiser tous les filtres</span>
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-9">
@@ -709,7 +747,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             const isInjured = card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED';
             const winProb = getPlayerWinProbability(card.upcomingFixture);
             const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
-            const breakdown = calculatePlayerProjectedScore(card, 'BALANCED', cards);
+            const cachedBreakdown = projectionsMap.get(card.id);
+            const breakdown = cachedBreakdown || calculatePlayerProjectedScore(card, 'BALANCED', cards);
             const projScore = breakdown.projectedScore;
 
             return (

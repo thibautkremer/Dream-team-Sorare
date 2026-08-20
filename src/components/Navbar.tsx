@@ -59,7 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   const formattedLastSync = lastSynced
-    ? new Date(lastSynced).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    ? new Date(lastSynced).toLocaleTimeString('fr-FR', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' EDT'
     : null;
 
   return (
@@ -253,9 +253,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
 
           {/* Game Week Tag & Sync Timestamp */}
-          <div className="hidden lg:flex items-center gap-3 text-xs text-slate-400 pl-4">
+          <div className="hidden lg:flex items-center gap-2.5 text-xs text-slate-400 pl-4">
             <span className="flex h-2 w-2 rounded-full bg-emerald-500"></span>
             <span className="font-semibold text-slate-300">{gameWeek.label}</span>
+            <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] font-bold text-amber-300 border border-slate-700/60">
+              🗽 Heure : New York (EDT)
+            </span>
             {formattedLastSync && (
               <span className="text-slate-500">• Sync à {formattedLastSync}</span>
             )}

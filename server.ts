@@ -173,6 +173,7 @@ app.get('/api/health', (req, res) => {
 
 // Admin Logs endpoints
 app.get('/api/admin/logs', (req, res) => {
+  console.log('Received request for /api/admin/logs');
   res.json({ logs: apiLogs, total: apiLogs.length });
 });
 
@@ -223,7 +224,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
 
     // Live fetch exact 40 scores from Sorare GraphQL using anyPlayer allSo5Scores
     try {
-      const customApiKey = (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+      const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'User-Agent': 'TeamSorare-LiveScout/2.0',
@@ -326,6 +327,57 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
         if (allNodes.length > 0) {
           activeSlug = candSlug;
           break;
+        }
+      }
+
+      if (allNodes.length === 0 && targetSlug) {
+        try {
+          const cardQuery = `
+            query GetCardPlayerSlug($targetSlug: String!) {
+              anyCard(slug: $targetSlug) {
+                ... on Card {
+                  anyPlayer {
+                    ... on Player {
+                      slug
+                    }
+                  }
+                }
+              }
+            }
+          `;
+          const cardRes = await fetchGraphQLWithRetry(
+            'https://api.sorare.com/graphql',
+            { query: cardQuery, variables: { targetSlug } },
+            headers,
+            2
+          );
+          const resolvedPlayerSlug = cardRes.ok ? cardRes.data?.data?.anyCard?.anyPlayer?.slug : null;
+          if (resolvedPlayerSlug && !slugCandidates.includes(resolvedPlayerSlug)) {
+            cursor = null;
+            for (let page = 0; page < 3; page++) {
+              const pageSize = page === 2 ? 12 : 14;
+              const pageRes = await fetchGraphQLWithRetry(
+                'https://api.sorare.com/graphql',
+                { query: queryPage, variables: { playerSlug: resolvedPlayerSlug, first: pageSize, after: cursor } },
+                headers,
+                2
+              );
+              if (pageRes.ok && pageRes.data?.data?.anyPlayer) {
+                const playerObj = pageRes.data.data.anyPlayer;
+                if (!playerMeta) playerMeta = playerObj;
+                const nodes = playerObj.allSo5Scores?.nodes || [];
+                allNodes.push(...nodes);
+                cursor = playerObj.allSo5Scores?.pageInfo?.endCursor || null;
+                if (!playerObj.allSo5Scores?.pageInfo?.hasNextPage || allNodes.length >= 40) {
+                  break;
+                }
+              } else {
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[Live Detail] anyCard fallback error:', e);
         }
       }
 
@@ -552,6 +604,349 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
   }
 });
 
+// Sorare Direct Live Scoring API Endpoint
+app.get('/api/sorare/live-scoring', async (req, res) => {
+  const rawUsername = (req.query.username as string) || 'thib-8';
+  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const slug = cleanSlug(rawUsername);
+  const startTime = Date.now();
+
+  try {
+    const hasApiKey = Boolean(customApiKey);
+    const pageSize = hasApiKey ? 50 : 3;
+    let allNodes: any[] = [];
+    let hasNextPage = true;
+    let endCursor: string | null = null;
+    let fetchCount = 0;
+    const maxFetches = hasApiKey ? 15 : 35; // Up to 750 cards or 105 cards
+
+    const query = hasApiKey
+      ? `
+        query GetLiveScoringDataApiKey($slug: String!, $after: String) {
+          user(slug: $slug) {
+            cards(first: ${pageSize}, after: $after, sport: FOOTBALL) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              nodes {
+                id
+                slug
+                anyPlayer {
+                  ... on Player {
+                    displayName
+                    slug
+                    playingStatus
+                    so5Scores(last: 3) {
+                      score
+                      decisiveScore { totalScore }
+                      allAroundStats { totalScore }
+                      game {
+                        id
+                        date
+                        statusTyped
+                        homeGoals
+                        awayGoals
+                        homeTeam { name pictureUrl }
+                        awayTeam { name pictureUrl }
+                        competition { name }
+                      }
+                    }
+                    activeClub {
+                      name
+                      pictureUrl
+                      upcomingGames(first: 1) {
+                        id
+                        date
+                        statusTyped
+                        homeGoals
+                        awayGoals
+                        homeTeam { name pictureUrl }
+                        awayTeam { name pictureUrl }
+                        competition { name }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `
+      : `
+        query GetLiveScoringDataPublic($slug: String!, $after: String) {
+          user(slug: $slug) {
+            cards(first: ${pageSize}, after: $after, sport: FOOTBALL) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              nodes {
+                id
+                slug
+                anyPlayer {
+                  ... on Player {
+                    displayName
+                    slug
+                    playingStatus
+                    so5Scores(last: 1) {
+                      score
+                      game {
+                        id
+                        date
+                        statusTyped
+                        homeGoals
+                        awayGoals
+                      }
+                    }
+                    activeClub {
+                      name
+                      upcomingGames(first: 1) {
+                        id
+                        date
+                        statusTyped
+                        homeGoals
+                        awayGoals
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'TeamSorare-App/2.0',
+    };
+    if (customApiKey) {
+      headers['APIKEY'] = customApiKey;
+    }
+
+    while (hasNextPage && fetchCount < maxFetches) {
+      fetchCount++;
+      const variables: any = { slug };
+      if (endCursor) {
+        variables.after = endCursor;
+      }
+
+      const gqlResult = await fetchGraphQLWithRetry(
+        'https://api.sorare.com/graphql',
+        { query, variables },
+        headers,
+        2
+      );
+
+      if (gqlResult.ok && gqlResult.data?.data?.user?.cards) {
+        const cardsData = gqlResult.data.data.user.cards;
+        if (cardsData.nodes && cardsData.nodes.length > 0) {
+          allNodes = allNodes.concat(cardsData.nodes);
+        }
+        hasNextPage = cardsData.pageInfo?.hasNextPage || false;
+        endCursor = cardsData.pageInfo?.endCursor || null;
+      } else {
+        console.warn(`[LiveScoring] Error or missing data on page ${fetchCount}`, gqlResult.error);
+        hasNextPage = false;
+      }
+    }
+
+    if (allNodes.length > 0) {
+      const liveScoresMap: Record<string, any> = {};
+
+      allNodes.forEach((node: any) => {
+        const player = node.anyPlayer;
+        if (!player) return;
+
+        const so5Scores = player.so5Scores || [];
+        // Find if any SO5 score corresponds to a game that is live, or pick the first/latest
+        const liveSo5 = so5Scores.find((s: any) => {
+          const st = (s.game?.statusTyped || '').toLowerCase();
+          return st === 'live' || st === 'in_play' || st === 'ht';
+        }) || so5Scores[0];
+
+        const upcomingGame = player.activeClub?.upcomingGames?.[0];
+
+        const latestSo5Game = liveSo5?.game;
+        const upcomingClubGame = upcomingGame;
+
+        // Choose activeGame intelligently based on proximity to now and status
+        let activeGame = null;
+        const nowMs = Date.now();
+
+        if (latestSo5Game && upcomingClubGame) {
+          const statusSo5 = (latestSo5Game.statusTyped || '').toLowerCase();
+          const statusUp = (upcomingClubGame.statusTyped || '').toLowerCase();
+
+          // If either game is currently live, prioritize the live game
+          if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'ht') {
+            activeGame = latestSo5Game;
+          } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'ht') {
+            activeGame = upcomingClubGame;
+          } else {
+            // Compare time distance to now
+            const tSo5 = latestSo5Game.date ? new Date(latestSo5Game.date).getTime() : Infinity;
+            const tUp = upcomingClubGame.date ? new Date(upcomingClubGame.date).getTime() : Infinity;
+
+            const distSo5 = isNaN(tSo5) ? Infinity : Math.abs(nowMs - tSo5);
+            const distUp = isNaN(tUp) ? Infinity : Math.abs(nowMs - tUp);
+
+            if (distSo5 <= distUp) {
+              activeGame = latestSo5Game;
+            } else {
+              activeGame = upcomingClubGame;
+            }
+          }
+        } else {
+          activeGame = latestSo5Game || upcomingClubGame;
+        }
+
+        const liveScore = liveSo5?.score != null ? Math.round(Number(liveSo5.score) * 10) / 10 : null;
+        const decisiveScore = liveSo5?.decisiveScore?.totalScore != null ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10 : null;
+
+        const scoreEntry = {
+          cardId: node.id,
+          cardSlug: node.slug,
+          playerSlug: player.slug,
+          displayName: player.displayName,
+          playingStatus: player.playingStatus,
+          liveScore,
+          decisiveScore,
+          clubPictureUrl: player.activeClub?.pictureUrl || '',
+          so5ScoresHistory: so5Scores.map((s: any) => ({
+            score: s.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
+            decisiveScore: s.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
+            allAroundScore: s.allAroundStats?.totalScore != null ? Math.round(Number(s.allAroundStats.totalScore) * 10) / 10 : null,
+            game: s.game ? {
+              id: s.game.id,
+              date: s.game.date,
+              statusTyped: s.game.statusTyped,
+              homeGoals: s.game.homeGoals ?? 0,
+              awayGoals: s.game.awayGoals ?? 0,
+              homeTeam: s.game.homeTeam?.name || 'Équipe 1',
+              homeTeamPicture: s.game.homeTeam?.pictureUrl || '',
+              awayTeam: s.game.awayTeam?.name || 'Équipe 2',
+              awayTeamPicture: s.game.awayTeam?.pictureUrl || '',
+              competition: s.game.competition?.name || 'Championnat',
+            } : null,
+          })),
+          game: activeGame ? {
+            id: activeGame.id,
+            date: activeGame.date,
+            statusTyped: activeGame.statusTyped,
+            homeGoals: activeGame.homeGoals ?? 0,
+            awayGoals: activeGame.awayGoals ?? 0,
+            homeTeam: activeGame.homeTeam?.name || 'Équipe 1',
+            homeTeamPicture: activeGame.homeTeam?.pictureUrl || '',
+            awayTeam: activeGame.awayTeam?.name || 'Équipe 2',
+            awayTeamPicture: activeGame.awayTeam?.pictureUrl || '',
+            competition: activeGame.competition?.name || 'Championnat',
+          } : null,
+          upcomingGame: upcomingClubGame ? {
+            id: upcomingClubGame.id,
+            date: upcomingClubGame.date,
+            statusTyped: upcomingClubGame.statusTyped,
+            homeGoals: upcomingClubGame.homeGoals ?? 0,
+            awayGoals: upcomingClubGame.awayGoals ?? 0,
+            homeTeam: upcomingClubGame.homeTeam?.name || 'Équipe 1',
+            homeTeamPicture: upcomingClubGame.homeTeam?.pictureUrl || '',
+            awayTeam: upcomingClubGame.awayTeam?.name || 'Équipe 2',
+            awayTeamPicture: upcomingClubGame.awayTeam?.pictureUrl || '',
+            competition: upcomingClubGame.competition?.name || 'Championnat',
+          } : null,
+        };
+
+        liveScoresMap[node.id] = scoreEntry;
+        if (node.id.startsWith('Card:')) {
+          liveScoresMap[node.id.replace('Card:', '')] = scoreEntry;
+        }
+        if (node.slug) {
+          liveScoresMap[node.slug] = scoreEntry;
+        }
+        if (player.slug) {
+          liveScoresMap[player.slug] = scoreEntry;
+        }
+      });
+
+      // Update cached user cards if present
+      const cached = userCardsCache.get(slug);
+      if (cached && cached.cards) {
+        cached.cards.forEach((card: any) => {
+          const liveUpdate = liveScoresMap[card.id];
+          if (liveUpdate) {
+            if (liveUpdate.liveScore !== null) {
+              card.scores = {
+                ...card.scores,
+                liveScore: liveUpdate.liveScore,
+              };
+            }
+            if (liveUpdate.game) {
+              const g = liveUpdate.game;
+              card.upcomingFixture = {
+                ...card.upcomingFixture,
+                status: g.statusTyped,
+                kickoffDate: g.date,
+                matchDate: g.date,
+                homeGoals: g.homeGoals,
+                awayGoals: g.awayGoals,
+                homeTeamName: g.homeTeam,
+                awayTeamName: g.awayTeam,
+                competitionName: g.competition,
+                opponent: card.club?.name && g.homeTeam.toLowerCase().includes(card.club.name.toLowerCase()) ? g.awayTeam : g.homeTeam,
+                isHome: card.club?.name ? g.homeTeam.toLowerCase().includes(card.club.name.toLowerCase()) : true,
+              };
+            }
+          }
+        });
+      }
+
+      const durationMs = Date.now() - startTime;
+      addApiLog({
+        description: `Sorare API Direct: Scoring Live synchronisé (${allNodes.length} cartes)`,
+        service: 'Sorare API',
+        method: 'GET /api/sorare/live-scoring',
+        status: 'SUCCESS',
+        statusCode: 200,
+        durationMs,
+        requestSummary: { slug, customApiKeyProvided: Boolean(customApiKey) },
+        responseSummary: { totalCards: allNodes.length, liveDataCount: Object.keys(liveScoresMap).length },
+      });
+
+      return res.json({
+        success: true,
+        source: 'sorare_graphql_direct',
+        timestamp: new Date().toISOString(),
+        totalCards: allNodes.length,
+        liveScores: liveScoresMap,
+        cards: cached?.cards || [],
+      });
+    }
+
+    return res.json({
+      success: true,
+      source: 'server_cache_fallback',
+      timestamp: new Date().toISOString(),
+      liveScores: {},
+      cards: userCardsCache.get(slug)?.cards || [],
+    });
+  } catch (err: any) {
+    const durationMs = Date.now() - startTime;
+    addApiLog({
+      description: `Sorare API Direct: Erreur Live Scoring (${slug})`,
+      service: 'Sorare API',
+      method: 'GET /api/sorare/live-scoring',
+      status: 'ERROR',
+      statusCode: 500,
+      durationMs,
+      requestSummary: { slug },
+      responseSummary: { error: err.message },
+      error: err.message,
+    });
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Helper for cleaning Sorare username slugs
 app.get('/api/admin/debug-raya', (req, res) => {
   const cards = Array.from(userCardsCache.values()).flatMap(c => c.cards);
@@ -718,6 +1113,76 @@ const realOddsCache = new Map<string, {
 }>();
 let lastOddsFetch = 0;
 const ODDS_CACHE_TTL = 1000 * 60 * 60 * 4; // 4 hours
+
+// Open-Meteo Weather API Integration
+const weatherCache = new Map<string, { temp: number; description: string; wind: number; source: string; city: string; timestamp: number }>();
+const WEATHER_CACHE_TTL = 1000 * 60 * 60; // 1 hour
+
+function getWeatherDescription(code: number): string {
+  if (code === 0) return 'Ciel dégagé';
+  if (code <= 3) return 'Partiellement nuageux';
+  if (code <= 48) return 'Brouillard';
+  if (code <= 67) return 'Pluie modérée';
+  if (code <= 77) return 'Chutes de neige';
+  if (code <= 82) return 'Averses de pluie';
+  if (code <= 99) return 'Orage / Précipitations';
+  return 'Temps idéal';
+}
+
+app.get('/api/weather', async (req, res) => {
+  const city = ((req.query.city as string) || (req.query.club as string) || 'Paris').trim();
+  const cacheKey = city.toLowerCase();
+  const cached = weatherCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp < WEATHER_CACHE_TTL)) {
+    return res.json({ success: true, ...cached });
+  }
+
+  try {
+    const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=fr&format=json`;
+    const geoRes = await fetch(geoUrl);
+    let lat = 48.8566;
+    let lon = 2.3522;
+    let resolvedCity = city;
+
+    if (geoRes.ok) {
+      const geoData = await geoRes.json();
+      if (geoData.results && geoData.results.length > 0) {
+        lat = geoData.results[0].latitude;
+        lon = geoData.results[0].longitude;
+        resolvedCity = geoData.results[0].name;
+      }
+    }
+
+    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m`;
+    const wRes = await fetch(weatherUrl);
+    if (wRes.ok) {
+      const wData = await wRes.json();
+      const current = wData.current;
+      const weatherInfo = {
+        temp: Math.round(current.temperature_2m),
+        description: getWeatherDescription(current.weather_code),
+        wind: Math.round(current.wind_speed_10m),
+        source: 'Open-Meteo Live API',
+        city: resolvedCity,
+        timestamp: Date.now()
+      };
+      weatherCache.set(cacheKey, weatherInfo);
+      return res.json({ success: true, ...weatherInfo });
+    }
+  } catch (err) {
+    console.warn('[Open-Meteo] Weather fetch notice:', err);
+  }
+
+  const fallbackInfo = {
+    temp: 18,
+    description: 'Ensoleillé / Météo idéale',
+    wind: 10,
+    source: 'Estimation Météo',
+    city,
+    timestamp: Date.now()
+  };
+  return res.json({ success: true, ...fallbackInfo });
+});
 
 async function fetchRealBookmakerOdds() {
   const apiKey = process.env.ODDS_API_KEY;
@@ -1089,10 +1554,8 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         // 3. Exact L5, L10, L15, L40 averages (over matches played, excluding DNP/0)
     // Helper to calculate average of played matches
     const calcAvg = (scores: number[]) => {
-      const played = scores.filter(s => s > 0);
-      return played.length > 0
-        ? Math.round((played.reduce((a, b) => a + b, 0) / played.length) * 10) / 10
-        : 0;
+      if (scores.length === 0) return 0;
+      return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
     };
 
         let l5 = (player?.l5 != null) ? Math.round(Number(player.l5) * 10) / 10 : calcAvg(last5Scores);
@@ -1477,6 +1940,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         success: true,
         source: 'sorare_api_live',
         slug,
+        isDegradedMode: false,
         user: finalUser,
         cards: finalCollection,
         totalCards: finalCollection.length,
@@ -1485,6 +1949,31 @@ app.get('/api/sorare/user-cards', async (req, res) => {
     }
   } catch (error: any) {
     console.log('[Sorare Sync] Direct GraphQL error:', error);
+    
+    // Circuit Breaker / Degraded Mode Fallback
+    const cached = userCardsCache.get(slug);
+    if (cached && cached.cards && cached.cards.length > 0) {
+      console.log(`[Circuit Breaker] Serving ${cached.cards.length} stale cached cards for "${slug}" in degraded mode.`);
+      syncProgressMap.set(slug, {
+        fetchedPages: 0,
+        estimatedTotalPages: 0,
+        fetchedCards: cached.cards.length,
+        status: 'done',
+        error: 'Mode dégradé actif (API Rate Limit / Erreur réseau)'
+      });
+      return res.json({
+        success: true,
+        source: 'cache_degraded',
+        isDegradedMode: true,
+        degradedReason: `Erreur API Sorare (${error.message || '429 Rate Limit'}). Données en cache local utilisées.`,
+        slug,
+        user: cached.user,
+        cards: cached.cards,
+        totalCards: cached.cards.length,
+        syncedAt: new Date(cached.timestamp).toISOString(),
+      });
+    }
+
     syncProgressMap.set(slug, {
       fetchedPages: 0,
       estimatedTotalPages: 0,
@@ -1492,7 +1981,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       status: 'error',
       error: error.message || 'Erreur lors de la synchronisation Sorare'
     });
-    return res.status(500).json({ success: false, error: error.message || 'Erreur lors de la synchronisation Sorare' });
+    return res.status(500).json({ success: false, isDegradedMode: true, error: error.message || 'Erreur lors de la synchronisation Sorare' });
   }
 
   // If no error but also not returned yet
@@ -2202,7 +2691,12 @@ Règles de jeu Sorare :
 Réponds de façon experte, concise, motivante et stratégique en français. Propose toujours des choix concrets argumentés.`;
 
     const galleryContext = Array.isArray(gallery)
-      ? gallery.slice(0, 60).map(c => `${c.displayName} (${c.positionCode}, ${c.club?.name || ''}, L5:${c.scores?.l5}, L15:${c.scores?.l15}, Statut:${c.status}, vs ${c.upcomingFixture?.opponent || ''})`).join('\n')
+      ? gallery
+          .filter(c => c && c.scores?.l5 != null)
+          .sort((a, b) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0))
+          .slice(0, 45)
+          .map(c => `${c.displayName} (${c.positionCode}, ${c.club?.name || ''}, L5:${c.scores?.l5}, L15:${c.scores?.l15}, Statut:${c.status}, vs ${c.upcomingFixture?.opponent || 'N/A'})`)
+          .join('\n')
       : 'Galerie standard Thib 8';
 
     const prompt = `Contexte de la galerie de Thib 8 (GW ${gameWeek}) :

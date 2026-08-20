@@ -221,6 +221,7 @@ export interface Lineup {
   strategy: StrategyType;
   scoringFocus?: ScoringFocus;
   gameWeek: number;
+  isLocked?: boolean;
   slots: {
     gk: SorareCard | null;
     def: SorareCard | null;
@@ -247,7 +248,6 @@ export interface Lineup {
     };
   };
   createdAt: string;
-  isLocked?: boolean;
 }
 
 export interface GameWeekInfo {

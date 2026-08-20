@@ -67,6 +67,13 @@ export interface PlayerRecentMatchStats {
 }
 
 /**
+ * Retourne une clé unique pour identifier un joueur (indépendamment de la carte/bonus)
+ */
+export function getPlayerUniqueKey(card: SorareCard): string {
+  return (card.slug || card.displayName || card.id).toLowerCase().trim();
+}
+
+/**
  * Analyse la participation aux derniers matchs pour détecter les joueurs écartés ou remplaçants
  */
 export function getPlayerRecentMatchAnalysis(card: SorareCard): PlayerRecentMatchStats {
@@ -235,30 +242,55 @@ export function getPlayerWinProbability(fixture?: UpcomingFixture | null): numbe
 }
 
 /**
- * Formate la date de coup d'envoi en français
+ * Formate la date de coup d'envoi à l'heure de New York City (EDT / EST)
  */
 export function formatKickoffDate(dateInput?: string | { kickoffDate?: string; kickoffFormatted?: string; matchDate?: string } | null): string {
   if (!dateInput) return 'Date à confirmer';
   
+  let rawIso = '';
   if (typeof dateInput === 'object') {
-    if (dateInput.kickoffFormatted) return dateInput.kickoffFormatted;
-    dateInput = dateInput.kickoffDate || dateInput.matchDate;
+    rawIso = dateInput.kickoffDate || dateInput.matchDate || '';
+  } else if (typeof dateInput === 'string') {
+    rawIso = dateInput;
   }
   
-  if (!dateInput || typeof dateInput !== 'string') return 'Date à confirmer';
+  if (rawIso) {
+    try {
+      const d = new Date(rawIso);
+      if (!isNaN(d.getTime())) {
+        const formatter = new Intl.DateTimeFormat('fr-FR', {
+          timeZone: 'America/New_York',
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        });
 
-  try {
-    const d = new Date(dateInput);
-    if (isNaN(d.getTime())) return 'Date à confirmer';
-    const weekday = d.toLocaleDateString('fr-FR', { weekday: 'short' });
-    const day = d.getDate();
-    const month = d.toLocaleDateString('fr-FR', { month: 'short' });
-    const hours = d.getHours().toString().padStart(2, '0');
-    const minutes = d.getMinutes().toString().padStart(2, '0');
-    return `${weekday.charAt(0).toUpperCase() + weekday.slice(1)} ${day} ${month} à ${hours}:${minutes}`;
-  } catch {
-    return 'Date à confirmer';
+        const parts = formatter.formatToParts(d);
+        let weekday = '', day = '', month = '', hour = '', minute = '';
+        for (const part of parts) {
+          if (part.type === 'weekday') weekday = part.value;
+          if (part.type === 'day') day = part.value;
+          if (part.type === 'month') month = part.value;
+          if (part.type === 'hour') hour = part.value;
+          if (part.type === 'minute') minute = part.value;
+        }
+
+        const capWeekday = weekday ? weekday.charAt(0).toUpperCase() + weekday.slice(1) : '';
+        return `${capWeekday} ${day} ${month} à ${hour}:${minute} EDT`;
+      }
+    } catch {
+      // Fallback
+    }
   }
+
+  if (typeof dateInput === 'object' && dateInput.kickoffFormatted) {
+    return dateInput.kickoffFormatted;
+  }
+
+  return 'Date à confirmer';
 }
 
 export interface ClubContext {
@@ -441,7 +473,11 @@ export function calculatePlayerProjectedScore(
 
       l5 = calcAverage(filteredScores, 5);
       l15 = calcAverage(filteredScores, 15);
-      l40 = calcAverage(filteredScores, 40);
+      if (card.scores?.l40 != null && card.scores.l40 > 0) {
+        l40 = card.scores.l40;
+      } else {
+        l40 = calcAverage(filteredScores, 40);
+      }
       recentStats = getClubOnlyRecentMatchAnalysis(filteredScores, card, upcomingIsNational);
       
       if (!upcomingIsNational) {
@@ -529,7 +565,7 @@ export function calculatePlayerProjectedScore(
     bonusBreakdown,
   };
 
-  let playerStatus = card.status || 'REGULAR';
+  let playerStatus: string = card.status || 'REGULAR';
 
   // Correction dynamique du statut si l'analyse récente contredit le statut de la carte
   if (upcomingIsNational) {
@@ -559,6 +595,11 @@ export function calculatePlayerProjectedScore(
 
   // Si le joueur n'a disputé aucun match sur les 5 derniers, le risque DNP est maximal (score 0)
   if (recentStats.playedCountL5 === 0 && playerStatus !== 'STARTER') {
+    return emptyBreakdown;
+  }
+
+  // Exclure les remplaçants confirmés (SUBSTITUTE / BENCH) ou joueurs écartés selon les dernières compos
+  if (playerStatus === 'SUBSTITUTE' || playerStatus === 'SUPER_SUBSTITUTE' || playerStatus === 'BENCH' || recentStats.consecutiveDnpCount >= 2 || recentStats.recentPlayingFactor < 0.30) {
     return emptyBreakdown;
   }
 
@@ -1111,7 +1152,8 @@ export function optimizeLineup(
   strategy: StrategyType = 'BALANCED',
   gameWeek: number = 48,
   filters: LineupOptimizationFilters = {},
-  usedCardIds: Set<string> = new Set<string>()
+  usedCardIds: Set<string> = new Set<string>(),
+  usedPlayerKeys: Set<string> = new Set<string>()
 ): Lineup {
   // Precompute Club Context (Absent Stars) to avoid O(N^2)
   const clubContext: Record<string, ClubContext> = {};
@@ -1247,31 +1289,37 @@ export function optimizeLineup(
     const currentList: SorareCard[] = [];
     if (rootGk) currentList.push(rootGk);
 
+    // Helper function to check if a card or physical player is already used or in current list
+    const isPlayerAlreadyUsed = (card: SorareCard) => {
+      const pKey = getPlayerUniqueKey(card);
+      if (usedCardIds.has(card.id) || usedPlayerKeys.has(pKey)) return true;
+      return currentList.some(p => p.id === card.id || getPlayerUniqueKey(p) === pKey);
+    };
+
     // DEF
     const defCandidates = finalEligible
-      .filter(sc => sc.player.positionCode === 'DEF' && !usedCardIds.has(sc.player.id) && !currentList.some(p => p.id === sc.player.id))
+      .filter(sc => sc.player.positionCode === 'DEF' && !isPlayerAlreadyUsed(sc.player))
       .sort(compareCandidates);
     const selectedDef = selectPlayerForPosition(defCandidates, currentList, false, 4.0);
     if (selectedDef) currentList.push(selectedDef);
 
     // MID
     const midCandidates = finalEligible
-      .filter(sc => sc.player.positionCode === 'MID' && !usedCardIds.has(sc.player.id) && !currentList.some(p => p.id === sc.player.id))
+      .filter(sc => sc.player.positionCode === 'MID' && !isPlayerAlreadyUsed(sc.player))
       .sort(compareCandidates);
     const selectedMid = selectPlayerForPosition(midCandidates, currentList, false, 4.0);
     if (selectedMid) currentList.push(selectedMid);
 
     // FWD
     const fwdCandidates = finalEligible
-      .filter(sc => sc.player.positionCode === 'FWD' && !usedCardIds.has(sc.player.id) && !currentList.some(p => p.id === sc.player.id))
+      .filter(sc => sc.player.positionCode === 'FWD' && !isPlayerAlreadyUsed(sc.player))
       .sort(compareCandidates);
     const selectedFwd = selectPlayerForPosition(fwdCandidates, currentList, false, 4.0);
     if (selectedFwd) currentList.push(selectedFwd);
 
     // EXTRA : le meilleur joueur restant parmi DEF, MID, FWD (ou respectant preferredExtraPosition)
-    const localUsed = new Set<string>(currentList.map(p => p.id));
     let outfieldCandidates = finalEligible
-      .filter(sc => sc.player.positionCode !== 'GK' && !usedCardIds.has(sc.player.id) && !localUsed.has(sc.player.id));
+      .filter(sc => sc.player.positionCode !== 'GK' && !isPlayerAlreadyUsed(sc.player));
 
     if (filters.preferredExtraPosition && filters.preferredExtraPosition !== 'AUTO') {
       outfieldCandidates = outfieldCandidates.filter(sc => sc.player.positionCode === filters.preferredExtraPosition);
@@ -1441,6 +1489,7 @@ export function generateFourDistinctLineups(
 ): Lineup[] {
   const lineups: Lineup[] = [];
   const usedCardIds = new Set<string>();
+  const usedPlayerKeys = new Set<string>();
 
   const strategies: { name: string; type: StrategyType }[] = [
     { name: 'Compo 1', type: 'BALANCED' },
@@ -1451,15 +1500,17 @@ export function generateFourDistinctLineups(
 
   for (let i = 0; i < 4; i++) {
     const s = strategies[i];
-    const lineup = optimizeLineup(cards, s.type, gameWeek, filters, usedCardIds);
+    const lineup = optimizeLineup(cards, s.type, gameWeek, filters, usedCardIds, usedPlayerKeys);
     lineup.name = s.name;
     
-    // Enregistrer les cartes utilisées pour la compo suivante
-    if (lineup.slots.gk) usedCardIds.add(lineup.slots.gk.id);
-    if (lineup.slots.def) usedCardIds.add(lineup.slots.def.id);
-    if (lineup.slots.mid) usedCardIds.add(lineup.slots.mid.id);
-    if (lineup.slots.fwd) usedCardIds.add(lineup.slots.fwd.id);
-    if (lineup.slots.extra) usedCardIds.add(lineup.slots.extra.id);
+    // Enregistrer les cartes et joueurs utilisés pour les compos suivantes
+    ['gk', 'def', 'mid', 'fwd', 'extra'].forEach((slotKey) => {
+      const cardInSlot = lineup.slots[slotKey as keyof typeof lineup.slots];
+      if (cardInSlot) {
+        usedCardIds.add(cardInSlot.id);
+        usedPlayerKeys.add(getPlayerUniqueKey(cardInSlot));
+      }
+    });
 
     lineups.push(lineup);
   }

@@ -1,5 +1,5 @@
-import React from 'react';
-import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw } from 'lucide-react';
 import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 import { getCardTotalBonus } from '../utils/sorareSlug';
@@ -54,6 +54,18 @@ export function isSamePlayer(c1: SorareCard, c2: SorareCard): boolean {
 }
 
 export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, onOpenScout, strategy }) => {
+  // Live 60-second ticker to update kickoff relative times
+  const [ticker, setTicker] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTicker(t => t + 1);
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Weather Map fetched from Open-Meteo API
+  const [weatherMap, setWeatherMap] = useState<Record<string, { temp: number; description: string; wind: number; source: string; city: string }>>({});
+
   // Extract unique fixtures from cards
   const fixtureMap = new Map<string, FixtureAggregate>();
 
@@ -82,7 +94,6 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         });
       } else {
         const fixture = fixtureMap.get(key)!;
-        // Deduplicate player: Keep strictly ONE card per player (highest bonus percentage)
         const existingIdx = fixture.players.findIndex(p => isSamePlayer(p, card));
 
         if (existingIdx === -1) {
@@ -98,6 +109,34 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
       }
     }
   });
+
+  // Fetch real Open-Meteo weather for clubs in background
+  useEffect(() => {
+    const clubsToFetch = Array.from(new Set(Array.from(fixtureMap.values()).map(f => f.club))).slice(0, 15);
+    clubsToFetch.forEach(async (clubName) => {
+      if (weatherMap[clubName]) return;
+      try {
+        const res = await fetch(`/api/weather?city=${encodeURIComponent(clubName)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            setWeatherMap(prev => ({
+              ...prev,
+              [clubName]: {
+                temp: data.temp,
+                description: data.description,
+                wind: data.wind,
+                source: data.source,
+                city: data.city
+              }
+            }));
+          }
+        }
+      } catch (err) {
+        // Silent catch
+      }
+    });
+  }, [cards.length]);
 
   // State for filtering and sorting
   const [selectedCompetition, setSelectedCompetition] = React.useState<string>('ALL');
@@ -401,8 +440,20 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         {processedFixtures.length === 0 ? (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center">
             <Calendar className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-            <p className="text-base font-bold text-white">Aucun match trouvé</p>
-            <p className="text-xs text-slate-400 mt-1">Essayez d'assouplir vos critères de recherche ou de filtre de championnat.</p>
+            <p className="text-base font-bold text-white">Aucun match ne correspond aux critères</p>
+            <p className="text-xs text-slate-400 mt-1 mb-4">Essayez d'assouplir vos critères de recherche ou de filtre de championnat.</p>
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setSelectedCompetition('ALL');
+                setSelectedDay('ALL');
+                setMinWinChance(0);
+              }}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-4 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30 transition"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Réinitialiser tous les filtres</span>
+            </button>
           </div>
         ) : (
           processedFixtures.map((fixture, idx) => {
@@ -418,6 +469,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
             const lossProb = Math.round((invLoss / sumInv) * 100);
 
             const formattedDate = fixture.kickoffFormatted || formatKickoffDate(fixture.kickoffDate);
+            const wInfo = weatherMap[fixture.club];
 
             return (
               <div
@@ -444,6 +496,14 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                           </span>
                         )}
                       </span>
+
+                      {/* Open-Meteo Weather Badge */}
+                      {wInfo && (
+                        <span className="text-[10px] text-sky-300 font-bold flex items-center gap-1 bg-sky-950/80 px-2 py-0.5 rounded-md border border-sky-800/80" title={`Données météo réelles Open-Meteo pour ${wInfo.city}`}>
+                          <CloudSun className="h-3 w-3 text-sky-400" />
+                          <span>{wInfo.temp}°C • {wInfo.description}</span>
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2.5 text-base font-black text-white">
@@ -461,7 +521,9 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                     
                     {/* Win Odds */}
                     <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Probas 1N2</span>
+                      <div className="flex items-center justify-center gap-1">
+                        <span className="block text-[10px] font-bold text-slate-400 uppercase">Probas 1N2</span>
+                      </div>
                       <span className="text-sm font-black text-emerald-400 font-mono">{winProb}% / {drawProb}% / {lossProb}%</span>
                       <span className="block text-[9px] text-emerald-300 font-semibold">V / N / D</span>
                     </div>

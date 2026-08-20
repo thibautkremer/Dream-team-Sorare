@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck } from 'lucide-react';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub } from '../utils/optimizer';
-import { formatPositionBadge, formatStatusBadge, getPlayerStars } from '../utils/sorareSlug';
+import { formatPositionBadge, formatStatusBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
 
 interface PitchViewProps {
   lineup: Lineup;
@@ -19,6 +19,7 @@ interface PitchViewProps {
   selectedCompoIndex: number;
   onSelectComposition: (index: number) => void;
   onExportLineup?: (lineup: Lineup) => void;
+  onToggleLockCompo?: (index: number) => void;
 }
 
 export const PitchView: React.FC<PitchViewProps> = ({
@@ -36,12 +37,44 @@ export const PitchView: React.FC<PitchViewProps> = ({
   selectedCompoIndex,
   onSelectComposition,
   onExportLineup,
+  onToggleLockCompo,
 }) => {
   // Accordion state: filters open by default, can be toggled
   const [isFiltersOpen, setIsFiltersOpen] = useState(true);
   
   // Track which composition's pitch is currently expanded (hidden by default = null)
   const [expandedPitchIndex, setExpandedPitchIndex] = useState<number | null>(null);
+
+  // Mobile layout state: compact list mode vs vertical formation mode
+  const [mobileCompactView, setMobileCompactView] = useState(false);
+
+  // Track removed sold/missing cards count for desynchronization alert
+  const [removedCardsCount, setRemovedCardsCount] = useState<number>(0);
+
+  // Validate lineup slots against current gallery to remove sold/missing cards safely
+  React.useEffect(() => {
+    if (!cards || cards.length === 0) return;
+    const cardIds = new Set(cards.map(c => c.id));
+    let removedTotal = 0;
+    const newSlots = { ...lineup.slots };
+
+    (['gk', 'def', 'mid', 'fwd', 'extra'] as const).forEach(slotKey => {
+      const card = newSlots[slotKey];
+      if (card && !cardIds.has(card.id)) {
+        // Card is no longer in gallery
+        newSlots[slotKey] = null;
+        removedTotal++;
+      }
+    });
+
+    if (removedTotal > 0) {
+      setRemovedCardsCount(prev => prev + removedTotal);
+      setLineup(prev => ({
+        ...prev,
+        slots: newSlots
+      }));
+    }
+  }, [cards]);
 
   const handleToggleCompositionPitch = (index: number) => {
     onSelectComposition(index);
@@ -121,7 +154,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
     return (
       <div
         onClick={() => onOpenScout(card)}
-        className={`relative flex h-auto min-h-[300px] sm:min-h-[335px] w-40 sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
+        className={`relative flex h-auto min-h-[275px] sm:min-h-[335px] w-36 xs:w-40 sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
           isCaptain
             ? 'border-emerald-400 ring-2 ring-emerald-400/40 bg-gradient-to-b from-emerald-950/50 via-slate-900/90 to-slate-950 shadow-emerald-500/10'
             : 'border-slate-700/70 bg-slate-900/90 hover:border-slate-500'
@@ -291,7 +324,16 @@ export const PitchView: React.FC<PitchViewProps> = ({
               Terrain Tactique - {targetLineup.name}
             </h4>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+            {/* Mobile View Mode Toggle */}
+            <button
+              type="button"
+              onClick={() => setMobileCompactView(v => !v)}
+              className="md:hidden flex items-center gap-1.5 rounded-xl bg-slate-800/90 border border-slate-700 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:text-white transition"
+            >
+              <span>{mobileCompactView ? '⚽ Formation' : '📋 Vue Compacte'}</span>
+            </button>
+
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-slate-300">Total :</span>
               <span className="text-base font-black text-emerald-400">
@@ -325,38 +367,104 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
         {/* Pitch Positions Grid - Responsive layout (Vertical tactical on Mobile, Horizontal on Desktop) */}
         <div className="relative z-10 py-4 w-full">
-          {/* Smartphone Vertical Flow (football formation layout) */}
-          <div className="flex md:hidden flex-col items-center gap-6 w-full">
-            {/* Attack: FWD & EXTRA side by side */}
-            <div className="flex justify-center gap-4 w-full">
-              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                {renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}
+          {/* Smartphone Mobile View */}
+          <div className="flex md:hidden flex-col items-center gap-4 w-full">
+            {mobileCompactView ? (
+              /* Mobile Compact List View */
+              <div className="flex flex-col gap-2 w-full py-1">
+                {(['gk', 'def', 'mid', 'fwd', 'extra'] as const).map(slotKey => {
+                  const card = targetLineup.slots[slotKey];
+                  const isCap = targetLineup.captainSlot === slotKey;
+                  const posBadge = formatPositionBadge(card?.positionCode || (slotKey === 'extra' ? 'EXTRA' : slotKey.toUpperCase() as any));
+                  
+                  return (
+                    <div
+                      key={slotKey}
+                      onClick={() => card && onOpenScout(card)}
+                      className={`flex items-center justify-between p-3 rounded-2xl bg-slate-900/95 border transition shadow-md cursor-pointer ${
+                        isCap ? 'border-emerald-400 ring-1 ring-emerald-400/40 bg-emerald-950/40' : 'border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-md border ${posBadge.bg} ${posBadge.text} ${posBadge.border}`}>
+                          {slotKey === 'extra' ? 'EXTRA' : slotKey.toUpperCase()}
+                        </span>
+                        {card ? (
+                          <div className="flex items-center gap-2.5">
+                            <img
+                              src={card.pictureUrl}
+                              alt={card.displayName}
+                              referrerPolicy="no-referrer"
+                              className="h-10 w-10 rounded-xl object-contain bg-slate-950 p-0.5 border border-slate-700"
+                            />
+                            <div>
+                              <div className="text-xs font-black text-white flex items-center gap-1.5">
+                                <span>{card.displayName}</span>
+                                {isCap && (
+                                  <span className="bg-emerald-400 text-slate-950 text-[9px] font-black px-1.5 py-0.2 rounded uppercase">
+                                    CAP
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                                <span>{card.club?.name || 'Club'}</span>
+                                <span className="text-amber-400 font-bold">• +{getCardTotalBonus(card)}%</span>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-xs italic text-slate-500 font-semibold">Slot vide — Aucun joueur</span>
+                        )}
+                      </div>
+                      {card && (
+                        <div className="text-right pl-2">
+                          <span className="text-xs font-black text-emerald-400 block">
+                            {isCap 
+                              ? Math.round(calculatePlayerProjectedScore(card, targetLineup.strategy).projectedScore * 1.2 * 10) / 10 
+                              : calculatePlayerProjectedScore(card, targetLineup.strategy).projectedScore} pts
+                          </span>
+                          <span className="text-[9px] text-slate-400 block">Projeté</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                {renderPitchCard(targetLineup, 'extra', 'Extra', 'EXTRA')}
-              </div>
-            </div>
-            
-            {/* Midfield: MID */}
-            <div className="flex justify-center w-full">
-              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                {renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}
-              </div>
-            </div>
-            
-            {/* Defense: DEF */}
-            <div className="flex justify-center w-full">
-              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                {renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}
-              </div>
-            </div>
-            
-            {/* Goalkeeper: GK */}
-            <div className="flex justify-center w-full">
-              <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                {renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}
-              </div>
-            </div>
+            ) : (
+              /* Smartphone Vertical Tactical Flow (football formation layout) */
+              <>
+                {/* Attack: FWD & EXTRA side by side */}
+                <div className="flex justify-center gap-4 w-full">
+                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                    {renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}
+                  </div>
+                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                    {renderPitchCard(targetLineup, 'extra', 'Extra', 'EXTRA')}
+                  </div>
+                </div>
+                
+                {/* Midfield: MID */}
+                <div className="flex justify-center w-full">
+                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                    {renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}
+                  </div>
+                </div>
+                
+                {/* Defense: DEF */}
+                <div className="flex justify-center w-full">
+                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                    {renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}
+                  </div>
+                </div>
+                
+                {/* Goalkeeper: GK */}
+                <div className="flex justify-center w-full">
+                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                    {renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* PC / Wide Screen Horizontal Row */}
@@ -393,6 +501,24 @@ export const PitchView: React.FC<PitchViewProps> = ({
   return (
     <div className="space-y-6">
       
+      {/* Desynchronization Alert Banner if missing/sold cards were removed */}
+      {removedCardsCount > 0 && (
+        <div className="rounded-2xl border border-amber-500/50 bg-amber-950/80 p-4 text-xs text-amber-200 flex items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="h-5 w-5 text-amber-400 shrink-0" />
+            <span>
+              <strong>Synchronisation locale :</strong> {removedCardsCount} carte(s) enregistrée(s) (vendue(s) ou transférée(s)) ne figurent plus dans votre galerie et ont été automatiquement retirées de vos compositions.
+            </span>
+          </div>
+          <button
+            onClick={() => setRemovedCardsCount(0)}
+            className="rounded-lg bg-amber-500/20 border border-amber-500/50 px-3 py-1 text-[11px] font-bold text-amber-200 hover:bg-amber-500/30 transition shrink-0"
+          >
+            Fermer
+          </button>
+        </div>
+      )}
+
       {/* 1. TOP FILTERS & CONSTRAINTS PANEL (Collapsible on Click) */}
       <div className="rounded-2xl border border-slate-800 bg-slate-900/90 shadow-xl backdrop-blur-md overflow-hidden">
         
@@ -474,7 +600,13 @@ export const PitchView: React.FC<PitchViewProps> = ({
                     type="date"
                     value={filters.maxMatchDate || ''}
                     onChange={(e) => setFilters(prev => ({ ...prev, maxMatchDate: e.target.value || undefined }))}
-                    onClick={(e) => e.currentTarget.showPicker?.()}
+                    onClick={(e) => {
+                      try {
+                        e.currentTarget.showPicker?.();
+                      } catch {
+                        // Browser opens picker natively
+                      }
+                    }}
                     className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-400"
                   />
                   {filters.maxMatchDate && (
@@ -711,8 +843,27 @@ export const PitchView: React.FC<PitchViewProps> = ({
                           Sélectionnée
                         </span>
                       )}
-                      <span className="text-[11px] text-slate-400 ml-auto md:ml-0">
-                        {isPitchOpen ? '▼ Cliquez pour masquer le terrain' : '▶ Cliquez pour voir le terrain'}
+                      
+                      {/* Lock Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleLockCompo?.(idx);
+                        }}
+                        className={`ml-2 px-2.5 py-0.5 rounded-lg border transition flex items-center gap-1 text-[11px] font-bold ${
+                          comp.isLocked
+                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30'
+                            : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800'
+                        }`}
+                        title={comp.isLocked ? "Composition verrouillée (protégée contre l'écrasement)" : "Verrouiller cette composition"}
+                      >
+                        {comp.isLocked ? <Lock className="h-3 w-3 text-amber-400" /> : <Unlock className="h-3 w-3" />}
+                        <span>{comp.isLocked ? 'Verrouillée' : 'Verrouiller'}</span>
+                      </button>
+
+                      <span className="text-[11px] text-slate-400 ml-auto md:ml-2">
+                        {isPitchOpen ? '▼ Masquer' : '▶ Terrain'}
                       </span>
                     </div>
 

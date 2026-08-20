@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useDeferredValue } from 'react';
 import { Navbar } from './components/Navbar';
 import { PitchPage } from './pages/PitchPage';
 import { GalleryPage } from './pages/GalleryPage';
@@ -12,16 +12,17 @@ import { SlotSwapModal } from './components/SlotSwapModal';
 import { LiveScoringView } from './components/LiveScoringView';
 import { LineupExportModal } from './components/LineupExportModal';
 import { StorageService } from './utils/storage';
-import { optimizeLineup, generateFourDistinctLineups } from './utils/optimizer';
+import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey } from './utils/optimizer';
 import { CURRENT_GAME_WEEK } from './data/mockGallery';
 import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters } from './types';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, ShieldAlert } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin'>('pitch');
   const [username, setUsernameState] = useState<string>(StorageService.getUsername());
   const [cards, setCards] = useState<SorareCard[]>([]);
   const [exportLineupTarget, setExportLineupTarget] = useState<Lineup | null>(null);
+  const [degradedModeInfo, setDegradedModeInfo] = useState<{ isDegraded: boolean; reason?: string } | null>(null);
   
   const [filters, setFilters] = useState<LineupOptimizationFilters>({
     rarity: 'ALL',
@@ -40,6 +41,10 @@ export default function App() {
   const [selectedCompoIndex, setSelectedCompoIndex] = useState<number>(0);
   const [strategy, setStrategy] = useState<StrategyType>('BALANCED');
 
+  // Deferred values for non-blocking UI during heavy combinatorial calculations
+  const deferredFilters = useDeferredValue(filters);
+  const deferredStrategy = useDeferredValue(strategy);
+
   const [lineup, setLineup] = useState<Lineup>(() => {
     const initialCards = StorageService.getCards();
     return optimizeLineup(initialCards, 'BALANCED', CURRENT_GAME_WEEK.number, filters);
@@ -50,15 +55,58 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastSynced, setLastSynced] = useState<string | null>(StorageService.getLastSync());
 
-  // Generate 4 compositions dynamically whenever cards, filters, or strategy change
+  // Helper to check if a player is already in a lineup (preventing duplicate player in same composition)
+  const isPlayerAlreadyInLineup = (lineupObj: Lineup, player: SorareCard, excludeSlot?: string): boolean => {
+    const pKey = getPlayerUniqueKey(player);
+    for (const [sKey, pVal] of Object.entries(lineupObj.slots)) {
+      if (sKey !== excludeSlot && pVal && getPlayerUniqueKey(pVal) === pKey) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Generate 4 compositions dynamically whenever cards, deferred filters, or deferred strategy change (preserving locked ones)
   useEffect(() => {
     if (cards.length > 0) {
-      const fourCompos = generateFourDistinctLineups(cards, strategy, CURRENT_GAME_WEEK.number, filters);
-      setCompositions(fourCompos);
-      setLineup(fourCompos[0]);
-      setSelectedCompoIndex(0);
+      const fourCompos = generateFourDistinctLineups(cards, deferredStrategy, CURRENT_GAME_WEEK.number, deferredFilters);
+      setCompositions(prevComps => {
+        if (!prevComps || prevComps.length === 0) {
+          setLineup(fourCompos[0]);
+          setSelectedCompoIndex(0);
+          return fourCompos;
+        }
+        const merged = fourCompos.map((newCompo, idx) => {
+          const existing = prevComps[idx];
+          if (existing && existing.isLocked) {
+            return existing; // Preserve locked compo!
+          }
+          return {
+            ...newCompo,
+            id: existing?.id || newCompo.id,
+            name: existing?.name || newCompo.name,
+            isLocked: existing?.isLocked || false,
+          };
+        });
+        setLineup(merged[selectedCompoIndex] || merged[0]);
+        return merged;
+      });
     }
-  }, [cards, filters, strategy]);
+  }, [cards, deferredFilters, deferredStrategy]);
+
+  const handleToggleLockCompo = (index: number) => {
+    setCompositions(comps => {
+      const copy = [...comps];
+      if (copy[index]) {
+        copy[index] = {
+          ...copy[index],
+          isLocked: !copy[index].isLocked,
+        };
+        showToast(copy[index].isLocked ? `Compo ${index + 1} verrouillée.` : `Compo ${index + 1} déverrouillée.`);
+      }
+      return copy;
+    });
+  };
 
   const handleUpdateLineup = (updatedLineup: Lineup | ((prev: Lineup) => Lineup)) => {
     setLineup(prev => {
@@ -106,8 +154,10 @@ export default function App() {
       try {
         const currentName = StorageService.getUsername();
         const apiKey = StorageService.getApiKey();
-        const url = `/api/sorare/user-cards?username=${encodeURIComponent(currentName)}${apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : ''}`;
-        const response = await fetch(url);
+        const url = `/api/sorare/user-cards?username=${encodeURIComponent(currentName)}`;
+        const response = await fetch(url, {
+          headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
+        });
         if (response.ok) {
           const data = await response.json();
           if (data.cards && Array.isArray(data.cards) && data.cards.length > 0) {
@@ -221,13 +271,21 @@ export default function App() {
         }
       }, 1500);
 
-      const url = `/api/sorare/user-cards?username=${encodeURIComponent(targetName)}&forceRefresh=true${apiKey ? `&apiKey=${encodeURIComponent(apiKey)}` : ''}`;
-      const response = await fetch(url);
+      const url = `/api/sorare/user-cards?username=${encodeURIComponent(targetName)}&forceRefresh=true`;
+      const response = await fetch(url, {
+        headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
+      });
       const data = await response.json();
       
       if (pollInterval) clearInterval(pollInterval);
 
       if (response.ok) {
+        if (data.isDegradedMode) {
+          setDegradedModeInfo({ isDegraded: true, reason: data.degradedReason || "Données en cache Sorare utilisées due à une limitation de l'API (429/503)." });
+        } else {
+          setDegradedModeInfo(null);
+        }
+
         if (data.cards && Array.isArray(data.cards) && data.cards.length > 0) {
           StorageService.saveCards(data.cards);
           if (data.user) {
@@ -237,7 +295,12 @@ export default function App() {
           setLineup(optimizeLineup(data.cards, 'BALANCED', CURRENT_GAME_WEEK.number));
           const syncTimestamp = new Date().toISOString();
           setLastSynced(syncTimestamp);
-          showToast(`${data.cards.length} vraies cartes synchronisées pour ${data.user?.clubName || targetName} !`, 'success');
+          showToast(
+            data.isDegradedMode 
+              ? `Mode dégradé : ${data.cards.length} cartes en cache utilisées.` 
+              : `${data.cards.length} vraies cartes synchronisées pour ${data.user?.clubName || targetName} !`, 
+            data.isDegradedMode ? 'info' : 'success'
+          );
         } else {
           const currentCards = StorageService.getCards();
           setCards(currentCards);
@@ -245,6 +308,9 @@ export default function App() {
           showToast(`Aucune carte trouvée pour ${targetName} sur Sorare.`, 'info');
         }
       } else {
+        if (data.isDegradedMode) {
+          setDegradedModeInfo({ isDegraded: true, reason: data.degradedReason || data.error });
+        }
         throw new Error(data.error || 'Erreur de réponse API');
       }
     } catch (e: any) {
@@ -344,6 +410,10 @@ export default function App() {
   // Slot swap handler
   const handleSwapPlayerInSlot = (player: SorareCard) => {
     if (!slotToSwap) return;
+    if (isPlayerAlreadyInLineup(lineup, player, slotToSwap)) {
+      showToast("Ce joueur est déjà aligné dans cette composition sur un autre poste !", "error");
+      return;
+    }
 
     let updatedLineup: Lineup | null = null;
 
@@ -408,6 +478,12 @@ export default function App() {
   };
 
   const handleReplacePlayerInCompo = (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => {
+    const targetCompo = compositions[compoIndex];
+    if (targetCompo && isPlayerAlreadyInLineup(targetCompo, player, slot)) {
+      showToast("Ce joueur est déjà aligné dans cette composition sur un autre poste !", "error");
+      return;
+    }
+
     setCompositions(comps => {
       const copy = [...comps];
       if (!copy[compoIndex]) return comps;
@@ -476,6 +552,24 @@ export default function App() {
         setScoringFocus={(focus) => setFilters(prev => ({ ...prev, scoringFocus: focus }))}
       />
 
+      {/* Degraded Mode Warning Banner */}
+      {degradedModeInfo?.isDegraded && (
+        <div id="degraded-mode-banner" className="bg-amber-950/90 border-b border-amber-500/50 px-4 py-2 text-xs font-medium text-amber-200 flex items-center justify-between backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Mode Dégradé Actif :</strong> {degradedModeInfo.reason || "Données Sorare en cache local utilisées suite à une limitation temporaire (429/503)."}
+            </span>
+          </div>
+          <button
+            onClick={() => setDegradedModeInfo(null)}
+            className="text-amber-400 hover:text-white font-bold text-[11px] underline ml-4"
+          >
+            Masquer
+          </button>
+        </div>
+      )}
+
       {/* Main Container */}
       <main className="w-full px-4 py-6 sm:px-6 lg:px-8">
         
@@ -508,6 +602,7 @@ export default function App() {
             selectedCompoIndex={selectedCompoIndex}
             onSelectComposition={handleSelectComposition}
             onExportLineup={(l) => setExportLineupTarget(l)}
+            onToggleLockCompo={handleToggleLockCompo}
           />
         )}
 

@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { X, Search, Check, Flame, Calendar, AlertCircle, Filter, SlidersHorizontal, ShieldAlert, Users, Swords } from 'lucide-react';
 import { SorareCard, SlotPosition, LineupOptimizationFilters, Lineup } from '../types';
-import { calculatePlayerProjectedScore, formatKickoffDate, isCardMatchOnOrBeforeDate, getPlayerWinProbability, getCardAasL15, getCardDsL15, areOpponents, isSameClub } from '../utils/optimizer';
+import { calculatePlayerProjectedScore, formatKickoffDate, isCardMatchOnOrBeforeDate, getPlayerWinProbability, getCardAasL15, getCardDsL15, areOpponents, isSameClub, getPlayerUniqueKey } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus } from '../utils/sorareSlug';
 
 interface SlotSwapModalProps {
@@ -19,6 +19,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
   const [enforceDateFilter, setEnforceDateFilter] = useState(true);
   const [hideOpponents, setHideOpponents] = useState(false);
   const [prioritizeTeammates, setPrioritizeTeammates] = useState(true);
+  const [allowAllPositionsOnSearch, setAllowAllPositionsOnSearch] = useState(false);
   
   // Advanced filters state
   const [maxDateFilter, setMaxDateFilter] = useState<string>(filters?.maxMatchDate || '');
@@ -86,12 +87,19 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
 
   const searchedCardsInfo = useMemo(() => {
     return cardsWithInfo.filter(({ card, proj, bonus, winProb, opposingPlayer }) => {
-      // Slot check
-      if (slot === 'gk' && card.positionCode !== 'GK') return false;
-      if (slot === 'def' && card.positionCode !== 'DEF') return false;
-      if (slot === 'mid' && card.positionCode !== 'MID') return false;
-      if (slot === 'fwd' && card.positionCode !== 'FWD') return false;
-      if (slot === 'extra' && card.positionCode === 'GK') return false; 
+      // Exclude players already aligned in another slot of this lineup
+      if (otherTeamPlayers.some(p => p.id === card.id || getPlayerUniqueKey(p) === getPlayerUniqueKey(card))) {
+        return false;
+      }
+
+      // Slot check (bypassed if allowAllPositionsOnSearch is active)
+      if (!allowAllPositionsOnSearch) {
+        if (slot === 'gk' && card.positionCode !== 'GK') return false;
+        if (slot === 'def' && card.positionCode !== 'DEF') return false;
+        if (slot === 'mid' && card.positionCode !== 'MID') return false;
+        if (slot === 'fwd' && card.positionCode !== 'FWD') return false;
+        if (slot === 'extra' && card.positionCode === 'GK') return false; 
+      }
   
       // Extra Position Filter
       if (slot === 'extra' && extraPositionFilter !== 'ALL' && card.positionCode !== extraPositionFilter) return false;
@@ -387,8 +395,35 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
         {/* Player List */}
         <div className="mt-3 flex-1 overflow-y-auto space-y-2 pr-1 pb-4">
           {searchedCardsInfo.length === 0 ? (
-            <div className="text-center py-8 text-slate-400 text-xs">
-              Aucun joueur trouvé pour ce poste {filters?.maxMatchDate && enforceDateFilter ? `avec un match avant le ${filters.maxMatchDate}` : ''}.
+            <div className="text-center py-8 text-slate-400 text-xs px-4">
+              <p className="font-semibold text-slate-300">Aucun joueur éligible trouvé pour le poste <span className="text-emerald-400 uppercase font-bold">{slot}</span> {searchTerm ? `correspondant à "${searchTerm}"` : ''}</p>
+              {searchTerm && (() => {
+                const q = searchTerm.toLowerCase().trim();
+                const otherMatches = cards.filter(c => c.displayName.toLowerCase().includes(q) || (c.club?.name || '').toLowerCase().includes(q));
+                if (otherMatches.length > 0) {
+                  const posList = Array.from(new Set(otherMatches.map(c => c.positionCode))).join(', ');
+                  return (
+                    <div className="mt-3 p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-300 text-[11px] flex flex-col items-center gap-2">
+                      <div>
+                        💡 <strong>Note :</strong> {otherMatches.length} joueur(s) trouvé(s) pour "{searchTerm}" à d'autres postes (<strong>{posList}</strong>).
+                      </div>
+                      {!allowAllPositionsOnSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setAllowAllPositionsOnSearch(true)}
+                          className="mt-1 rounded-lg bg-amber-500/20 border border-amber-500/50 px-3 py-1.5 text-xs font-bold text-amber-200 hover:bg-amber-500/30 transition"
+                        >
+                          Afficher aussi les joueurs d'autres postes
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              {filters?.maxMatchDate && enforceDateFilter && (
+                <p className="text-[10px] text-slate-500 mt-2">Filtre date actif : Seuls les matchs &le; {filters.maxMatchDate} sont affichés.</p>
+              )}
             </div>
           ) : (
             searchedCardsInfo.map(({ card, proj, opposingPlayer, teammates }) => {

@@ -26,13 +26,15 @@ export const AdminPage: React.FC = () => {
   const fetchLogs = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/logs');
-      if (res.ok) {
-        const data = await res.json();
-        setLogs(data.logs || []);
+      const res = await fetch(window.location.origin + '/api/admin/logs');
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
       }
+      const data = await res.json();
+      setLogs(data.logs || []);
     } catch (e) {
       console.error('Failed to fetch admin logs', e);
+      // alert(`Failed to fetch admin logs: ${e}`); // Using alert might be better for user to see, but console.error is better for debug
     } finally {
       setIsLoading(false);
     }

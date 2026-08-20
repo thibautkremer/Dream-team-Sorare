@@ -32,7 +32,11 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
 
   const fetchLivePlayerDetails = async (playerCard: SorareCard) => {
     try {
-      const res = await fetch(`/api/sorare/player-live-detail?slug=${encodeURIComponent(playerCard.slug || playerCard.id)}`);
+      const StorageService = (await import('../utils/storage')).StorageService;
+      const apiKey = StorageService.getApiKey();
+      const res = await fetch(`/api/sorare/player-live-detail?slug=${encodeURIComponent(playerCard.slug || playerCard.id)}`, {
+        headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
+      });
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.card) {
