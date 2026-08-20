@@ -99,16 +99,33 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
   const [liveSyncStatus, setLiveSyncStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [lastSorareSyncTime, setLastSorareSyncTime] = useState<Date | null>(null);
 
-  const fetchSorareLiveScores = useCallback(async () => {
+  const fetchSorareLiveScores = useCallback(async (slugsToFetch?: string[]) => {
     setIsRefreshing(true);
     setLiveSyncStatus('loading');
     try {
       const username = StorageService.getUsername() || 'thib-8';
       const apiKey = StorageService.getApiKey() || '';
-      const url = `/api/sorare/live-scoring?username=${encodeURIComponent(username)}`;
-      const res = await fetch(url, {
-        headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
-      });
+      
+      const payloadSlugs = slugsToFetch || [];
+      
+      let res;
+      if (payloadSlugs.length > 0) {
+        res = await fetch(`/api/sorare/live-scoring`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { 'x-sorare-api-key': apiKey } : {})
+          },
+          body: JSON.stringify({ username, slugs: payloadSlugs })
+        });
+      } else {
+        // No active slugs aligned. Skip the request entirely to save API quota and rate limits.
+        setLiveSyncStatus('idle');
+        setIsRefreshing(false);
+        setLastRefreshed(new Date());
+        return;
+      }
+
       if (res.ok) {
         const data = await res.json();
         if (data.liveScores) {
@@ -130,19 +147,6 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     }
   }, []);
 
-  // Fetch real live scores from Sorare GraphQL on component mount and refresh every 60s
-  useEffect(() => {
-    fetchSorareLiveScores();
-    const interval = setInterval(() => {
-      fetchSorareLiveScores();
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [fetchSorareLiveScores]);
-
-  const handleManualRefresh = () => {
-    fetchSorareLiveScores();
-  };
-
   // Safe lineups list (ensure at least current lineup exists)
   const activeCompositions: Lineup[] = useMemo(() => {
     if (compositions && compositions.length > 0) {
@@ -150,6 +154,32 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     }
     return [lineup];
   }, [compositions, lineup]);
+
+  // Extract unique active player slugs
+  const activeSlugs = useMemo(() => {
+    const slugSet = new Set<string>();
+    activeCompositions.forEach(comp => {
+      Object.values(comp.slots).forEach(card => {
+        if (card && card.slug) {
+          slugSet.add(card.slug);
+        }
+      });
+    });
+    return Array.from(slugSet);
+  }, [activeCompositions]);
+
+  // Fetch real live scores from Sorare GraphQL on component mount and refresh every 60s
+  useEffect(() => {
+    fetchSorareLiveScores(activeSlugs);
+    const interval = setInterval(() => {
+      fetchSorareLiveScores(activeSlugs);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [fetchSorareLiveScores, activeSlugs]);
+
+  const handleManualRefresh = () => {
+    fetchSorareLiveScores(activeSlugs);
+  };
 
   // Build a lookup map of player id -> array of { compoIndex, compoName, isCaptain, slot }
   const playerLineupMap = useMemo(() => {

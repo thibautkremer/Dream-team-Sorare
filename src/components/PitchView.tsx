@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock } from 'lucide-react';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub } from '../utils/optimizer';
-import { formatPositionBadge, formatStatusBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
+import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
 
 interface PitchViewProps {
   lineup: Lineup;
@@ -20,6 +20,7 @@ interface PitchViewProps {
   onSelectComposition: (index: number) => void;
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
+  onImportSorareLineups?: () => void;
 }
 
 export const PitchView: React.FC<PitchViewProps> = ({
@@ -38,6 +39,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
   onSelectComposition,
   onExportLineup,
   onToggleLockCompo,
+  onImportSorareLineups,
 }) => {
   // Accordion state: filters open by default, can be toggled
   const [isFiltersOpen, setIsFiltersOpen] = useState(true);
@@ -143,6 +145,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
     const bonusIfCaptain = isCaptain ? Math.round((projected * 0.20) * 10) / 10 : 0;
     const winProb = getPlayerWinProbability(card.upcomingFixture);
     const recentStats = getPlayerRecentMatchAnalysis(card);
+    const injuryInfo = formatInjuryBadge(card.injuryStatus);
 
     // Conflict and synergy detection with rest of lineup
     const otherPlayers = Object.entries(targetLineup.slots)
@@ -216,13 +219,18 @@ export const PitchView: React.FC<PitchViewProps> = ({
             {card.displayName}
           </h3>
           
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap justify-center">
             <span className="text-[10px] text-slate-400 truncate max-w-[90px]">{card.club?.name || 'Club'}</span>
-            {statusInfo && (
+            {injuryInfo ? (
+              <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${injuryInfo.bg} ${injuryInfo.color} flex items-center gap-1`}>
+                <span>{injuryInfo.icon}</span>
+                <span>{injuryInfo.label}</span>
+              </span>
+            ) : statusInfo ? (
               <span className={`text-[9px] font-bold ${statusInfo.color}`}>
                 • {statusInfo.label}
               </span>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -805,11 +813,22 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
 
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
             <span>Les 4 Compositions Optimisées</span>
-            <span className="text-[11px] font-normal text-slate-400 lowercase">(cliquez sur une compo pour déplier/replier son terrain)</span>
+            <span className="text-[11px] font-normal text-slate-400 lowercase hidden sm:inline">(cliquez sur une compo pour déplier/replier son terrain)</span>
           </h3>
+
+          {onImportSorareLineups && (
+            <button
+              onClick={onImportSorareLineups}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-700 hover:text-white transition shadow-sm w-fit"
+              title="Importer vos équipes actuellement enregistrées sur Sorare pour la Game Week active"
+            >
+              <Download className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Importer mes équipes Sorare</span>
+            </button>
+          )}
         </div>
 
         <div className="space-y-4">

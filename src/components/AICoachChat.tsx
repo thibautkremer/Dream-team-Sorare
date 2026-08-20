@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Send, Bot, User, CornerDownLeft, RefreshCw, Lightbulb, Zap, ShieldAlert } from 'lucide-react';
+import { Sparkles, Send, Bot, User, CornerDownLeft, RefreshCw, Lightbulb, Zap, ShieldAlert, Cpu } from 'lucide-react';
 import { SorareCard, ChatMessage } from '../types';
 
 interface AICoachChatProps {
@@ -74,6 +74,7 @@ Comment puis-je t'aider à optimiser ta composition gratuite SO5 ?`,
       const assistantMessage: ChatMessage = {
         id: `ai-msg-${Date.now()}`,
         role: 'assistant',
+        source: data.source || 'gemini_ai',
         content: data.reply || 'Je n\'ai pas pu formuler de réponse.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
@@ -86,6 +87,7 @@ Comment puis-je t'aider à optimiser ta composition gratuite SO5 ?`,
       const assistantMessage: ChatMessage = {
         id: `ai-msg-${Date.now()}`,
         role: 'assistant',
+        source: 'algorithmic_engine',
         content: fallbackReply,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
@@ -171,6 +173,28 @@ Aligner 1 GK (Donnarumma), 1 DEF (Hakimi), 1 MID (Vitinha), 1 FWD (Dembélé Cap
                   : 'bg-slate-950 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
               }`}
             >
+              {msg.role === 'assistant' && (
+                <div className="mb-2.5 flex items-center justify-between border-b border-slate-800/80 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    {msg.source === 'algorithmic_engine' ? (
+                      <Cpu className="h-3.5 w-3.5 text-sky-400" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                    )}
+                    <span className="text-[10px] font-bold tracking-wider uppercase text-slate-400">
+                      {msg.source === 'algorithmic_engine' ? 'Moteur Algorithmique SO5' : 'Gemini 2.5 Flash IA'}
+                    </span>
+                  </div>
+                  <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-full border ${
+                    msg.source === 'algorithmic_engine'
+                      ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
+                      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  }`}>
+                    {msg.source === 'algorithmic_engine' ? 'Heuristique' : 'LLM Live'}
+                  </span>
+                </div>
+              )}
+
               <div className="whitespace-pre-wrap">{msg.content}</div>
 
               {/* Quick suggestions if present */}

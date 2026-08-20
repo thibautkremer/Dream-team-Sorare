@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useTransition } from 'react';
 import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus } from '../types';
-import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15 } from '../utils/optimizer';
+import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
 
 interface GalleryViewProps {
@@ -24,6 +24,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   onReplacePlayerInCompo,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [localSearch, setLocalSearch] = useState('');
+  const [isPending, startTransition] = useTransition();
   const [selectedPosition, setSelectedPosition] = useState<PositionCode | 'ALL'>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<PlayingStatus | 'ALL'>('ALL');
   const [selectedRarity, setSelectedRarity] = useState<string>('ALL');
@@ -83,8 +85,9 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   // Memoized Map of card projected scores to avoid re-evaluating calculatePlayerProjectedScore inside loops
   const projectionsMap = useMemo(() => {
     const map = new Map<string, ReturnType<typeof calculatePlayerProjectedScore>>();
+    const precomputedContext = precomputeClubContexts(cards);
     cards.forEach(card => {
-      map.set(card.id, calculatePlayerProjectedScore(card, 'BALANCED', cards));
+      map.set(card.id, calculatePlayerProjectedScore(card, 'BALANCED', cards, precomputedContext));
     });
     return map;
   }, [cards]);
@@ -199,10 +202,16 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           return (b.scores?.l40 || 0) - (a.scores?.l40 || 0);
         case 'L40_ASC':
           return (a.scores?.l40 || 0) - (b.scores?.l40 || 0);
-        case 'PROJ_DESC':
-          return calculatePlayerProjectedScore(b).projectedScore - calculatePlayerProjectedScore(a).projectedScore;
-        case 'PROJ_ASC':
-          return calculatePlayerProjectedScore(a).projectedScore - calculatePlayerProjectedScore(b).projectedScore;
+        case 'PROJ_DESC': {
+          const scoreB = projectionsMap.get(b.id)?.projectedScore ?? 0;
+          const scoreA = projectionsMap.get(a.id)?.projectedScore ?? 0;
+          return scoreB - scoreA;
+        }
+        case 'PROJ_ASC': {
+          const scoreB = projectionsMap.get(b.id)?.projectedScore ?? 0;
+          const scoreA = projectionsMap.get(a.id)?.projectedScore ?? 0;
+          return scoreA - scoreB;
+        }
         case 'NAME_ASC':
           return a.displayName.localeCompare(b.displayName);
         case 'NAME_DESC':
@@ -464,8 +473,15 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
-              value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              value={localSearch}
+              onChange={(e) => { 
+                const val = e.target.value; 
+                setLocalSearch(val);
+                startTransition(() => {
+                  setSearchTerm(val); 
+                  setCurrentPage(1); 
+                });
+              }}
               placeholder="Rechercher par nom, club..."
               className="w-full rounded-xl border border-slate-800 bg-slate-950 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
             />
@@ -686,6 +702,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               onClick={() => {
                 setMaxMatchDate('');
                 setMinWinProb(0);
+                setLocalSearch('');
                 setSearchTerm('');
                 setSelectedPosition('ALL');
                 setSelectedStatus('ALL');
@@ -720,6 +737,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           <p className="text-xs text-slate-500 mt-1 mb-4">Essayez de réinitialiser vos recherches ou d'assouplir vos filtres.</p>
           <button
             onClick={() => {
+              setLocalSearch('');
               setSearchTerm('');
               setSelectedPosition('ALL');
               setSelectedStatus('ALL');

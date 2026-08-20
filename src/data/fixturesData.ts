@@ -1,4 +1,4 @@
-import { UpcomingFixture } from '../types';
+import { UpcomingFixture, WeatherCondition } from '../types';
 
 export interface ClubFixtureDefinition {
   clubName: string;
@@ -20,6 +20,7 @@ export interface ClubFixtureDefinition {
   goalExpectancy: number; // xG decimal e.g. 2.6
   anytimeScorerOdds: number; // decimal e.g. 1.85
   hasUpcomingMatch: boolean;
+  weather?: WeatherCondition;
 }
 
 // Master Calendar for Game Week 48 (21 - 25 Août 2026)
@@ -2409,6 +2410,14 @@ export function getClubUpcomingFixture(clubName: string, positionCode: 'GK' | 'D
     (def.winProb >= 60 ? 3 : def.winProb <= 25 ? -3 : 0)
   ) * 10) / 10));
 
+  // Weather determination based on country/club or custom override
+  const weather: WeatherCondition = def.weather || {
+    temperature: def.country === 'England' || def.country === 'Scotland' ? 17 : def.country === 'Spain' || def.country === 'Italy' ? 26 : 21,
+    description: def.country === 'England' ? 'Pluie fine / Terrain gras' : def.country === 'Spain' ? 'Ensoleillé / Météo idéale' : 'Ciel dégagé',
+    wind: def.country === 'England' || def.country === 'Netherlands' ? 24 : 12,
+    isRainy: def.country === 'England',
+  };
+
   return {
     gameWeek: 48,
     opponent: def.opponent,
@@ -2421,6 +2430,7 @@ export function getClubUpcomingFixture(clubName: string, positionCode: 'GK' | 'D
     hasUpcomingMatch: def.hasUpcomingMatch,
     competitionName: def.competitionName,
     projectedScore: projScore,
+    weather,
     bookmaker: {
       win: def.winOdds,
       draw: def.drawOdds,

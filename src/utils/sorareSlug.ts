@@ -71,6 +71,36 @@ export function formatStatusBadge(status: string, confidence: number = 100): { l
   }
 }
 
+export function formatInjuryBadge(injuryStatus?: string): { icon: string; label: string; color: string; bg: string } | null {
+  if (!injuryStatus || injuryStatus === 'FIT') return null;
+  const upper = injuryStatus.toUpperCase();
+  if (upper === 'INJURED' || upper === 'OUT') {
+    return {
+      icon: '🚑',
+      label: 'Blessé',
+      color: 'text-rose-300',
+      bg: 'bg-rose-950/80 border-rose-500/40'
+    };
+  }
+  if (upper === 'SUSPENDED') {
+    return {
+      icon: '🟨',
+      label: 'Suspendu',
+      color: 'text-amber-300',
+      bg: 'bg-amber-950/80 border-amber-500/40'
+    };
+  }
+  if (upper === 'DOUBTFUL' || upper === 'QUESTIONABLE') {
+    return {
+      icon: '⚠️',
+      label: 'Incertain',
+      color: 'text-orange-300',
+      bg: 'bg-orange-950/80 border-orange-500/40'
+    };
+  }
+  return null;
+}
+
 export interface CardBonusBreakdown {
   editionBonus: number;        // Bonus d'Édition / Saison (ex: 5% ou 20%)
   collectionBonus: number;     // Bonus de Collection d'album (ex: 0% à 5%)

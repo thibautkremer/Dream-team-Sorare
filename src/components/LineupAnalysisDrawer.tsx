@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Sparkles, Shield, Crown, CheckCircle2, AlertTriangle, Target, Zap, Award } from 'lucide-react';
+import { X, Sparkles, Shield, Crown, CheckCircle2, AlertTriangle, Target, Zap, Award, Cpu } from 'lucide-react';
 import { Lineup } from '../types';
 
 interface LineupAnalysisDrawerProps {
@@ -9,6 +9,7 @@ interface LineupAnalysisDrawerProps {
 
 export const LineupAnalysisDrawer: React.FC<LineupAnalysisDrawerProps> = ({ lineup, onClose }) => {
   const captain = lineup.slots[lineup.captainSlot];
+  const isGemini = lineup.analysis.source === 'gemini_ai';
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 p-4 sm:p-6 backdrop-blur-sm flex justify-center items-start sm:items-center">
@@ -24,12 +25,29 @@ export const LineupAnalysisDrawer: React.FC<LineupAnalysisDrawerProps> = ({ line
 
         {/* Header */}
         <div className="border-b border-slate-800 pb-4">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-emerald-400" />
-            <h2 className="text-lg font-black text-white">Rapport Tactique & Justifications IA</h2>
+          <div className="flex items-center justify-between pr-8">
+            <div className="flex items-center gap-2">
+              {isGemini ? (
+                <Sparkles className="h-5 w-5 text-emerald-400" />
+              ) : (
+                <Cpu className="h-5 w-5 text-sky-400" />
+              )}
+              <h2 className="text-lg font-black text-white">
+                {isGemini ? 'Rapport Tactique & Justifications IA Gemini' : 'Rapport Tactique & Matrices SO5'}
+              </h2>
+            </div>
+            <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+              isGemini
+                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                : 'bg-sky-500/20 text-sky-400 border-sky-500/30'
+            }`}>
+              {isGemini ? 'IA Gemini Flash' : 'Moteur Algorithmique SO5'}
+            </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Analyse détaillée de la composition SO5 pour la Game Week {lineup.gameWeek}.
+            {isGemini
+              ? `Analyse tactique contextualisée générée par IA pour la Game Week ${lineup.gameWeek}.`
+              : `Justifications générées à partir des pondérations heuristiques (Forme L5/L15/L40, cotes bookmakers et statut) pour la Game Week ${lineup.gameWeek}.`}
           </p>
         </div>
 

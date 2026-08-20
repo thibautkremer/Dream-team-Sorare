@@ -225,6 +225,12 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
                       +{breakdown.bookmakerActionBonus} pts Buteur/Passeur
                     </span>
                   )}
+                  {breakdown.weatherBonus !== 0 && (
+                    <span className={`font-bold ${breakdown.weatherBonus > 0 ? 'text-emerald-400' : 'text-rose-400'} text-[11px] block`}>
+                      {breakdown.weatherBonus > 0 ? '+' : ''}{breakdown.weatherBonus} pts Météo
+                      {breakdown.weatherImpactLabel && <span className="text-[9px] font-normal ml-1 block text-slate-400 italic">🌧️ {breakdown.weatherImpactLabel}</span>}
+                    </span>
+                  )}
                   {breakdown.contextualBonus !== 0 && (
                     <span className={`font-bold ${breakdown.contextualBonus > 0 ? 'text-emerald-400' : 'text-rose-400'} text-[11px] block`}>
                       {breakdown.contextualBonus > 0 ? '+' : ''}{breakdown.contextualBonus} pts (Context)

@@ -18,6 +18,7 @@ interface PitchPageProps {
   onSelectComposition: (index: number) => void;
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
+  onImportSorareLineups?: () => void;
 }
 
 export const PitchPage: React.FC<PitchPageProps> = (props) => {

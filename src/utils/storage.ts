@@ -102,18 +102,6 @@ export class StorageService {
     if (memoryCardsCache && memoryCardsCache.length > 0) {
       return memoryCardsCache;
     }
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.CARDS);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          memoryCardsCache = parsed;
-          return parsed;
-        }
-      }
-    } catch {
-      // Ignored
-    }
     if (MOCK_GALLERY && Array.isArray(MOCK_GALLERY) && MOCK_GALLERY.length > 0) {
       memoryCardsCache = MOCK_GALLERY;
       return MOCK_GALLERY;
@@ -150,32 +138,9 @@ export class StorageService {
 
     try {
       localStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
-      
-      // For localStorage, if collection is very large (> 200 cards), save a lightweight version to prevent 5MB quota errors
-      if (cards.length > 250) {
-        const compactCards = cards.map(c => ({
-          ...c,
-          scores: {
-            ...c.scores,
-            last40Scores: c.scores?.last40Scores?.slice(0, 15),
-            recentMatches: c.scores?.recentMatches?.slice(0, 5)
-          }
-        }));
-        try {
-          localStorage.setItem(STORAGE_KEYS.CARDS, JSON.stringify(compactCards));
-        } catch {
-          // If even compact version fails, save only top 200 cards into localStorage
-          try {
-            localStorage.setItem(STORAGE_KEYS.CARDS, JSON.stringify(compactCards.slice(0, 200)));
-          } catch {
-            // Memory & IndexedDB have it, so no catastrophic loss
-          }
-        }
-      } else {
-        localStorage.setItem(STORAGE_KEYS.CARDS, JSON.stringify(cards));
-      }
-    } catch {
-      // Quota exceeded handled silently since IndexedDB and memoryCache hold full cards
+      // Removed localStorage save for cards completely to prevent 5MB QuotaExceededError
+    } catch (e) {
+      console.warn('Could not save to localStorage', e);
     }
   }
 

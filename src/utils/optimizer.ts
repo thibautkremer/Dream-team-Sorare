@@ -46,6 +46,8 @@ export interface ScoreBreakdown {
   isHome: boolean;
   profileBonus: number;
   bookmakerActionBonus: number;
+  weatherBonus: number;
+  weatherImpactLabel?: string;
 
   // Bonus contextuels
   contextualBonus: number;
@@ -301,6 +303,49 @@ export interface ClubContext {
   avgClubScore: number;
 }
 
+export function precomputeClubContexts(cards: SorareCard[]): Record<string, ClubContext> {
+  const clubCardsMap: Record<string, SorareCard[]> = {};
+  cards.forEach(card => {
+    const club = card.club?.name;
+    if (club) {
+      if (!clubCardsMap[club]) {
+        clubCardsMap[club] = [];
+      }
+      clubCardsMap[club].push(card);
+    }
+  });
+
+  const contexts: Record<string, ClubContext> = {};
+
+  Object.entries(clubCardsMap).forEach(([clubName, clubCards]) => {
+    const validScores = clubCards.map(c => c.scores?.l40 || 0).filter(s => s > 0);
+    const avgClubScore = validScores.length > 0 ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 40;
+
+    const reliableCandidates = clubCards.filter(c => (c.scores?.l40PlayedRate || 80) >= 70);
+
+    const absoluteStar = [...reliableCandidates].sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+    const bestDef = [...reliableCandidates]
+      .filter(c => c.positionCode === 'DEF')
+      .sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+    const bestFwd = [...reliableCandidates]
+      .filter(c => c.positionCode === 'FWD')
+      .sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+    const bestMid = [...reliableCandidates]
+      .filter(c => c.positionCode === 'MID')
+      .sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
+
+    contexts[clubName] = {
+      avgClubScore,
+      absentStarName: absoluteStar && (absoluteStar.injuryStatus !== 'FIT' || absoluteStar.status === 'NOT_PLAYING') ? absoluteStar.displayName : undefined,
+      absentDefenderName: bestDef && (bestDef.injuryStatus !== 'FIT' || bestDef.status === 'NOT_PLAYING') ? bestDef.displayName : undefined,
+      absentScorerName: bestFwd && (bestFwd.injuryStatus !== 'FIT' || bestFwd.status === 'NOT_PLAYING') ? bestFwd.displayName : undefined,
+      absentAssisterName: bestMid && (bestMid.injuryStatus !== 'FIT' || bestMid.status === 'NOT_PLAYING') ? bestMid.displayName : undefined,
+    };
+  });
+
+  return contexts;
+}
+
 export function isNationalTeamMatch(match: { competitionName?: string; opponent?: string }): boolean {
   const comp = (match.competitionName || '').toLowerCase().trim();
   const opp = (match.opponent || '').toLowerCase().trim();
@@ -446,9 +491,16 @@ export function calculatePlayerProjectedScore(
   // 1. Détermination de la nature de la prochaine échéance (Nationale vs Club)
   const upcomingIsNational = card.upcomingFixture?.competitionName && isNationalTeamMatch({ competitionName: card.upcomingFixture.competitionName });
 
-  let l5 = card.scores?.l5 || (card.scores?.last5Scores?.length ? card.scores.last5Scores.reduce((a, b) => a + b, 0) / card.scores.last5Scores.length : 40);
-  let l15 = card.scores?.l15 || l5;
-  let l40 = card.scores?.l40 || l15;
+  const calcCleanAverage = (scores: number[] | undefined, count: number, fallback = 40) => {
+    if (!scores || scores.length === 0) return fallback;
+    const played = scores.filter(s => s != null && s > 0).slice(0, count);
+    if (played.length === 0) return fallback;
+    return Math.round((played.reduce((a, b) => a + b, 0) / played.length) * 10) / 10;
+  };
+
+  let l5 = card.scores?.l5 || calcCleanAverage(card.scores?.last5Scores, 5, 40);
+  let l15 = card.scores?.l15 || calcCleanAverage(card.scores?.last15Scores, 15, l5);
+  let l40 = card.scores?.l40 || calcCleanAverage(card.scores?.last40Scores, 40, l15);
   let recentStats = getPlayerRecentMatchAnalysis(card);
   let filterLabel = '';
 
@@ -466,17 +518,28 @@ export function calculatePlayerProjectedScore(
 
     if (filteredMatches.length > 0) {
       const filteredScores = filteredMatches.map(m => m.score);
-      const calcAverage = (scores: number[], count: number) => {
-        const slice = scores.slice(0, count);
-        return slice.length > 0 ? slice.reduce((a, b) => a + b, 0) / slice.length : 40;
+      // Calcul officiel Sorare (uniquement matchs joués > 0) avec lissage Bayesien si échantillon réduit
+      const baselineScore = (card.scores?.l40 && card.scores.l40 > 0) ? card.scores.l40 : (card.scores?.l15 || 48);
+      const calcAverage = (scores: number[], count: number, fallback: number = baselineScore) => {
+        const playedScores = scores.filter(s => s != null && s > 0);
+        const slice = playedScores.slice(0, count);
+        if (slice.length === 0) return fallback;
+        const rawAvg = slice.reduce((a, b) => a + b, 0) / slice.length;
+        // Garde-fou Trêve Internationale / Faible échantillon : si < 2 matchs joués pour L5 ou < 4 pour L15
+        const minReq = count === 5 ? 2 : Math.min(count, 4);
+        if (slice.length < minReq) {
+          const weight = slice.length / minReq;
+          return (rawAvg * weight) + (fallback * (1 - weight));
+        }
+        return rawAvg;
       };
 
-      l5 = calcAverage(filteredScores, 5);
-      l15 = calcAverage(filteredScores, 15);
+      l5 = calcAverage(filteredScores, 5, baselineScore);
+      l15 = calcAverage(filteredScores, 15, baselineScore);
       if (card.scores?.l40 != null && card.scores.l40 > 0) {
         l40 = card.scores.l40;
       } else {
-        l40 = calcAverage(filteredScores, 40);
+        l40 = calcAverage(filteredScores, 40, baselineScore);
       }
       recentStats = getClubOnlyRecentMatchAnalysis(filteredScores, card, upcomingIsNational);
       
@@ -559,6 +622,8 @@ export function calculatePlayerProjectedScore(
     isHome: card.upcomingFixture?.isHome ?? true,
     profileBonus: 0,
     bookmakerActionBonus: 0,
+    weatherBonus: 0,
+    weatherImpactLabel: undefined,
     contextualBonus: 0,
     regressionPenalty: 0,
     filterLabel,
@@ -686,6 +751,8 @@ export function calculatePlayerProjectedScore(
   let matchupImpactLabel = 'Neutre (FDR 3 : 100%)';
   let difficultyRating = fixture?.difficultyRating || 3;
   let allAroundFactor = 1.0;
+  let teamXG = 1.4;
+  let oppXG = 1.4;
 
   if (fixture) {
     const winProb = getPlayerWinProbability(fixture);
@@ -726,38 +793,51 @@ export function calculatePlayerProjectedScore(
         break;
     }
 
-    // --- HOME / AWAY FACTOR ---
+    // --- HOME / AWAY FACTOR & EXPECTED GOALS (xG) POSITION-BASED SCALING ---
+    teamXG = fixture?.bookmaker?.goalExpectancy || (difficultyRating === 1 ? 2.1 : difficultyRating === 2 ? 1.7 : difficultyRating === 3 ? 1.4 : difficultyRating === 4 ? 1.1 : 0.8);
+    oppXG = fixture?.bookmaker?.opponentGoalExpectancy || (difficultyRating === 1 ? 0.8 : difficultyRating === 2 ? 1.1 : difficultyRating === 3 ? 1.4 : difficultyRating === 4 ? 1.7 : 2.1);
+
     if (fixture.isHome) {
-      matchupFactor *= 1.03; // +3% Domicile
-      matchupImpactLabel += ' • Domicile (+3%)';
+      teamXG *= 1.10;
+      oppXG *= 0.90;
+      matchupImpactLabel += ' • Domicile (xG ajusté)';
     } else {
-      matchupFactor *= 0.97; // -3% Extérieur
-      matchupImpactLabel += ' • Extérieur (-3%)';
+      teamXG *= 0.90;
+      oppXG *= 1.10;
+      matchupImpactLabel += ' • Extérieur (xG ajusté)';
     }
 
     // --- NEW: Opponent Style Proxies ---
-    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture?.bookmaker?.goalExpectancy && fixture.bookmaker.goalExpectancy > 1.8) {
-      // Si l'adversaire a bcp d'xG, plus de volume défensif attendu
+    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && oppXG > 1.8) {
+      // Si l'adversaire a un volume offensif important, opportunités accrues de duels, sauvetages et tacles (+5% AAS)
       allAroundFactor *= 1.05;
     }
 
-    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && fixture?.bookmaker?.cleanSheetProb) {
-      cleanSheetFactor = (fixture.bookmaker.cleanSheetProb / 100) * 8;
+    // Calculate clean sheet factor based on cleanSheetProb if available, or dynamically derived from oppXG
+    if (card.positionCode === 'GK' || card.positionCode === 'DEF') {
+      const derivedCSProb = fixture?.bookmaker?.cleanSheetProb || Math.max(5, Math.min(85, Math.exp(-oppXG) * 100));
+      cleanSheetFactor = (derivedCSProb / 100) * 8;
     }
   }
 
   // --- NEW: Game State (O/U Proxy) ---
   let gameStateBonus = 0;
-  if (fixture?.bookmaker?.goalExpectancy) {
-    const xG = fixture.bookmaker.goalExpectancy;
-    if (xG < 1.1) {
-      // Match fermé
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 2;
-      if (card.positionCode === 'FWD') gameStateBonus -= 2;
-    } else if (xG > 2.2) {
+  if (fixture) {
+    const totalMatchXG = teamXG + oppXG;
+    if (totalMatchXG < 2.3) {
+      // Match fermé (total < 2.3 xG)
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 2.0;
+      if (card.positionCode === 'FWD') gameStateBonus -= 2.0;
+    } else if (totalMatchXG > 3.2) {
       // Match ouvert
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 1;
-      if (card.positionCode === 'FWD') gameStateBonus += 3;
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 1.0;
+      if (card.positionCode === 'FWD') gameStateBonus += 3.0;
+    }
+
+    // Positional offensive xG adjustment for attackers and midfielders
+    if (card.positionCode === 'FWD' || card.positionCode === 'MID') {
+      const xGAdjustment = (teamXG - 1.4) * 2.5; // Every 0.1 teamXG above/below 1.4 neutral xG gives +-0.25 points
+      gameStateBonus += xGAdjustment;
     }
   }
 
@@ -868,9 +948,42 @@ export function calculatePlayerProjectedScore(
     }
   }
 
-  let projected = (baseForm * starterFactor * matchupFactor * allAroundFactor) + cleanSheetFactor + profileBonus + gameStateBonus + contextualBonus;
+  // --- Weather Factor ---
+  let weatherBonus = 0;
+  let weatherImpactLabel = '';
+  if (fixture?.weather) {
+    const w = fixture.weather;
+    const isRain = w.isRainy || (w.precipitation != null && w.precipitation > 2) || (w.description && (w.description.toLowerCase().includes('pluie') || w.description.toLowerCase().includes('orage') || w.description.toLowerCase().includes('averses')));
+    const isHighWind = (w.wind != null && w.wind > 35);
+    
+    if (isRain) {
+      if (card.positionCode === 'GK') {
+        weatherBonus -= 1.0;
+        weatherImpactLabel = 'Pluie glissante (Ballon fuyant -1.0pt)';
+      } else if (card.positionCode === 'DEF') {
+        weatherBonus += 0.8;
+        weatherImpactLabel = 'Terrain humide (Volume tacles +0.8pt)';
+      } else if (card.positionCode === 'MID') {
+        weatherBonus -= 0.5;
+        weatherImpactLabel = 'Pluie soutenue (Précision passes -0.5pt)';
+      } else if (card.positionCode === 'FWD') {
+        weatherBonus += 0.4;
+        weatherImpactLabel = 'Frappes lointaines & rebonds (+0.4pt)';
+      }
+    } else if (isHighWind) {
+      if (card.positionCode === 'GK') {
+        weatherBonus -= 0.8;
+        weatherImpactLabel = 'Vent fort (Trajectoires flottantes -0.8pt)';
+      } else if (card.positionCode === 'MID') {
+        weatherBonus -= 0.6;
+        weatherImpactLabel = 'Vent fort (Jeu long perturbé -0.6pt)';
+      }
+    }
+  }
 
-  // 5. Bonus additionnels Buteur/Passeur (Bookmakers)
+  let projected = (baseForm * starterFactor * matchupFactor * allAroundFactor) + cleanSheetFactor + profileBonus + gameStateBonus + contextualBonus + weatherBonus;
+
+  // 5. Bonus additionnels Buteur/Passeur (Bookmakers & xG/xA avancés)
   let bookmakerActionBonus = 0;
   if (fixture?.bookmaker) {
     const bm = fixture.bookmaker;
@@ -882,7 +995,17 @@ export function calculatePlayerProjectedScore(
       bookmakerActionBonus += Math.max(0.1, (6.0 - bm.anytimeAssistOdds) * 0.3);
     }
   }
-  projected += bookmakerActionBonus;
+
+  // Intégration des statistiques avancées xG / xA si disponibles
+  let advancedStatsBonus = 0;
+  if (card.scores?.xG && card.scores.xG > 0) {
+    advancedStatsBonus += Math.min(2.5, card.scores.xG * 1.6);
+  }
+  if (card.scores?.xA && card.scores.xA > 0) {
+    advancedStatsBonus += Math.min(2.5, card.scores.xA * 1.8);
+  }
+
+  projected += (bookmakerActionBonus + advancedStatsBonus);
 
   // 6. Orientation Stratégique AAS vs DS vs Équilibré
   let scoringFocusBonus = 0;
@@ -979,6 +1102,8 @@ export function calculatePlayerProjectedScore(
     isHome: fixture?.isHome ?? true,
     profileBonus: Math.round(profileBonus * 10) / 10,
     bookmakerActionBonus: Math.round(bookmakerActionBonus * 10) / 10,
+    weatherBonus: Math.round(weatherBonus * 10) / 10,
+    weatherImpactLabel: weatherImpactLabel || undefined,
     contextualBonus: Math.round(contextualBonus * 10) / 10,
     contextualImpactLabel,
     regressionPenalty: Math.round(regressionPenalty * 10) / 10,
@@ -1473,6 +1598,7 @@ export function optimizeLineup(
         fwd: selectedFwd ? `${selectedFwd.displayName} - Buteur principal.` : 'Non défini',
         extra: selectedExtra ? `${selectedExtra.displayName} - Élement supplémentaire clé.` : 'Non défini',
       },
+      source: 'algorithmic_engine',
     },
     createdAt: new Date().toISOString(),
   };

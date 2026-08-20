@@ -12,9 +12,21 @@ export interface BookmakerOdds {
   loss?: number; // e.g. 5.20
   cleanSheetProb?: number; // 0 - 100 % (critical for DEF/GK)
   goalExpectancy?: number; // Team xG e.g. 2.1
+  opponentGoalExpectancy?: number; // Opponent xG e.g. 0.8
   anytimeScorerOdds?: number; // e.g. 2.10
   anytimeAssistOdds?: number; // e.g. 3.40
   winProbability?: number;
+}
+
+export interface WeatherCondition {
+  temp?: number;
+  temperature?: number;
+  description?: string;
+  wind?: number;
+  city?: string;
+  source?: string;
+  isRainy?: boolean;
+  precipitation?: number;
 }
 
 export interface UpcomingFixture {
@@ -33,6 +45,7 @@ export interface UpcomingFixture {
   competitionName?: string;
   competition?: string;
   bookmaker?: BookmakerOdds;
+  weather?: WeatherCondition;
   projectedMinutes?: number; // Expected minutes (e.g. 90, 75, 20, 0)
   projectedScore?: number; // Baseline projected SO5 score (0 - 100)
 }
@@ -51,6 +64,8 @@ export interface RealMatchScoreDetail {
   baseScore?: number; // 35 for Starter, 25 for Sub, 0 for DNP
   goals?: number;
   goalAssist?: number;
+  expectedGoals?: number;
+  expectedAssists?: number;
   yellowCards?: number;
   redCards?: number;
   cleanSheet?: number;
@@ -178,6 +193,8 @@ export interface SorareCard {
     consistencyScore?: number;
     consistencyRate?: number;
     decisiveRate?: number;
+    xG?: number;
+    xA?: number;
   };
   upcomingFixture: UpcomingFixture;
   tacticalNotes?: string;
@@ -246,8 +263,36 @@ export interface Lineup {
       fwd: string;
       extra: string;
     };
+    source?: 'gemini_ai' | 'algorithmic_engine';
   };
   createdAt: string;
+}
+
+export interface AiScoutReport {
+  verdict: string;
+  confidenceRating: number;
+  floorScore: number;
+  expectedScore: number;
+  ceilingScore: number;
+  matchupAnalysis: string;
+  starterSecurity: string;
+  captainSuitability: string;
+  keyAdvice: string;
+  source?: 'gemini_ai' | 'algorithmic_engine';
+}
+
+export interface SorareOfficialLineup {
+  id: string;
+  gameWeek: number;
+  leaderboardName?: string;
+  leaderboardSlug?: string;
+  cards: {
+    cardId: string;
+    slug: string;
+    displayName: string;
+    position: string;
+    isCaptain: boolean;
+  }[];
 }
 
 export interface GameWeekInfo {
@@ -359,6 +404,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  source?: 'gemini_ai' | 'algorithmic_engine';
   suggestedActions?: string[];
   referencedPlayerIds?: string[];
 }

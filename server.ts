@@ -947,6 +947,334 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
   }
 });
 
+// Targeted Live Scoring Endpoint (POST - targeted slugs from active lineups)
+app.post('/api/sorare/live-scoring', async (req, res) => {
+  const rawUsername = (req.body.username as string) || (req.query.username as string) || 'thib-8';
+  const customApiKey = (req.body.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const slugs: string[] = Array.isArray(req.body.slugs) ? req.body.slugs.filter(Boolean) : [];
+  const slug = cleanSlug(rawUsername);
+  const startTime = Date.now();
+
+  try {
+    const cached = userCardsCache.get(slug);
+    const liveScoresMap: Record<string, any> = {};
+
+    // If specific slugs provided, resolve live matches directly for those players
+    if (slugs.length > 0) {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'TeamSorare-App/2.0',
+      };
+      if (customApiKey) {
+        headers['APIKEY'] = customApiKey;
+      }
+
+      const query = `
+        query GetPlayersLiveScores($slugs: [String!]!) {
+          players(slugs: $slugs) {
+            id
+            slug
+            displayName
+            playingStatus
+            so5Scores(last: 3) {
+              score
+              decisiveScore { totalScore }
+              allAroundStats { totalScore }
+              game {
+                id
+                date
+                statusTyped
+                homeGoals
+                awayGoals
+                homeTeam { name pictureUrl }
+                awayTeam { name pictureUrl }
+                competition { name }
+              }
+            }
+            activeClub {
+              name
+              pictureUrl
+              upcomingGames(first: 1) {
+                id
+                date
+                statusTyped
+                homeGoals
+                awayGoals
+                homeTeam { name pictureUrl }
+                awayTeam { name pictureUrl }
+                competition { name }
+              }
+            }
+          }
+        }
+      `;
+
+      try {
+        const responseResult = await fetchGraphQLWithRetry(
+          'https://api.sorare.com/graphql',
+          { query, variables: { slugs } },
+          headers,
+          1
+        );
+
+        if (responseResult.ok && responseResult.data?.data?.players) {
+          const playersData = responseResult.data.data.players || [];
+          playersData.forEach((player: any) => {
+            if (!player) return;
+
+            const so5Scores = player.so5Scores || [];
+            const liveSo5 = so5Scores.find((s: any) => {
+              const st = (s.game?.statusTyped || '').toLowerCase();
+              return st === 'live' || st === 'in_play' || st === 'ht';
+            }) || so5Scores[0];
+
+            const upcomingGame = player.activeClub?.upcomingGames?.[0];
+            const latestSo5Game = liveSo5?.game;
+            const upcomingClubGame = upcomingGame;
+
+            let activeGame = null;
+            const nowMs = Date.now();
+
+            if (latestSo5Game && upcomingClubGame) {
+              const statusSo5 = (latestSo5Game.statusTyped || '').toLowerCase();
+              const statusUp = (upcomingClubGame.statusTyped || '').toLowerCase();
+
+              if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'ht') {
+                activeGame = latestSo5Game;
+              } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'ht') {
+                activeGame = upcomingClubGame;
+              } else {
+                const tSo5 = latestSo5Game.date ? new Date(latestSo5Game.date).getTime() : Infinity;
+                const tUp = upcomingClubGame.date ? new Date(upcomingClubGame.date).getTime() : Infinity;
+
+                const distSo5 = isNaN(tSo5) ? Infinity : Math.abs(nowMs - tSo5);
+                const distUp = isNaN(tUp) ? Infinity : Math.abs(nowMs - tUp);
+
+                if (distSo5 <= distUp) {
+                  activeGame = latestSo5Game;
+                } else {
+                  activeGame = upcomingClubGame;
+                }
+              }
+            } else {
+              activeGame = latestSo5Game || upcomingClubGame;
+            }
+
+            const liveScore = liveSo5?.score != null ? Math.round(Number(liveSo5.score) * 10) / 10 : null;
+            const decisiveScore = liveSo5?.decisiveScore?.totalScore != null ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10 : null;
+
+            const scoreEntry = {
+              cardId: player.id,
+              cardSlug: player.slug,
+              playerSlug: player.slug,
+              displayName: player.displayName,
+              playingStatus: player.playingStatus,
+              liveScore,
+              decisiveScore,
+              clubPictureUrl: player.activeClub?.pictureUrl || '',
+              so5ScoresHistory: so5Scores.map((s: any) => ({
+                score: s.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
+                decisiveScore: s.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
+                allAroundScore: s.allAroundStats?.totalScore != null ? Math.round(Number(s.allAroundStats.totalScore) * 10) / 10 : null,
+                game: s.game ? {
+                  id: s.game.id,
+                  date: s.game.date,
+                  statusTyped: s.game.statusTyped,
+                  homeGoals: s.game.homeGoals ?? 0,
+                  awayGoals: s.game.awayGoals ?? 0,
+                  homeTeam: s.game.homeTeam?.name || 'Équipe 1',
+                  homeTeamPicture: s.game.homeTeam?.pictureUrl || '',
+                  awayTeam: s.game.awayTeam?.name || 'Équipe 2',
+                  awayTeamPicture: s.game.awayTeam?.pictureUrl || '',
+                  competition: s.game.competition?.name || 'Championnat',
+                } : null,
+              })),
+              game: activeGame ? {
+                id: activeGame.id,
+                date: activeGame.date,
+                statusTyped: activeGame.statusTyped,
+                homeGoals: activeGame.homeGoals ?? 0,
+                awayGoals: activeGame.awayGoals ?? 0,
+                homeTeam: activeGame.homeTeam?.name || 'Équipe 1',
+                homeTeamPicture: activeGame.homeTeam?.pictureUrl || '',
+                awayTeam: activeGame.awayTeam?.name || 'Équipe 2',
+                awayTeamPicture: activeGame.awayTeam?.pictureUrl || '',
+                competition: activeGame.competition?.name || 'Championnat',
+              } : null,
+              upcomingGame: upcomingClubGame ? {
+                id: upcomingClubGame.id,
+                date: upcomingClubGame.date,
+                statusTyped: upcomingClubGame.statusTyped,
+                homeGoals: upcomingClubGame.homeGoals ?? 0,
+                awayGoals: upcomingClubGame.awayGoals ?? 0,
+                homeTeam: upcomingClubGame.homeTeam?.name || 'Équipe 1',
+                homeTeamPicture: upcomingClubGame.homeTeam?.pictureUrl || '',
+                awayTeam: upcomingClubGame.awayTeam?.name || 'Équipe 2',
+                awayTeamPicture: upcomingClubGame.awayTeam?.pictureUrl || '',
+                competition: upcomingClubGame.competition?.name || 'Championnat',
+              } : null,
+            };
+
+            liveScoresMap[player.slug] = scoreEntry;
+            liveScoresMap[player.id] = scoreEntry;
+            if (player.id.startsWith('Card:')) {
+              liveScoresMap[player.id.replace('Card:', '')] = scoreEntry;
+            }
+          });
+        }
+      } catch (gqlErr) {
+        console.warn(`[LiveScoring] Dynamic fetch error for slugs:`, gqlErr);
+      }
+
+      // If live fetching failed or returned empty, fallback to cached cards data
+      if (Object.keys(liveScoresMap).length === 0) {
+        const matchedCards = cached?.cards ? cached.cards.filter(c => slugs.includes(c.slug) || slugs.includes(c.id)) : [];
+        matchedCards.forEach(c => {
+          const latestMatch = c.scores?.recentMatches?.[0];
+          if (latestMatch) {
+            const scoreEntry = {
+              cardId: c.id,
+              cardSlug: c.slug,
+              playerSlug: c.slug,
+              displayName: c.displayName,
+              playingStatus: c.status,
+              liveScore: latestMatch.score || 0,
+              decisiveScore: latestMatch.decisiveScore || 0,
+              clubPictureUrl: c.club?.pictureUrl || '',
+              so5ScoresHistory: [],
+              game: null,
+              upcomingGame: null
+            };
+            liveScoresMap[c.slug] = scoreEntry;
+            liveScoresMap[c.id] = scoreEntry;
+          }
+        });
+      }
+
+      const durationMs = Date.now() - startTime;
+      addApiLog({
+        description: `Sorare API: Live Scoring ciblé (${slugs.length} joueurs)`,
+        service: 'Sorare API',
+        method: 'POST /api/sorare/live-scoring',
+        status: 'SUCCESS',
+        statusCode: 200,
+        durationMs,
+        requestSummary: { slug, requestedSlugs: slugs.length },
+        responseSummary: { resolvedCount: Object.keys(liveScoresMap).length },
+      });
+
+      return res.json({
+        success: true,
+        source: 'targeted_live_scoring',
+        timestamp: new Date().toISOString(),
+        totalCards: slugs.length,
+        liveScores: liveScoresMap,
+      });
+    }
+
+    // Default fallback to cache
+    return res.json({
+      success: true,
+      source: 'server_cache_fallback',
+      timestamp: new Date().toISOString(),
+      liveScores: {},
+      cards: cached?.cards || [],
+    });
+  } catch (err: any) {
+    const durationMs = Date.now() - startTime;
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Fetch User Submitted SO5 Lineups from Sorare or Cache
+app.get('/api/sorare/user-lineups', async (req, res) => {
+  const rawUsername = (req.query.username as string) || 'thib-8';
+  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const slug = cleanSlug(rawUsername);
+  const startTime = Date.now();
+
+  try {
+    const hasApiKey = Boolean(customApiKey);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Sorare-SO5-Optimizer/2.0'
+    };
+    if (customApiKey) {
+      headers['APIKEY'] = customApiKey;
+      headers['Authorization'] = `Bearer ${customApiKey}`;
+    }
+
+    const query = `
+      query GetUserSo5Lineups($slug: String!) {
+        user(slug: $slug) {
+          nickname
+          so5Lineups(last: 10) {
+            id
+            gameWeek
+            status
+            name
+            projectedScore
+            captainCard {
+              id
+              slug
+            }
+            cards {
+              id
+              slug
+              rarity
+              anyPlayer {
+                ... on Player {
+                  displayName
+                  slug
+                  position
+                  activeClub {
+                    name
+                    pictureUrl
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const result = await fetchGraphQLWithRetry('https://api.sorare.com/graphql', { query, variables: { slug } }, headers, 1);
+    
+    if (result.ok && result.data?.data?.user?.so5Lineups) {
+      const durationMs = Date.now() - startTime;
+      addApiLog({
+        description: `Sorare API: Lineups SO5 récupérées (${result.data.data.user.so5Lineups.length})`,
+        service: 'Sorare API',
+        method: 'GET /api/sorare/user-lineups',
+        status: 'SUCCESS',
+        statusCode: 200,
+        durationMs,
+        requestSummary: { slug },
+        responseSummary: { count: result.data.data.user.so5Lineups.length }
+      });
+
+      return res.json({
+        success: true,
+        source: 'sorare_graphql',
+        lineups: result.data.data.user.so5Lineups
+      });
+    }
+
+    return res.json({
+      success: true,
+      source: 'empty_fallback',
+      lineups: []
+    });
+  } catch (err: any) {
+    return res.json({
+      success: true,
+      source: 'fallback',
+      lineups: []
+    });
+  }
+});
+
 // Helper for cleaning Sorare username slugs
 app.get('/api/admin/debug-raya', (req, res) => {
   const cards = Array.from(userCardsCache.values()).flatMap(c => c.cards);
@@ -993,11 +1321,17 @@ async function fetchGraphQLWithRetry(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
       const response = await fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       lastStatus = response.status;
       const durationMs = Date.now() - startTime;
@@ -1129,8 +1463,237 @@ function getWeatherDescription(code: number): string {
   return 'Temps idéal';
 }
 
+const CLUB_TO_CITY_MAP: Record<string, string> = {
+  'Paris Saint Germain': 'Paris',
+  'Paris Saint-Germain': 'Paris',
+  'Paris SG': 'Paris',
+  'PSG': 'Paris',
+  'Bayer 04 Leverkusen': 'Leverkusen',
+  'Bayer Leverkusen': 'Leverkusen',
+  'Arsenal': 'London',
+  'Arsenal FC': 'London',
+  'Real Madrid': 'Madrid',
+  'FC Barcelona': 'Barcelona',
+  'Barcelona': 'Barcelona',
+  'Bayern Munich': 'Munich',
+  'FC Bayern München': 'Munich',
+  'Manchester City': 'Manchester',
+  'Manchester United': 'Manchester',
+  'Liverpool FC': 'Liverpool',
+  'Liverpool': 'Liverpool',
+  'Juventus': 'Turin',
+  'Juventus FC': 'Turin',
+  'AC Milan': 'Milan',
+  'Milan': 'Milan',
+  'Inter Milan': 'Milan',
+  'FC Internazionale Milano': 'Milan',
+  'Inter': 'Milan',
+  'Chelsea FC': 'London',
+  'Chelsea': 'London',
+  'Tottenham Hotspur': 'London',
+  'Tottenham': 'London',
+  'Atletico Madrid': 'Madrid',
+  'Atlético de Madrid': 'Madrid',
+  'Borussia Dortmund': 'Dortmund',
+  'RB Leipzig': 'Leipzig',
+  'SSC Napoli': 'Naples',
+  'Napoli': 'Naples',
+  'AS Roma': 'Rome',
+  'Roma': 'Rome',
+  'SS Lazio': 'Rome',
+  'Lazio': 'Rome',
+  'Olympique de Marseille': 'Marseille',
+  'Marseille': 'Marseille',
+  'Olympique Lyonnais': 'Lyon',
+  'Lyon': 'Lyon',
+  'AS Monaco': 'Monaco',
+  'Monaco': 'Monaco',
+  'LOSC Lille': 'Lille',
+  'Lille OSC': 'Lille',
+  'Stade Rennais FC': 'Rennes',
+  'Rennes': 'Rennes',
+  'RC Lens': 'Lens',
+  'Lens': 'Lens',
+  'Aston Villa': 'Birmingham',
+  'Newcastle United': 'Newcastle',
+  'West Ham United': 'London',
+  'Brighton & Hove Albion': 'Brighton',
+  'Wolverhampton Wanderers': 'Wolverhampton',
+  'Everton FC': 'Liverpool',
+  'Fulham FC': 'London',
+  'Brentford FC': 'London',
+  'Crystal Palace': 'London',
+  'Athletic Club': 'Bilbao',
+  'Athletic Bilbao': 'Bilbao',
+  'Real Sociedad': 'San Sebastian',
+  'Real Betis': 'Seville',
+  'Sevilla FC': 'Seville',
+  'Villarreal CF': 'Villarreal',
+  'Valencia CF': 'Valencia',
+  'Sporting CP': 'Lisbon',
+  'SL Benfica': 'Lisbon',
+  'Benfica': 'Lisbon',
+  'FC Porto': 'Porto',
+  'Porto': 'Porto',
+  'Ajax': 'Amsterdam',
+  'AFC Ajax': 'Amsterdam',
+  'Feyenoord': 'Rotterdam',
+  'PSV Eindhoven': 'Eindhoven',
+  'PSV': 'Eindhoven',
+  'Celtic FC': 'Glasgow',
+  'Celtic': 'Glasgow',
+  'Rangers FC': 'Glasgow',
+  'Rangers': 'Glasgow',
+  'Galatasaray': 'Istanbul',
+  'Fenerbahce': 'Istanbul',
+  'Besiktas': 'Istanbul',
+  'Inter Miami CF': 'Miami',
+  'LA Galaxy': 'Los Angeles',
+  'Los Angeles FC': 'Los Angeles',
+  'New York City FC': 'New York',
+  'New York Red Bulls': 'New York',
+  'Vissel Kobe': 'Kobe',
+  'Yokohama F. Marinos': 'Yokohama',
+  'Urawa Red Diamonds': 'Saitama',
+  'Kawasaki Frontale': 'Kawasaki',
+  'Jeonbuk Hyundai Motors': 'Jeonju',
+  'Ulsan HD FC': 'Ulsan',
+  'FC Seoul': 'Seoul',
+  'River Plate': 'Buenos Aires',
+  'Boca Juniors': 'Buenos Aires',
+  'CR Flamengo': 'Rio de Janeiro',
+  'SE Palmeiras': 'Sao Paulo',
+  'Sao Paulo FC': 'Sao Paulo',
+  'Red Bull Salzburg': 'Salzburg',
+  'SK Sturm Graz': 'Graz',
+  'BSC Young Boys': 'Bern',
+  'FC Basel': 'Basel',
+  'FC Copenhagen': 'Copenhagen',
+  'Bodø/Glimt': 'Bodo',
+  'Malmö FF': 'Malmo',
+  // Ligue 1
+  'Stade de Reims': 'Reims',
+  'Reims': 'Reims',
+  'Stade Brestois 29': 'Brest',
+  'Brest': 'Brest',
+  'OGC Nice': 'Nice',
+  'Nice': 'Nice',
+  'Toulouse FC': 'Toulouse',
+  'Toulouse': 'Toulouse',
+  'Montpellier HSC': 'Montpellier',
+  'Montpellier': 'Montpellier',
+  'RC Strasbourg Alsace': 'Strasbourg',
+  'Strasbourg': 'Strasbourg',
+  'FC Nantes': 'Nantes',
+  'Nantes': 'Nantes',
+  'AJ Auxerre': 'Auxerre',
+  'Auxerre': 'Auxerre',
+  'Angers SCO': 'Angers',
+  'Angers': 'Angers',
+  'AS Saint-Étienne': 'Saint-Etienne',
+  'Saint-Etienne': 'Saint-Etienne',
+  'Le Havre AC': 'Le Havre',
+  'Le Havre': 'Le Havre',
+  // La Liga
+  'Girona FC': 'Girona',
+  'Girona': 'Girona',
+  'RCD Mallorca': 'Mallorca',
+  'Mallorca': 'Mallorca',
+  'UD Las Palmas': 'Las Palmas',
+  'Las Palmas': 'Las Palmas',
+  'Deportivo Alavés': 'Vitoria-Gasteiz',
+  'Alaves': 'Vitoria-Gasteiz',
+  'CA Osasuna': 'Pamplona',
+  'Osasuna': 'Pamplona',
+  'Getafe CF': 'Getafe',
+  'Getafe': 'Getafe',
+  'RC Celta de Vigo': 'Vigo',
+  'Celta': 'Vigo',
+  'Celta Vigo': 'Vigo',
+  'Rayo Vallecano': 'Madrid',
+  'Real Valladolid CF': 'Valladolid',
+  'Valladolid': 'Valladolid',
+  'CD Leganés': 'Leganes',
+  'Leganes': 'Leganes',
+  'RCD Espanyol': 'Barcelona',
+  'Espanyol': 'Barcelona',
+  // Serie A
+  'Atalanta BC': 'Bergamo',
+  'Atalanta': 'Bergamo',
+  'Bologna FC 1909': 'Bologna',
+  'Bologna': 'Bologna',
+  'ACF Fiorentina': 'Florence',
+  'Fiorentina': 'Florence',
+  'Torino FC': 'Turin',
+  'Torino': 'Turin',
+  'Genoa CFC': 'Genoa',
+  'Genoa': 'Genoa',
+  'AC Monza': 'Monza',
+  'Monza': 'Monza',
+  'Udinese Calcio': 'Udine',
+  'Udinese': 'Udine',
+  'Hellas Verona FC': 'Verona',
+  'Verona': 'Verona',
+  'Cagliari Calcio': 'Cagliari',
+  'Cagliari': 'Cagliari',
+  'US Lecce': 'Lecce',
+  'Lecce': 'Lecce',
+  'Parma Calcio 1913': 'Parma',
+  'Parma': 'Parma',
+  'Como 1907': 'Como',
+  'Como': 'Como',
+  'Venezia FC': 'Venice',
+  'Venezia': 'Venice',
+  'Empoli FC': 'Empoli',
+  'Empoli': 'Empoli',
+  // Premier League
+  'Leicester City': 'Leicester',
+  'Ipswich Town': 'Ipswich',
+  'Southampton FC': 'Southampton',
+  'Southampton': 'Southampton',
+  'Nottingham Forest': 'Nottingham',
+  'AFC Bournemouth': 'Bournemouth',
+  'Bournemouth': 'Bournemouth',
+  // Bundesliga
+  'VfB Stuttgart': 'Stuttgart',
+  'Stuttgart': 'Stuttgart',
+  'Eintracht Frankfurt': 'Frankfurt',
+  'TSG 1899 Hoffenheim': 'Sinsheim',
+  'Hoffenheim': 'Sinsheim',
+  '1. FC Heidenheim 1846': 'Heidenheim',
+  'Heidenheim': 'Heidenheim',
+  'SV Werder Bremen': 'Bremen',
+  'Werder Bremen': 'Bremen',
+  'SC Freiburg': 'Freiburg',
+  'Freiburg': 'Freiburg',
+  'FC Augsburg': 'Augsburg',
+  'Augsburg': 'Augsburg',
+  'VfL Wolfsburg': 'Wolfsburg',
+  'Wolfsburg': 'Wolfsburg',
+  '1. FSV Mainz 05': 'Mainz',
+  'Mainz': 'Mainz',
+  'Borussia Mönchengladbach': 'Monchengladbach',
+  'Gladbach': 'Monchengladbach',
+  'VfL Bochum 1848': 'Bochum',
+  'Bochum': 'Bochum',
+  'FC St. Pauli': 'Hamburg',
+  'St. Pauli': 'Hamburg',
+  'Holstein Kiel': 'Kiel'
+};
+
 app.get('/api/weather', async (req, res) => {
-  const city = ((req.query.city as string) || (req.query.club as string) || 'Paris').trim();
+  let rawCity = ((req.query.city as string) || (req.query.club as string) || 'Paris').trim();
+  // Exact match or partial lookup
+  let city = CLUB_TO_CITY_MAP[rawCity];
+  if (!city) {
+    // Try without common affixes
+    const simplified = rawCity
+      .replace(/\b(FC|CF|SC|AC|AS|SS|RB|RC|BSC|SK|SE|CR|SL|AFC|FK|IF)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    city = CLUB_TO_CITY_MAP[simplified] || simplified || 'Paris';
+  }
+
   const cacheKey = city.toLowerCase();
   const cached = weatherCache.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp < WEATHER_CACHE_TTL)) {
@@ -1202,80 +1765,102 @@ async function fetchRealBookmakerOdds() {
       'soccer_italy_serie_a', 
       'soccer_germany_bundesliga',
       'soccer_uefa_champs_league',
-      'soccer_usa_mls'
+      'soccer_uefa_europa_league',
+      'soccer_netherlands_eredivisie',
+      'soccer_portugal_primeira_liga',
+      'soccer_belgium_first_div',
+      'soccer_usa_mls',
+      'soccer_brazil_campeonato',
+      'soccer_mexico_ligamx',
+      'soccer_turkey_super_league',
+      'soccer_japan_j_league',
+      'soccer_korea_kleague1',
+      'soccer_efl_champ',
+      'soccer_spl',
+      'soccer_argentina_primera_division',
+      'soccer_austria_bundesliga',
+      'soccer_switzerland_superleague',
+      'soccer_denmark_superliga',
+      'soccer_norway_eliteserien',
+      'soccer_sweden_allsvenskan'
     ];
     
-    await Promise.allSettled(
-      leagues.map(async (league) => {
-        try {
-          const url = `https://api.the-odds-api.com/v4/sports/${league}/odds/?apiKey=${apiKey}&regions=eu&markets=h2h,totals,btts`;
-          const res = await fetch(url);
-          if (res.ok) {
-            const data = await res.json();
-            data.forEach((match: any) => {
-              const h2hMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'h2h');
-              const totalsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'totals');
-              const bttsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'btts');
+    for (const league of leagues) {
+      try {
+        const url = `https://api.the-odds-api.com/v4/sports/${league}/odds/?apiKey=${apiKey}&regions=eu&markets=h2h,totals,btts`;
+        const res = await fetch(url);
+        if (res.status === 429) {
+          console.warn(`[Odds API] Rate limit (429) reached for ${league}. Stopping current odds cache refresh.`);
+          break; // Exit early to respect rate-limiting
+        }
+        if (res.ok) {
+          const data = await res.json();
+          data.forEach((match: any) => {
+            const h2hMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'h2h');
+            const totalsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'totals');
+            const bttsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'btts');
+            
+            if (h2hMarket) {
+              const homeOdds = h2hMarket.outcomes.find((o: any) => o.name === match.home_team)?.price || 2.5;
+              const awayOdds = h2hMarket.outcomes.find((o: any) => o.name === match.away_team)?.price || 2.5;
+              const drawOdds = h2hMarket.outcomes.find((o: any) => o.name === 'Draw')?.price || 3.0;
               
-              if (h2hMarket) {
-                const homeOdds = h2hMarket.outcomes.find((o: any) => o.name === match.home_team)?.price || 2.5;
-                const awayOdds = h2hMarket.outcomes.find((o: any) => o.name === match.away_team)?.price || 2.5;
-                const drawOdds = h2hMarket.outcomes.find((o: any) => o.name === 'Draw')?.price || 3.0;
-                
-                let over25Odds = 1.85;
-                if (totalsMarket) {
-                  over25Odds = totalsMarket.outcomes.find((o: any) => o.name === 'Over' && o.point === 2.5)?.price || 1.85;
-                }
-
-                let bttsProb = 52;
-                if (bttsMarket) {
-                  const bttsYesOdds = bttsMarket.outcomes.find((o: any) => o.name === 'Yes')?.price;
-                  const bttsNoOdds = bttsMarket.outcomes.find((o: any) => o.name === 'No')?.price;
-                  if (bttsYesOdds && bttsNoOdds) {
-                    const invYes = 1 / bttsYesOdds;
-                    const invNo = 1 / bttsNoOdds;
-                    bttsProb = Math.round((invYes / (invYes + invNo)) * 100);
-                  }
-                }
-                
-                const totalMatchXG = Math.max(1.5, Math.min(4.5, (1.9 / over25Odds) * 1.5 + 1.25));
-                const homeWinProb = 1 / homeOdds;
-                const awayWinProb = 1 / awayOdds;
-                const totalProb = homeWinProb + awayWinProb;
-                
-                const homeXG = Math.round((totalMatchXG * (homeWinProb / totalProb) * 1.05) * 100) / 100;
-                const awayXG = Math.round((totalMatchXG * (awayWinProb / totalProb) * 0.95) * 100) / 100;
-                
-                const homeCSPoisson = Math.exp(-awayXG) * 100;
-                const awayCSPoisson = Math.exp(-homeXG) * 100;
-                
-                const homeCS = Math.max(5, Math.min(85, Math.round(homeCSPoisson * 0.7 + (100 - bttsProb) * 0.6)));
-                const awayCS = Math.max(5, Math.min(85, Math.round(awayCSPoisson * 0.7 + (100 - bttsProb) * 0.4)));
-                
-                realOddsCache.set(normalizeClubName(match.home_team), { 
-                  win: homeOdds, 
-                  draw: drawOdds, 
-                  loss: awayOdds, 
-                  cleanSheetProb: homeCS, 
-                  goalExpectancy: homeXG,
-                  opponentGoalExpectancy: awayXG,
-                  bttsProb
-                });
-                realOddsCache.set(normalizeClubName(match.away_team), { 
-                  win: awayOdds, 
-                  draw: drawOdds, 
-                  loss: homeOdds, 
-                  cleanSheetProb: awayCS, 
-                  goalExpectancy: awayXG, 
-                  opponentGoalExpectancy: homeXG,
-                  bttsProb
-                });
+              let over25Odds = 1.85;
+              if (totalsMarket) {
+                over25Odds = totalsMarket.outcomes.find((o: any) => o.name === 'Over' && o.point === 2.5)?.price || 1.85;
               }
-            });
-          }
-        } catch {}
-      })
-    );
+              let bttsProb = 52;
+              if (bttsMarket) {
+                const bttsYesOdds = bttsMarket.outcomes.find((o: any) => o.name === 'Yes')?.price;
+                const bttsNoOdds = bttsMarket.outcomes.find((o: any) => o.name === 'No')?.price;
+                if (bttsYesOdds && bttsNoOdds) {
+                  const invYes = 1 / bttsYesOdds;
+                  const invNo = 1 / bttsNoOdds;
+                  bttsProb = Math.round((invYes / (invYes + invNo)) * 100);
+                }
+              }
+              
+              const totalMatchXG = Math.max(1.5, Math.min(4.5, (1.9 / over25Odds) * 1.5 + 1.25));
+              const homeWinProb = 1 / homeOdds;
+              const awayWinProb = 1 / awayOdds;
+              const totalProb = homeWinProb + awayWinProb;
+              
+              const homeXG = Math.round((totalMatchXG * (homeWinProb / totalProb) * 1.05) * 100) / 100;
+              const awayXG = Math.round((totalMatchXG * (awayWinProb / totalProb) * 0.95) * 100) / 100;
+              
+              const homeCSPoisson = Math.exp(-awayXG) * 100;
+              const awayCSPoisson = Math.exp(-homeXG) * 100;
+              
+              const homeCS = Math.max(5, Math.min(85, Math.round(homeCSPoisson * 0.7 + (100 - bttsProb) * 0.6)));
+              const awayCS = Math.max(5, Math.min(85, Math.round(awayCSPoisson * 0.7 + (100 - bttsProb) * 0.4)));
+              
+              realOddsCache.set(normalizeClubName(match.home_team), { 
+                win: homeOdds, 
+                draw: drawOdds, 
+                loss: awayOdds, 
+                cleanSheetProb: homeCS, 
+                goalExpectancy: homeXG, 
+                opponentGoalExpectancy: awayXG,
+                bttsProb
+              });
+              realOddsCache.set(normalizeClubName(match.away_team), { 
+                win: awayOdds, 
+                draw: drawOdds, 
+                loss: homeOdds, 
+                cleanSheetProb: awayCS, 
+                goalExpectancy: awayXG, 
+                opponentGoalExpectancy: homeXG,
+                bttsProb
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn(`[Odds API] Error fetching ${league}:`, err);
+      }
+      // Sleep to avoid rate limiting
+      await new Promise(r => setTimeout(r, 400));
+    }
     lastOddsFetch = Date.now();
   } catch (err) {
     console.warn('[Odds API] Non-fatal background fetch notice:', err);
@@ -1552,11 +2137,12 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         while (last40Scores.length < 40) last40Scores.push(0);
 
         // 3. Exact L5, L10, L15, L40 averages (over matches played, excluding DNP/0)
-    // Helper to calculate average of played matches
-    const calcAvg = (scores: number[]) => {
-      if (scores.length === 0) return 0;
-      return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
-    };
+        // Helper to calculate average of played matches (excluding DNP / 0 scores)
+        const calcAvg = (scores: number[]) => {
+          const playedScores = scores.filter(s => s != null && s > 0);
+          if (playedScores.length === 0) return 0;
+          return Math.round((playedScores.reduce((a, b) => a + b, 0) / playedScores.length) * 10) / 10;
+        };
 
         let l5 = (player?.l5 != null) ? Math.round(Number(player.l5) * 10) / 10 : calcAvg(last5Scores);
         let l10 = calcAvg(last10Scores);
@@ -1608,6 +2194,20 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           posName = 'Attaquant';
         }
 
+        const derivedXG = (() => {
+          if (posCode === 'GK') return 0;
+          const base = (posCode === 'FWD') ? 0.35 : (posCode === 'MID') ? 0.12 : 0.04;
+          const formAdjust = Math.max(-0.2, (l15 - 45) * 0.012);
+          return Math.round(Math.max(0.01, base + formAdjust) * 100) / 100;
+        })();
+
+        const derivedXA = (() => {
+          if (posCode === 'GK') return 0;
+          const base = (posCode === 'MID') ? 0.28 : (posCode === 'FWD') ? 0.15 : 0.06;
+          const formAdjust = Math.max(-0.15, (l15 - 45) * 0.008);
+          return Math.round(Math.max(0.01, base + formAdjust) * 100) / 100;
+        })();
+
         // 5. Status & Starter Confidence based on context-aware recent matches
         const filteredRecentMatches = recentMatches.filter((m: any) => {
           const mComp = (m.competitionName || '').toLowerCase();
@@ -1630,6 +2230,8 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         let status: 'STARTER' | 'REGULAR' | 'SUBSTITUTE' | 'NOT_PLAYING' = 'REGULAR';
         let starterConfidence = 70;
         let injuryStatus: 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED' = 'FIT';
+
+        const rawPlayingStatus = (c.anyPlayer?.playingStatus || '').toUpperCase();
 
         if (relevantL5Matches.length === 0) {
           // Aucun match récent du type requis trouvé dans l'historique (ex: trêve nationale)
@@ -1664,6 +2266,27 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           } else if (playedCountRelevantL5 >= 4 && !playedLastRelevantMatch) {
             status = 'REGULAR';
             starterConfidence = 50;
+          }
+        }
+
+        // Apply real injury/suspension status if returned by Sorare API or sports feed
+        if (rawPlayingStatus.includes('INJUR') || rawPlayingStatus === 'INJURED') {
+          injuryStatus = 'INJURED';
+          status = 'NOT_PLAYING';
+          starterConfidence = 0;
+        } else if (rawPlayingStatus.includes('SUSPEND') || rawPlayingStatus === 'SUSPENDED') {
+          injuryStatus = 'SUSPENDED';
+          status = 'NOT_PLAYING';
+          starterConfidence = 0;
+        } else if (rawPlayingStatus.includes('DOUBT') || rawPlayingStatus === 'DOUBTFUL') {
+          injuryStatus = 'DOUBTFUL';
+          starterConfidence = Math.min(starterConfidence, 25);
+        } else if (rawPlayingStatus.includes('QUESTION') || rawPlayingStatus === 'QUESTIONABLE') {
+          injuryStatus = 'QUESTIONABLE';
+          starterConfidence = Math.min(starterConfidence, 50);
+        } else if (rawPlayingStatus === 'FIT') {
+          if (injuryStatus === 'DOUBTFUL' && playedCountRelevantL5 > 0) {
+            injuryStatus = 'FIT';
           }
         }
 
@@ -1888,6 +2511,8 @@ app.get('/api/sorare/user-cards', async (req, res) => {
             l10,
             l15,
             l40,
+            xG: derivedXG,
+            xA: derivedXA,
             last5Scores,
             last10Scores,
             last15Scores,
@@ -2416,6 +3041,7 @@ app.post('/api/ai/optimize-lineup', async (req, res) => {
         cleanSheetProb: c.upcomingFixture?.bookmaker?.cleanSheetProb,
         goalExpectancy: c.upcomingFixture?.bookmaker?.goalExpectancy,
         anytimeScorerOdds: c.upcomingFixture?.bookmaker?.anytimeScorerOdds,
+        weather: c.upcomingFixture?.weather ? `${c.upcomingFixture.weather.description || 'Météo'} (${c.upcomingFixture.weather.temp}°C, vent ${c.upcomingFixture.weather.wind} km/h)` : undefined,
       };
     });
 
@@ -2454,7 +3080,7 @@ Règles de composition SO5 :
    - Élimine d'office tout joueur blessé, suspendu, ou ayant le statut NOT_PLAYING.
 4. Respecte impérativement les filtres et contraintes fixés par l'utilisateur (notamment la date limite maxMatchDate).
 5. Stratégie demandée : ${strategy}.
-6. Analyse les cotes bookmakers (clean sheet pour gardiens/défenseurs, espérance de buts xG pour milieux/attaquants).
+6. Analyse les cotes bookmakers (clean sheet pour gardiens/défenseurs, espérance de buts xG pour milieux/attaquants) et la météo (pluie/vent augmentant les erreurs de gardiens et favorisant les duels défensifs).
 Rédige une analyse tactique percutante, professionnelle et justifiée en français en mentionnant les filtres respectés.`;
 
     const prompt = `Voici les cartes disponibles du joueur Thib 8 pour la Game Week ${gameWeek} respectant les filtres :

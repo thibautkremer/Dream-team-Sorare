@@ -54,6 +54,16 @@ export default function App() {
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastSynced, setLastSynced] = useState<string | null>(StorageService.getLastSync());
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+
+  const cancelSync = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsSyncing(false);
+      showToast('Synchronisation annulée', 'error');
+    }
+  };
 
   // Helper to check if a player is already in a lineup (preventing duplicate player in same composition)
   const isPlayerAlreadyInLineup = (lineupObj: Lineup, player: SorareCard, excludeSlot?: string): boolean => {
@@ -141,13 +151,16 @@ export default function App() {
 
   // Load cards on startup and sync with Sorare live API
   useEffect(() => {
-    const loadedCards = StorageService.getCards();
-    setCards(loadedCards);
-
-    // Generate optimal initial lineup
-    if (loadedCards.length > 0) {
-      setLineup(optimizeLineup(loadedCards, 'BALANCED', CURRENT_GAME_WEEK.number));
-    }
+    const initCards = async () => {
+      const loadedCards = await StorageService.getCardsAsync();
+      setCards(loadedCards);
+      
+      // Generate optimal initial lineup
+      if (loadedCards.length > 0) {
+        setLineup(optimizeLineup(loadedCards, 'BALANCED', CURRENT_GAME_WEEK.number));
+      }
+    };
+    initCards();
 
     // Auto-sync with Sorare API in background on startup
     const autoSync = async () => {
@@ -235,6 +248,84 @@ export default function App() {
     };
   }, []);
 
+  // Fetch weather and populate on cards' upcoming fixtures (with anti-loop guard)
+  useEffect(() => {
+    if (cards.length === 0) return;
+    
+    // Find all cards with an upcoming fixture that do not have weather already populated
+    const cardsToUpdate = cards.filter(c => c.upcomingFixture && !c.upcomingFixture.weather);
+    if (cardsToUpdate.length === 0) return;
+
+    // Get unique home/host clubs for those matches
+    const hostClubsMap = new Map<string, string[]>(); // host club name -> card IDs
+    cardsToUpdate.forEach(c => {
+      const host = c.upcomingFixture?.isHome ? (c.club?.name || '') : (c.upcomingFixture?.opponent || '');
+      if (host) {
+        if (!hostClubsMap.has(host)) {
+          hostClubsMap.set(host, []);
+        }
+        hostClubsMap.get(host)!.push(c.id);
+      }
+    });
+
+    const uniqueHosts = Array.from(hostClubsMap.keys()).slice(0, 15); // limit to 15 concurrent fetches per batch
+    if (uniqueHosts.length === 0) return;
+
+    const fetchWeatherAndAttach = async () => {
+      let updatedAny = false;
+      const cardsClone = [...cards];
+
+      for (const host of uniqueHosts) {
+        try {
+          const res = await fetch(`/api/weather?city=${encodeURIComponent(host)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success) {
+              const cardIds = hostClubsMap.get(host) || [];
+              cardIds.forEach(cid => {
+                const idx = cardsClone.findIndex(c => c.id === cid);
+                if (idx !== -1 && cardsClone[idx].upcomingFixture) {
+                  const desc = data.description || '';
+                  const isRainy = desc.toLowerCase().includes('pluie') || 
+                                  desc.toLowerCase().includes('orage') || 
+                                  desc.toLowerCase().includes('averses') || 
+                                  desc.toLowerCase().includes('neige');
+                  
+                  cardsClone[idx] = {
+                    ...cardsClone[idx],
+                    upcomingFixture: {
+                      ...cardsClone[idx].upcomingFixture!,
+                      weather: {
+                        temp: data.temp,
+                        temperature: data.temp,
+                        description: data.description,
+                        wind: data.wind,
+                        isRainy,
+                      }
+                    }
+                  };
+                  updatedAny = true;
+                }
+              });
+            }
+          }
+          // Small delay to avoid API rate limits
+          await new Promise(r => setTimeout(r, 100));
+        } catch (err) {
+          console.warn(`[Weather] Error loading weather for ${host}:`, err);
+        }
+      }
+
+      if (updatedAny) {
+        setCards(cardsClone);
+        StorageService.saveCards(cardsClone);
+        console.log('[Weather] Injected live weather into matching cards and updated local cache');
+      }
+    };
+
+    fetchWeatherAndAttach();
+  }, [cards]);
+
   const setUsername = (newUsername: string) => {
     setUsernameState(newUsername);
     StorageService.saveUsername(newUsername);
@@ -245,6 +336,9 @@ export default function App() {
     const targetName = customUsername || username;
     setIsSyncing(true);
     let pollInterval: any;
+    
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
 
     try {
       const apiKey = StorageService.getApiKey();
@@ -252,7 +346,7 @@ export default function App() {
       // Start polling for progress
       pollInterval = setInterval(async () => {
         try {
-          const progressRes = await fetch(`/api/sorare/sync-progress?username=${encodeURIComponent(targetName)}`);
+          const progressRes = await fetch(`/api/sorare/sync-progress?username=${encodeURIComponent(targetName)}`, { signal });
           if (progressRes.ok) {
             const progressData = await progressRes.json();
             if (progressData.progress) {
@@ -260,7 +354,7 @@ export default function App() {
               if (status === 'fetching') {
                 const pct = estimatedTotalPages > 0 ? Math.min(100, Math.round((fetchedPages / estimatedTotalPages) * 100)) : 0;
                 setToast({ 
-                  message: `Synchronisation en cours: ${fetchedCards} cartes trouvées (~${pct}%)`, 
+                  message: `Synchronisation en cours: ${fetchedCards} cartes trouvées (~${pct}%) - Cliquez ici pour annuler`, 
                   type: 'info' 
                 });
               }
@@ -273,7 +367,8 @@ export default function App() {
 
       const url = `/api/sorare/user-cards?username=${encodeURIComponent(targetName)}&forceRefresh=true`;
       const response = await fetch(url, {
-        headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
+        headers: apiKey ? { 'x-sorare-api-key': apiKey } : {},
+        signal
       });
       const data = await response.json();
       
@@ -302,7 +397,7 @@ export default function App() {
             data.isDegradedMode ? 'info' : 'success'
           );
         } else {
-          const currentCards = StorageService.getCards();
+          const currentCards = await StorageService.getCardsAsync();
           setCards(currentCards);
           setLastSynced(new Date().toISOString());
           showToast(`Aucune carte trouvée pour ${targetName} sur Sorare.`, 'info');
@@ -316,7 +411,7 @@ export default function App() {
     } catch (e: any) {
       if (pollInterval) clearInterval(pollInterval);
       console.warn('Sync notice, using offline cards cache', e);
-      const cached = StorageService.getCards();
+      const cached = await StorageService.getCardsAsync();
       setCards(cached);
       showToast(`Erreur API: ${e.message}. Mode Hors-Ligne utilisé.`, 'error');
     } finally {
@@ -374,6 +469,7 @@ export default function App() {
                 fwd: 'Buteur principal en forme.',
                 extra: 'Extra offensif à fort plafond.',
               },
+              source: resJson.source || 'gemini_ai',
             },
             createdAt: new Date().toISOString(),
           };
@@ -531,6 +627,115 @@ export default function App() {
     }
   };
 
+  const handleImportSorareLineups = async () => {
+    try {
+      showToast('Importation de vos compositions réelles depuis Sorare...', 'info');
+      const res = await fetch(`/api/sorare/user-lineups?username=${encodeURIComponent(username || 'thib-8')}`);
+      const data = await res.json();
+
+      if (!data.success || !data.lineups || data.lineups.length === 0) {
+        showToast(data.message || 'Aucune composition active trouvée sur Sorare pour cette Game Week.', 'info');
+        return;
+      }
+
+      // Map imported lineups to user gallery cards
+      const importedCompositions: Lineup[] = data.lineups.map((l: any, i: number) => {
+        const slots: Record<string, SorareCard | null> = {
+          gk: null,
+          def: null,
+          mid: null,
+          fwd: null,
+          extra: null,
+        };
+
+        const findCard = (cardData: any) => {
+          if (!cardData) return null;
+          return cards.find(c => c.id === cardData.id || c.slug === cardData.slug || c.displayName.toLowerCase() === cardData.displayName?.toLowerCase()) || {
+            id: cardData.id || `imported-${Math.random()}`,
+            slug: cardData.slug || 'player',
+            displayName: cardData.displayName || 'Joueur',
+            matchName: cardData.displayName || 'Joueur',
+            position: cardData.positionCode || 'MID',
+            positionCode: cardData.positionCode || 'MID',
+            positionName: cardData.positionCode || 'Milieu',
+            rarity: (cardData.rarity?.toLowerCase() || 'common') as any,
+            seasonYear: 2024,
+            pictureUrl: cardData.pictureUrl || '',
+            avatarUrl: cardData.pictureUrl || '',
+            age: 25,
+            club: { name: cardData.club?.name || 'Club', slug: 'club', pictureUrl: '', country: 'France', league: 'Ligue 1' },
+            grade: 0,
+            xp: 0,
+            power: '1.050',
+            scores: { l5: cardData.scores?.l5 || 50, l15: cardData.scores?.l15 || 50, l40: 50, last5Scores: [50, 50, 50, 50, 50], recentMatches: [] },
+            status: 'STARTER',
+            starterConfidence: 90,
+            injuryStatus: 'FIT',
+            upcomingFixture: {
+              gameWeek: CURRENT_GAME_WEEK.number,
+              opponent: 'Adversaire',
+              isHome: true,
+              difficultyRating: 3,
+              matchDate: new Date().toISOString(),
+              kickoffFormatted: 'Ce week-end',
+              kickoffRelative: 'GW Active',
+              hasUpcomingMatch: true,
+              competitionName: 'Championnat',
+              projectedScore: cardData.scores?.l5 || 50,
+            },
+          } as SorareCard;
+        };
+
+        slots.gk = findCard(l.slots.gk);
+        slots.def = findCard(l.slots.def);
+        slots.mid = findCard(l.slots.mid);
+        slots.fwd = findCard(l.slots.fwd);
+        slots.extra = findCard(l.slots.extra);
+
+        const baseTotal = (slots.gk?.upcomingFixture?.projectedScore || 0) +
+          (slots.def?.upcomingFixture?.projectedScore || 0) +
+          (slots.mid?.upcomingFixture?.projectedScore || 0) +
+          (slots.fwd?.upcomingFixture?.projectedScore || 0) +
+          (slots.extra?.upcomingFixture?.projectedScore || 0);
+
+        const capSlot = l.captainSlot || 'fwd';
+        const capCard = slots[capSlot];
+        const capBonus = capCard ? (capCard.upcomingFixture?.projectedScore || 0) * 0.20 : 0;
+
+        return {
+          id: l.id || `imported-${i + 1}`,
+          name: l.name || `Compo Sorare ${i + 1}`,
+          strategy: 'BALANCED',
+          gameWeek: CURRENT_GAME_WEEK.number,
+          slots,
+          captainSlot: capSlot,
+          projectedTotal: Math.round(baseTotal * 10) / 10,
+          projectedTotalWithCaptain: Math.round((baseTotal + capBonus) * 10) / 10,
+          isLocked: true,
+          createdAt: new Date().toISOString(),
+        };
+      });
+
+      // Fill up to 4 compositions
+      const finalCompositions = [...importedCompositions];
+      while (finalCompositions.length < 4) {
+        const idx = finalCompositions.length;
+        finalCompositions.push({
+          ...(compositions[idx] || compositions[0]),
+          name: `Compo ${idx + 1}`,
+        });
+      }
+
+      setCompositions(finalCompositions);
+      setLineup(finalCompositions[0]);
+      setSelectedCompoIndex(0);
+      showToast(`${importedCompositions.length} composition(s) réelle(s) importée(s) depuis Sorare avec succès !`, 'success');
+    } catch (e: any) {
+      console.error('Lineup import error:', e);
+      showToast('Impossible de récupérer les compositions en ligne Sorare.', 'error');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-slate-950">
       
@@ -570,12 +775,40 @@ export default function App() {
         </div>
       )}
 
+      {/* Active Sync Progress & Cancel Banner */}
+      {isSyncing && (
+        <div id="sync-active-banner" className="bg-emerald-950/90 border-b border-emerald-500/50 px-4 py-2.5 text-xs font-medium text-emerald-200 flex items-center justify-between backdrop-blur-md sticky top-0 z-40 shadow-lg">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <span>
+              <strong>Synchronisation Sorare en direct :</strong> Récupération des cartes réelles et métriques SO5...
+            </span>
+          </div>
+          <button
+            onClick={cancelSync}
+            className="rounded-lg bg-rose-500/20 border border-rose-500/40 px-3 py-1 text-xs font-bold text-rose-300 hover:bg-rose-500 hover:text-white transition shadow-sm"
+          >
+            Annuler la synchronisation
+          </button>
+        </div>
+      )}
+
       {/* Main Container */}
       <main className="w-full px-4 py-6 sm:px-6 lg:px-8">
         
         {/* Toast Notification Banner */}
         {toast && (
-          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white shadow-2xl border border-emerald-500/40 animate-bounce">
+          <div 
+            className={`fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-xs font-bold text-white shadow-2xl border border-emerald-500/40 animate-bounce ${isSyncing && toast.type === 'info' ? 'cursor-pointer hover:bg-slate-800' : ''}`}
+            onClick={() => {
+              if (isSyncing && toast.type === 'info') {
+                cancelSync();
+              }
+            }}
+          >
             {toast.type === 'success' ? (
               <CheckCircle2 className="h-4 w-4 text-emerald-400" />
             ) : (
@@ -603,6 +836,7 @@ export default function App() {
             onSelectComposition={handleSelectComposition}
             onExportLineup={(l) => setExportLineupTarget(l)}
             onToggleLockCompo={handleToggleLockCompo}
+            onImportSorareLineups={handleImportSorareLineups}
           />
         )}
 
