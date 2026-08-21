@@ -1,81 +1,52 @@
 const fs = require('fs');
-let code = fs.readFileSync('server.ts', 'utf8');
+const content = fs.readFileSync('server.ts', 'utf8');
 
-const regex = /await Promise\.allSettled\(\s*leagues\.map\(async \(league\) => \{[\s\S]*?\}\)\s*\);/m;
+const targetBlock = `          if (clubCatalog) {
+            diffRating = clubCatalog.difficultyRating;
+            bookmakerData.win = clubCatalog.winOdds;
+            bookmakerData.draw = clubCatalog.drawOdds;
+            bookmakerData.loss = clubCatalog.lossOdds;
+            bookmakerData.cleanSheetProb = posCode === 'GK' || posCode === 'DEF' ? clubCatalog.cleanSheetProb : Math.min(45, clubCatalog.cleanSheetProb);
+            bookmakerData.goalExpectancy = posCode === 'FWD' || posCode === 'MID' ? clubCatalog.goalExpectancy : Math.min(1.5, clubCatalog.goalExpectancy);
+          } else {`;
 
-const newCode = `for (const league of leagues) {
-      try {
-        const url = \`https://api.the-odds-api.com/v4/sports/\${league}/odds/?apiKey=\${apiKey}&regions=eu&markets=h2h,totals,btts\`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          data.forEach((match: any) => {
-            const h2hMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'h2h');
-            const totalsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'totals');
-            const bttsMarket = match.bookmakers?.[0]?.markets?.find((m: any) => m.key === 'btts');
+const newBlock = `          // L'objectif est d'avoir des cotes en miroir parfait pour les deux équipes du même match
+          const homeTeamName = isHome ? normClub : normOpponent;
+          const awayTeamName = isHome ? normOpponent : normClub;
+          
+          let sourceCatalog = FIXTURES_CATALOG[homeTeamName];
+          let inverted = false;
+          
+          if (!sourceCatalog) {
+            sourceCatalog = FIXTURES_CATALOG[awayTeamName];
+            inverted = true;
+          }
+          
+          if (sourceCatalog) {
+            // Si on utilise le catalogue de l'équipe adverse, on doit inverser les stats
+            const shouldInvert = (isHome && inverted) || (!isHome && !inverted);
             
-            if (h2hMarket) {
-              const homeOdds = h2hMarket.outcomes.find((o: any) => o.name === match.home_team)?.price || 2.5;
-              const awayOdds = h2hMarket.outcomes.find((o: any) => o.name === match.away_team)?.price || 2.5;
-              const drawOdds = h2hMarket.outcomes.find((o: any) => o.name === 'Draw')?.price || 3.0;
-              
-              let over25Odds = 1.85;
-              if (totalsMarket) {
-                over25Odds = totalsMarket.outcomes.find((o: any) => o.name === 'Over' && o.point === 2.5)?.price || 1.85;
-              }
-              let bttsProb = 52;
-              if (bttsMarket) {
-                const bttsYesOdds = bttsMarket.outcomes.find((o: any) => o.name === 'Yes')?.price;
-                const bttsNoOdds = bttsMarket.outcomes.find((o: any) => o.name === 'No')?.price;
-                if (bttsYesOdds && bttsNoOdds) {
-                  const invYes = 1 / bttsYesOdds;
-                  const invNo = 1 / bttsNoOdds;
-                  bttsProb = Math.round((invYes / (invYes + invNo)) * 100);
-                }
-              }
-              
-              const totalMatchXG = Math.max(1.5, Math.min(4.5, (1.9 / over25Odds) * 1.5 + 1.25));
-              const homeWinProb = 1 / homeOdds;
-              const awayWinProb = 1 / awayOdds;
-              const totalProb = homeWinProb + awayWinProb;
-              
-              const homeXG = Math.round((totalMatchXG * (homeWinProb / totalProb) * 1.05) * 100) / 100;
-              const awayXG = Math.round((totalMatchXG * (awayWinProb / totalProb) * 0.95) * 100) / 100;
-              
-              const homeCSPoisson = Math.exp(-awayXG) * 100;
-              const awayCSPoisson = Math.exp(-homeXG) * 100;
-              
-              const homeCS = Math.max(5, Math.min(85, Math.round(homeCSPoisson * 0.7 + (100 - bttsProb) * 0.6)));
-              const awayCS = Math.max(5, Math.min(85, Math.round(awayCSPoisson * 0.7 + (100 - bttsProb) * 0.4)));
-              
-              realOddsCache.set(normalizeClubName(match.home_team), { 
-                win: homeOdds, 
-                draw: drawOdds, 
-                loss: awayOdds, 
-                cleanSheetProb: homeCS, 
-                goalExpectancy: homeXG, 
-                opponentGoalExpectancy: awayXG,
-                bttsProb
-              });
-              realOddsCache.set(normalizeClubName(match.away_team), { 
-                win: awayOdds, 
-                draw: drawOdds, 
-                loss: homeOdds, 
-                cleanSheetProb: awayCS, 
-                goalExpectancy: awayXG, 
-                opponentGoalExpectancy: homeXG,
-                bttsProb
-              });
+            if (shouldInvert) {
+               diffRating = 6 - sourceCatalog.difficultyRating;
+               bookmakerData.win = sourceCatalog.lossOdds;
+               bookmakerData.draw = sourceCatalog.drawOdds;
+               bookmakerData.loss = sourceCatalog.winOdds;
+               // On fait une approximation pour le clean sheet et l'expectancy adverses
+               bookmakerData.cleanSheetProb = posCode === 'GK' || posCode === 'DEF' ? Math.max(5, 60 - sourceCatalog.cleanSheetProb) : 30;
+               bookmakerData.goalExpectancy = posCode === 'FWD' || posCode === 'MID' ? Math.max(0.5, 3.0 - sourceCatalog.goalExpectancy) : 1.2;
+            } else {
+               diffRating = sourceCatalog.difficultyRating;
+               bookmakerData.win = sourceCatalog.winOdds;
+               bookmakerData.draw = sourceCatalog.drawOdds;
+               bookmakerData.loss = sourceCatalog.lossOdds;
+               bookmakerData.cleanSheetProb = posCode === 'GK' || posCode === 'DEF' ? sourceCatalog.cleanSheetProb : Math.min(45, sourceCatalog.cleanSheetProb);
+               bookmakerData.goalExpectancy = posCode === 'FWD' || posCode === 'MID' ? sourceCatalog.goalExpectancy : Math.min(1.5, sourceCatalog.goalExpectancy);
             }
-          });
-        }
-      } catch (err) {
-        console.warn(\`[Odds API] Error fetching \${league}:\`, err);
-      }
-      // Sleep to avoid rate limiting
-      await new Promise(r => setTimeout(r, 400));
-    }`;
+          } else {`;
 
-code = code.replace(regex, newCode);
-fs.writeFileSync('server.ts', code);
-console.log('Patched odds');
+if (content.includes(targetBlock)) {
+  fs.writeFileSync('server.ts', content.replace(targetBlock, newBlock));
+  console.log('Patched server.ts successfully');
+} else {
+  console.log('Target block not found');
+}

@@ -764,15 +764,26 @@ export const PitchView: React.FC<PitchViewProps> = ({
               {/* Toggles & Reset button */}
               <div className="sm:col-span-2 md:col-span-4 flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-slate-800/80">
                 <div className="flex flex-wrap items-center gap-6">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={filters.starterOnly || false}
-                      onChange={(e) => setFilters(prev => ({ ...prev, starterOnly: e.target.checked }))}
-                      className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 h-4 w-4"
-                    />
-                    <span className="text-xs font-medium text-slate-200">100% Titulaires Indiscutables (STARTER uniquement)</span>
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-slate-400">Titularisation :</span>
+                    <select
+                      value={filters.minStarterConfidence || 0}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        setFilters(prev => ({ 
+                          ...prev, 
+                          minStarterConfidence: val,
+                          starterOnly: val >= 85
+                        }));
+                      }}
+                      className="bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value={0}>Toutes confiances</option>
+                      <option value={40}>Probable (40%+)</option>
+                      <option value={60}>Très Probable (60%+)</option>
+                      <option value={85}>Titulaire Indiscutable (85%+)</option>
+                    </select>
+                  </div>
 
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input

@@ -37,6 +37,12 @@ export function formatPositionBadge(positionCode: string): { label: string; bg: 
 
 export function formatStatusBadge(status: string, confidence: number = 100): { label: string; color: string; desc: string } {
   switch (status) {
+    case 'CONFIRMED':
+      return {
+        label: 'Confirmé (Opta)',
+        color: 'text-indigo-400 bg-indigo-950/60 border-indigo-500/30',
+        desc: `XI de départ officiel validé (${confidence}%)`
+      };
     case 'STARTER':
       return {
         label: 'Titulaire',

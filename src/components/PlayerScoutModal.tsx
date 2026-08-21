@@ -48,7 +48,46 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
     }
   };
 
-  const card = liveCard || initialCard;
+  const card: SorareCard | null = useMemo(() => {
+    if (!initialCard) return null;
+    if (!liveCard) return initialCard;
+    return {
+      ...initialCard,
+      ...liveCard,
+      id: initialCard.id || liveCard.id,
+      slug: initialCard.slug || liveCard.slug,
+      displayName: initialCard.displayName || liveCard.displayName,
+      pictureUrl: initialCard.pictureUrl || liveCard.pictureUrl,
+      position: initialCard.position || liveCard.position,
+      positionCode: initialCard.positionCode || liveCard.positionCode || 'MID',
+      rarity: initialCard.rarity || liveCard.rarity || 'limited',
+      club: {
+        ...(initialCard.club || {}),
+        ...(liveCard.club || {}),
+        name: liveCard.club?.name || initialCard.club?.name || 'Club'
+      },
+      league: initialCard.league || liveCard.league,
+      country: initialCard.country || liveCard.country,
+      age: initialCard.age || liveCard.age,
+      status: liveCard.status || initialCard.status || 'STARTER',
+      starterConfidence: liveCard.starterConfidence || initialCard.starterConfidence || 80,
+      injuryStatus: liveCard.injuryStatus || initialCard.injuryStatus,
+      upcomingFixture: initialCard.upcomingFixture || liveCard.upcomingFixture,
+      tacticalNotes: liveCard.tacticalNotes || initialCard.tacticalNotes,
+      scores: {
+        ...initialCard.scores,
+        ...(liveCard.scores || {}),
+        l5: liveCard.scores?.l5 ?? initialCard.scores?.l5 ?? 50,
+        l15: liveCard.scores?.l15 ?? initialCard.scores?.l15 ?? 50,
+        l40: liveCard.scores?.l40 ?? initialCard.scores?.l40 ?? 50,
+        recentMatches: liveCard.scores?.recentMatches?.length ? liveCard.scores.recentMatches : initialCard.scores?.recentMatches,
+        last40Scores: liveCard.scores?.last40Scores?.length ? liveCard.scores.last40Scores : initialCard.scores?.last40Scores,
+        last15Scores: liveCard.scores?.last15Scores?.length ? liveCard.scores.last15Scores : initialCard.scores?.last15Scores,
+        last10Scores: liveCard.scores?.last10Scores?.length ? liveCard.scores.last10Scores : initialCard.scores?.last10Scores,
+        last5Scores: liveCard.scores?.last5Scores?.length ? liveCard.scores.last5Scores : initialCard.scores?.last5Scores,
+      }
+    };
+  }, [initialCard, liveCard]);
 
   const fetchScoutReport = async (playerCard: SorareCard) => {
     setIsLoadingAI(true);
@@ -443,7 +482,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
             <div className="flex items-center gap-3 text-right">
               <div>
                 <span className="text-[10px] text-slate-400 block uppercase font-bold">Difficulté</span>
-                <span className="text-xs font-bold text-amber-400">{card.upcomingFixture?.difficultyRating || 3}/5</span>
+                <span className="text-xs font-bold text-amber-400">{proj.difficultyRating}/5</span>
               </div>
               <button 
                 onClick={() => setShowProjectionBreakdown(true)}
@@ -483,8 +522,22 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
           const cleanSheetValue = bm?.cleanSheetProb || (card.positionCode === 'GK' || card.positionCode === 'DEF' ? 35 : 25);
           const goalExpValue = bm?.goalExpectancy || 1.45;
           const concededExpValue = Math.max(0.4, Math.round((1.8 - (cleanSheetValue / 45)) * 10) / 10);
-          const anytimeScorerValue = bm?.anytimeScorerOdds || (card.positionCode === 'FWD' ? 2.45 : card.positionCode === 'MID' ? 4.25 : 8.50);
-          const anytimeAssistValue = card.positionCode === 'MID' ? 2.95 : card.positionCode === 'FWD' ? 3.45 : 7.20;
+
+          // Specific player match in topScorers / topAssisters
+          const matchingScorer = bm?.topScorers?.find(s => 
+            card.displayName?.toLowerCase().includes(s.name.toLowerCase()) || 
+            s.name.toLowerCase().includes(card.displayName?.toLowerCase() || '')
+          );
+          const matchingAssister = bm?.topAssisters?.find(s => 
+            card.displayName?.toLowerCase().includes(s.name.toLowerCase()) || 
+            s.name.toLowerCase().includes(card.displayName?.toLowerCase() || '')
+          );
+
+          const defaultScorerOdds = card.positionCode === 'FWD' ? 2.45 : card.positionCode === 'MID' ? 4.25 : card.positionCode === 'DEF' ? 9.50 : 25.00;
+          const defaultAssistOdds = card.positionCode === 'MID' ? 2.95 : card.positionCode === 'FWD' ? 3.45 : card.positionCode === 'DEF' ? 6.50 : 30.00;
+
+          const anytimeScorerValue = matchingScorer?.anytimeScorerOdds || (card.positionCode === 'FWD' && bm?.anytimeScorerOdds ? bm.anytimeScorerOdds : defaultScorerOdds);
+          const anytimeAssistValue = matchingAssister?.anytimeAssistOdds || (card.positionCode === 'MID' && bm?.anytimeAssistOdds ? bm.anytimeAssistOdds : defaultAssistOdds);
 
           return (
             <div className="mt-4 rounded-2xl border border-slate-800/80 bg-slate-950/60 p-4 shadow-sm backdrop-blur-sm">

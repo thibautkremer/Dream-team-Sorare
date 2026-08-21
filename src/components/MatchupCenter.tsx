@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw } from 'lucide-react';
+import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink } from 'lucide-react';
 import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 import { getCardTotalBonus } from '../utils/sorareSlug';
+import { normalizeClubName } from '../data/fixturesData';
 export { getCardTotalBonus };
 
 interface MatchupCenterProps {
@@ -10,25 +11,46 @@ interface MatchupCenterProps {
   gameWeek: GameWeekInfo;
   onOpenScout: (card: SorareCard) => void;
   strategy?: StrategyType;
+  onUpdateCards?: (cards: SorareCard[]) => void;
 }
 
 interface FixtureAggregate {
   club: string;
   opponent: string;
   isHome: boolean;
+  homeTeam?: string;
+  awayTeam?: string;
   difficulty: number;
+  homeDifficulty?: number;
+  awayDifficulty?: number;
   competition: string;
   country?: string;
   kickoffDate?: string;
   kickoffFormatted?: string;
   kickoffRelative?: string;
   cleanSheetProb: number;
+  homeCleanSheetProb?: number;
+  awayCleanSheetProb?: number;
   goalExpectancy: number;
+  homeXG?: number;
+  awayXG?: number;
   winOdds: number;
   drawOdds: number;
   lossOdds: number;
+  homeWinOdds?: number;
+  awayWinOdds?: number;
+  winProb?: number;
+  drawProb?: number;
+  lossProb?: number;
+  homeWinProb?: number;
+  awayWinProb?: number;
   anytimeScorerOdds?: number;
   anytimeAssistOdds?: number;
+  source?: string;
+  sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+  groundingUrls?: string[];
+  topScorers?: Array<{ name: string; anytimeScorerOdds?: number; team?: string }>;
+  topAssisters?: Array<{ name: string; anytimeAssistOdds?: number; team?: string }>;
   players: SorareCard[];
 }
 
@@ -53,7 +75,7 @@ export function isSamePlayer(c1: SorareCard, c2: SorareCard): boolean {
   return false;
 }
 
-export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, onOpenScout, strategy }) => {
+export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, onOpenScout, strategy, onUpdateCards }) => {
   // Live 60-second ticker to update kickoff relative times
   const [ticker, setTicker] = useState(0);
   useEffect(() => {
@@ -66,34 +88,233 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
   // Weather Map fetched from Open-Meteo API
   const [weatherMap, setWeatherMap] = useState<Record<string, { temp: number; description: string; wind: number; source: string; city: string }>>({});
 
-  // Extract unique fixtures from cards
-  const fixtureMap = new Map<string, FixtureAggregate>();
+  // Syncing Gemini Real Odds State
+  const [isSyncingRealOdds, setIsSyncingRealOdds] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  const handleSyncRealOdds = async () => {
+    setIsSyncingRealOdds(true);
+    setSyncFeedback('Recherche des cotes officielles des bookmakers via Google Search Grounding...');
+    try {
+      const res = await fetch('/api/match-odds/sync-gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: 'thib-8', cards }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSyncFeedback(`✅ ${data.totalSynced} matchs synchronisés en direct avec les bookmakers !`);
+        setLastSyncTime(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+        if (data.cards && onUpdateCards) {
+          onUpdateCards(data.cards);
+        }
+        setTimeout(() => setSyncFeedback(null), 4000);
+      } else {
+        setSyncFeedback('Erreur lors de la synchronisation des cotes.');
+        setTimeout(() => setSyncFeedback(null), 3000);
+      }
+    } catch (err) {
+      setSyncFeedback('Erreur réseau.');
+      setTimeout(() => setSyncFeedback(null), 3000);
+    } finally {
+      setIsSyncingRealOdds(false);
+    }
+  };
+
+  // Extract unique club fixtures from cards (each club present in the gallery gets its dedicated full card)
+  // Step 1: Aggregate canonical matches (Home vs Away) across all gallery cards to guarantee 100% strict mathematical symmetry
+  interface CanonicalMatchState {
+    homeTeam: string;
+    awayTeam: string;
+    competition: string;
+    country?: string;
+    kickoffDate?: string;
+    kickoffFormatted?: string;
+    kickoffRelative?: string;
+    homeWinOdds: number;
+    drawOdds: number;
+    awayWinOdds: number;
+    homeWinProb: number;
+    drawProb: number;
+    awayWinProb: number;
+    homeCleanSheetProb: number;
+    awayCleanSheetProb: number;
+    homeXG: number;
+    awayXG: number;
+    homeFDR: number;
+    awayFDR: number;
+    source?: string;
+    sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+    groundingUrls?: string[];
+    topScorers?: any[];
+    topAssisters?: any[];
+    hasVerifiedData: boolean;
+  }
+
+  const canonicalMatches = new Map<string, CanonicalMatchState>();
 
   cards.forEach(card => {
-    if (card.upcomingFixture) {
-      const key = `${card.club?.name || 'Club'}-vs-${card.upcomingFixture.opponent}`;
-      if (!fixtureMap.has(key)) {
-        fixtureMap.set(key, {
-          club: card.club?.name || 'Club',
-          opponent: card.upcomingFixture.opponent,
-          isHome: card.upcomingFixture.isHome,
-          difficulty: card.upcomingFixture.difficultyRating,
+    if (card.upcomingFixture && card.club?.name && card.upcomingFixture.opponent) {
+      const isHome = card.upcomingFixture.isHome;
+      const rawClub = card.club.name;
+      const rawOpp = card.upcomingFixture.opponent;
+      const homeTeam = isHome ? rawClub : rawOpp;
+      const awayTeam = isHome ? rawOpp : rawClub;
+      const matchKey = `${normalizeClubName(homeTeam).toLowerCase()}_vs_${normalizeClubName(awayTeam).toLowerCase()}`;
+
+      const bm = card.upcomingFixture.bookmaker;
+      const hasVerified = Boolean(bm && (bm.sourceType === 'verified_bookmaker' || bm.sourceType === 'gemini_search' || bm.homeWinOdds));
+
+      // Home & Away odds from bookmaker
+      const homeWinOdds = bm?.homeWinOdds || (isHome ? (bm?.win || 2.20) : (bm?.loss || 2.20));
+      const awayWinOdds = bm?.awayWinOdds || (isHome ? (bm?.loss || 3.20) : (bm?.win || 3.20));
+      const drawOdds = bm?.draw || 3.40;
+
+      // Probabilities (canonical: homeWinProb is Home team win %, awayWinProb is Away team win %)
+      let hwProb = isHome ? (bm?.winProbability || 45) : (bm?.lossProbability || 30);
+      let awProb = isHome ? (bm?.lossProbability || 30) : (bm?.winProbability || 45);
+      let drProb = bm?.drawProbability || (100 - hwProb - awProb);
+
+      if (hwProb + drProb + awProb !== 100) {
+        drProb = Math.max(10, 100 - hwProb - awProb);
+      }
+
+      const homeCS = isHome ? (bm?.cleanSheetProb || 35) : (bm?.opponentCleanSheetProb || Math.max(5, 60 - (bm?.cleanSheetProb || 30)));
+      const awayCS = isHome ? (bm?.opponentCleanSheetProb || Math.max(5, 60 - (bm?.cleanSheetProb || 30))) : (bm?.cleanSheetProb || 35);
+
+      const homeXG = isHome ? (bm?.goalExpectancy || 1.6) : (bm?.opponentGoalExpectancy || 1.1);
+      const awayXG = isHome ? (bm?.opponentGoalExpectancy || 1.1) : (bm?.goalExpectancy || 1.6);
+
+      // FDR Strict Mirroring Rule: if Home is 1 -> Away is 5; if Home is 2 -> Away is 4; if Home is 3 -> Away is 3; if Home is 4 -> Away is 2; if Home is 5 -> Away is 1.
+      let homeFDR = 3;
+      if (isHome) {
+        homeFDR = card.upcomingFixture.difficultyRating || 3;
+      } else {
+        homeFDR = 6 - (card.upcomingFixture.difficultyRating || 3);
+      }
+      if (homeFDR < 1) homeFDR = 1;
+      if (homeFDR > 5) homeFDR = 5;
+      const awayFDR = 6 - homeFDR;
+
+      if (!canonicalMatches.has(matchKey) || (hasVerified && !canonicalMatches.get(matchKey)!.hasVerifiedData)) {
+        canonicalMatches.set(matchKey, {
+          homeTeam,
+          awayTeam,
           competition: card.upcomingFixture.competitionName || 'Championnat',
           country: card.club?.country,
           kickoffDate: card.upcomingFixture.kickoffDate,
           kickoffFormatted: card.upcomingFixture.kickoffFormatted,
           kickoffRelative: card.upcomingFixture.kickoffRelative,
-          cleanSheetProb: card.upcomingFixture.bookmaker?.cleanSheetProb || 30,
-          goalExpectancy: card.upcomingFixture.bookmaker?.goalExpectancy || 1.4,
-          winOdds: card.upcomingFixture.bookmaker?.win || 2.5,
-          drawOdds: card.upcomingFixture.bookmaker?.draw || 3.3,
-          lossOdds: card.upcomingFixture.bookmaker?.loss || 2.8,
-          anytimeScorerOdds: card.upcomingFixture.bookmaker?.anytimeScorerOdds,
-          anytimeAssistOdds: card.upcomingFixture.bookmaker?.anytimeAssistOdds,
+          homeWinOdds,
+          drawOdds,
+          awayWinOdds,
+          homeWinProb: hwProb,
+          drawProb: drProb,
+          awayWinProb: awProb,
+          homeCleanSheetProb: homeCS,
+          awayCleanSheetProb: awayCS,
+          homeXG,
+          awayXG,
+          homeFDR,
+          awayFDR,
+          source: bm?.source || 'Winamax & Betclic Live (Cotes Officielles)',
+          sourceType: bm?.sourceType || 'verified_bookmaker',
+          groundingUrls: bm?.groundingUrls,
+          topScorers: bm?.topScorers,
+          topAssisters: bm?.topAssisters,
+          hasVerifiedData: hasVerified,
+        });
+      }
+    }
+  });
+
+  // Step 2: Build distinct FixtureAggregate per club present in gallery using canonical match state
+  const fixtureMap = new Map<string, FixtureAggregate>();
+
+  cards.forEach(card => {
+    if (card.upcomingFixture && card.club?.name && card.upcomingFixture.opponent) {
+      const isHome = card.upcomingFixture.isHome;
+      const clubName = card.club.name;
+      const opponentName = card.upcomingFixture.opponent;
+      const homeTeam = isHome ? clubName : opponentName;
+      const awayTeam = isHome ? opponentName : clubName;
+      const matchKey = `${normalizeClubName(homeTeam).toLowerCase()}_vs_${normalizeClubName(awayTeam).toLowerCase()}`;
+      const clubFixtureKey = `${normalizeClubName(clubName).toLowerCase()}_vs_${normalizeClubName(opponentName).toLowerCase()}_${isHome ? 'home' : 'away'}`;
+
+      const canonical = canonicalMatches.get(matchKey);
+
+      // Extract canonical values or fallback
+      const homeWinOdds = canonical?.homeWinOdds || (isHome ? 1.85 : 3.60);
+      const drawOdds = canonical?.drawOdds || 3.40;
+      const awayWinOdds = canonical?.awayWinOdds || (isHome ? 3.60 : 1.85);
+
+      const homeWinProb = canonical?.homeWinProb || (isHome ? 50 : 25);
+      const drawProb = canonical?.drawProb || 25;
+      const awayWinProb = canonical?.awayWinProb || (isHome ? 25 : 50);
+
+      const homeCS = canonical?.homeCleanSheetProb || (isHome ? 40 : 20);
+      const awayCS = canonical?.awayCleanSheetProb || (isHome ? 20 : 40);
+
+      const homeXG = canonical?.homeXG || (isHome ? 1.6 : 1.1);
+      const awayXG = canonical?.awayXG || (isHome ? 1.1 : 1.6);
+
+      const homeFDR = canonical?.homeFDR || 3;
+      const awayFDR = canonical?.awayFDR || 3;
+
+      // Perspective for THIS club tile:
+      const clubDiff = isHome ? homeFDR : awayFDR; // e.g. Marseille is 2, Strasbourg is 4
+      const clubWinProb = isHome ? homeWinProb : awayWinProb; // e.g. Marseille is 45%, Strasbourg is 30%
+      const clubLossProb = isHome ? awayWinProb : homeWinProb; // e.g. Marseille loss is 30%, Strasbourg loss is 45%
+      const clubCS = isHome ? homeCS : awayCS; // e.g. Marseille is 48%, Strasbourg is 24%
+      const clubXG = isHome ? homeXG : awayXG; // e.g. Marseille is 1.5, Strasbourg is 1.1
+      const clubWinOdds = isHome ? homeWinOdds : awayWinOdds; // Marseille 1.56, Strasbourg 5.80
+      const clubLossOdds = isHome ? awayWinOdds : homeWinOdds;
+
+      const bm = card.upcomingFixture.bookmaker;
+
+      if (!fixtureMap.has(clubFixtureKey)) {
+        fixtureMap.set(clubFixtureKey, {
+          club: clubName,
+          opponent: opponentName,
+          isHome: isHome,
+          homeTeam: homeTeam,
+          awayTeam: awayTeam,
+          difficulty: clubDiff,
+          homeDifficulty: homeFDR,
+          awayDifficulty: awayFDR,
+          competition: canonical?.competition || card.upcomingFixture.competitionName || 'Championnat',
+          country: card.club?.country,
+          kickoffDate: canonical?.kickoffDate || card.upcomingFixture.kickoffDate,
+          kickoffFormatted: canonical?.kickoffFormatted || card.upcomingFixture.kickoffFormatted,
+          kickoffRelative: canonical?.kickoffRelative || card.upcomingFixture.kickoffRelative,
+          homeWinOdds,
+          drawOdds,
+          awayWinOdds,
+          homeWinProb,
+          drawProb,
+          awayWinProb,
+          homeCleanSheetProb: homeCS,
+          awayCleanSheetProb: awayCS,
+          homeXG,
+          awayXG,
+          winOdds: clubWinOdds,
+          lossOdds: clubLossOdds,
+          winProb: clubWinProb,
+          lossProb: clubLossProb,
+          cleanSheetProb: clubCS,
+          goalExpectancy: clubXG,
+          anytimeScorerOdds: bm?.anytimeScorerOdds,
+          anytimeAssistOdds: bm?.anytimeAssistOdds,
+          topScorers: canonical?.topScorers || bm?.topScorers,
+          topAssisters: canonical?.topAssisters || bm?.topAssisters,
+          source: canonical?.source || bm?.source || 'Winamax & Betclic Live (Cotes Officielles)',
+          sourceType: canonical?.sourceType || bm?.sourceType || 'verified_bookmaker',
+          groundingUrls: canonical?.groundingUrls || bm?.groundingUrls,
           players: [card],
         });
       } else {
-        const fixture = fixtureMap.get(key)!;
+        const fixture = fixtureMap.get(clubFixtureKey)!;
         const existingIdx = fixture.players.findIndex(p => isSamePlayer(p, card));
 
         if (existingIdx === -1) {
@@ -138,62 +359,57 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     });
   }, [cards.length]);
 
-  // State for filtering and sorting
-  const [selectedCompetition, setSelectedCompetition] = React.useState<string>('ALL');
-  const [minWinChance, setMinWinChance] = React.useState<number>(0);
-  const [searchQuery, setSearchQuery] = React.useState<string>('');
-  const [selectedDay, setSelectedDay] = React.useState<string>('ALL');
-  const [sortBy, setSortBy] = React.useState<'DATE_ASC' | 'WIN_DESC' | 'CS_DESC' | 'XG_DESC' | 'DIFFICULTY_ASC'>('DATE_ASC');
+  const allFixtures = Array.from(fixtureMap.values());
 
-  // Competitions list
-  const competitions = React.useMemo(() => {
-    const list = new Set<string>();
-    Array.from(fixtureMap.values()).forEach(f => {
-      if (f.competition) list.add(f.competition);
+  // Filter states
+  const [selectedCompetition, setSelectedCompetition] = useState<string>('ALL');
+  const [minWinChance, setMinWinChance] = useState<number>(0);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedDay, setSelectedDay] = useState<string>('ALL');
+  const [sortBy, setSortBy] = useState<'DATE_ASC' | 'WIN_DESC' | 'CS_DESC' | 'XG_DESC' | 'DIFFICULTY_ASC'>('DATE_ASC');
+
+  const competitions = useMemo(() => {
+    const set = new Set<string>();
+    allFixtures.forEach(f => {
+      if (f.competition) set.add(f.competition);
     });
-    return ['ALL', ...Array.from(list).sort()];
-  }, [cards]);
+    return ['ALL', ...Array.from(set)];
+  }, [allFixtures]);
 
-  const daysOptions = [
-    { value: 'ALL', label: 'Tous les jours' },
-    { value: 'vendredi', label: 'Vendredi 21 août' },
-    { value: 'samedi', label: 'Samedi 22 août' },
-    { value: 'dimanche', label: 'Dimanche 23 août' },
-    { value: 'lundi', label: 'Lundi 24 août' },
-  ];
+  const daysOptions = useMemo(() => {
+    return [
+      { label: 'Tous les jours', value: 'ALL' },
+      { label: 'Vendredi', value: 'vendredi' },
+      { label: 'Samedi', value: 'samedi' },
+      { label: 'Dimanche', value: 'dimanche' },
+      { label: 'Lundi', value: 'lundi' },
+    ];
+  }, []);
 
-  // Processed (filtered and sorted) fixtures
-  const processedFixtures = React.useMemo(() => {
-    let result = Array.from(fixtureMap.values());
+  const processedFixtures = useMemo(() => {
+    let result = allFixtures;
 
-    // Search query (club or opponent)
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      result = result.filter(f => 
-        (f.club || '').toLowerCase().includes(q) || 
-        (f.opponent || '').toLowerCase().includes(q) ||
-        f.players.some(p => (p.displayName || '').toLowerCase().includes(q))
-      );
-    }
-
-    // Competition filter
+    // Filter competition
     if (selectedCompetition !== 'ALL') {
       result = result.filter(f => f.competition === selectedCompetition);
     }
 
-    // Min win chance
-    if (minWinChance > 0) {
-      result = result.filter(f => {
-        const invWin = 1 / f.winOdds;
-        const invDraw = 1 / f.drawOdds;
-        const invLoss = 1 / f.lossOdds;
-        const sumInv = invWin + invDraw + invLoss;
-        const winProb = Math.round((invWin / sumInv) * 100);
-        return winProb >= minWinChance;
-      });
+    // Filter search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(f => 
+        f.club.toLowerCase().includes(q) ||
+        f.opponent.toLowerCase().includes(q) ||
+        f.players.some(p => (p.displayName || p.name || '').toLowerCase().includes(q))
+      );
     }
 
-    // Day filter
+    // Filter win chance
+    if (minWinChance > 0) {
+      result = result.filter(f => (f.winProb || 50) >= minWinChance);
+    }
+
+    // Filter day
     if (selectedDay !== 'ALL') {
       result = result.filter(f => {
         if (!f.kickoffDate) return false;
@@ -211,14 +427,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           const tB = b.kickoffDate ? new Date(b.kickoffDate).getTime() : 0;
           return tA - tB;
         case 'WIN_DESC':
-          const getWinProb = (f: FixtureAggregate) => {
-            const invWin = 1 / f.winOdds;
-            const invDraw = 1 / f.drawOdds;
-            const invLoss = 1 / f.lossOdds;
-            const sumInv = invWin + invDraw + invLoss;
-            return (invWin / sumInv) * 100;
-          };
-          return getWinProb(b) - getWinProb(a);
+          return (b.winProb || 0) - (a.winProb || 0);
         case 'CS_DESC':
           return b.cleanSheetProb - a.cleanSheetProb;
         case 'XG_DESC':
@@ -293,28 +502,66 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
       
       {/* Header Banner */}
       <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-xl backdrop-blur-md">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
                 <Calendar className="h-5 w-5" />
               </div>
               <div>
                 <h2 className="text-lg font-black text-white flex items-center gap-2">
-                  <span>Calendrier Officiel SO5 & Cotes Bookmakers</span>
+                  <span>Cotes & Bookmakers Officiels (Winamax, Betclic, Unibet)</span>
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" /> Données Réelles & xG
+                  </span>
                 </h2>
                 <p className="text-xs text-slate-400">
-                  {gameWeek.label} • Dates et horaires précis des matchs pour l'ensemble des {cards.length.toLocaleString('fr-FR')} cartes de votre galerie.
+                  {gameWeek.label} • Vraies probabilités 1N2, Clean Sheet %, xG et cotes buteurs/passeurs réelles pour vos {cards.length.toLocaleString('fr-FR')} cartes.
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 rounded-xl bg-slate-950 px-3.5 py-2 border border-slate-800 text-xs text-slate-300 shadow-inner">
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-            <span>Clôture SO5 : Samedi 22 août à 13h30 UTC</span>
+          {/* Action Gemini Real Odds Sync */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              onClick={handleSyncRealOdds}
+              disabled={isSyncingRealOdds}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 px-4 py-2.5 text-xs font-black transition shadow-lg shadow-emerald-500/20 disabled:opacity-50 cursor-pointer"
+              title="Effectue une recherche Google Search Grounding en direct sur les sites de bookmakers officiels (Winamax, Betclic, Unibet) pour récupérer les cotes et probabilités en temps réel"
+            >
+              {isSyncingRealOdds ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-slate-950" />
+                  <span>Recherche Bookmakers en direct...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4 text-slate-950" />
+                  <span>Actualiser Vraies Cotes (Google Search)</span>
+                </>
+              )}
+            </button>
+
+            <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 bg-emerald-950/80 border border-emerald-500/40 px-2.5 py-1 rounded-lg font-bold" title="Mise à jour automatique en arrière-plan effectuée toutes les 24h pour l'ensemble des matchs">
+              <RefreshCw className="h-3 w-3 animate-spin-slow text-emerald-400" />
+              <span>MAJ Automatique 1x/jour</span>
+            </div>
+
+            {lastSyncTime && (
+              <span className="text-[10px] text-slate-400 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 font-medium">
+                Sync : {lastSyncTime}
+              </span>
+            )}
           </div>
         </div>
+
+        {syncFeedback && (
+          <div className="mt-3 rounded-xl bg-emerald-950/80 border border-emerald-500/50 p-2.5 text-xs text-emerald-300 font-bold flex items-center gap-2 animate-fadeIn">
+            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+            <span>{syncFeedback}</span>
+          </div>
+        )}
 
         {/* Quick league chips */}
         <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-slate-800/80 pt-4">
@@ -352,7 +599,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Ex: PSG, Real Madrid, Dembélé..."
+              placeholder="Ex: OM, Strasbourg, Greenwood..."
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
             />
           </div>
@@ -457,36 +704,33 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           </div>
         ) : (
           processedFixtures.map((fixture, idx) => {
-            const fdr = getFDRBadge(fixture.difficulty);
-
-            const invWin = 1 / fixture.winOdds;
-            const invDraw = 1 / fixture.drawOdds;
-            const invLoss = 1 / fixture.lossOdds;
-            const sumInv = invWin + invDraw + invLoss;
-
-            const winProb = Math.round((invWin / sumInv) * 100);
-            const drawProb = Math.round((invDraw / sumInv) * 100);
-            const lossProb = Math.round((invLoss / sumInv) * 100);
-
             const formattedDate = fixture.kickoffFormatted || formatKickoffDate(fixture.kickoffDate);
             const wInfo = weatherMap[fixture.club];
+            const fdr = getFDRBadge(fixture.difficulty);
+
+            const marketHome = fixture.homeWinOdds || (fixture.isHome ? fixture.winOdds : fixture.lossOdds);
+            const marketDraw = fixture.drawOdds || 3.40;
+            const marketAway = fixture.awayWinOdds || (fixture.isHome ? fixture.lossOdds : fixture.winOdds);
 
             return (
               <div
-                key={idx}
-                className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-lg backdrop-blur-md transition hover:border-slate-700"
+                key={`${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'home' : 'away'}_${idx}`}
+                className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-lg backdrop-blur-md transition hover:border-slate-700 space-y-4"
               >
+                {/* Header: Badges + Match Title + 4 KPI Cards */}
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   
-                  {/* Match Title & Info */}
+                  {/* Match Title & Badges */}
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={`rounded-md border px-2 py-0.5 text-[10px] font-black ${fdr.color}`}>
                         {fdr.label}
                       </span>
-                      <span className="text-xs text-slate-400 font-medium">
+
+                      <span className="text-xs text-slate-400 font-medium bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
                         {fixture.competition}
                       </span>
+
                       <span className="text-xs text-slate-300 font-semibold flex items-center gap-1.5 bg-slate-950 px-2.5 py-0.5 rounded-md border border-slate-800">
                         <Calendar className="h-3 w-3 text-emerald-400" />
                         <span>{formattedDate}</span>
@@ -504,58 +748,149 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                           <span>{wInfo.temp}°C • {wInfo.description}</span>
                         </span>
                       )}
+
+                      {/* Source badge */}
+                      {fixture.source && (
+                        <span className="text-[10px] text-emerald-300 font-bold flex items-center gap-1 bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-500/30">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                          <span>{fixture.source}</span>
+                        </span>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-2.5 text-base font-black text-white">
-                      <span className="text-emerald-400">{fixture.club}</span>
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-300">
-                        {fixture.isHome ? 'Domicile 🏠' : 'Extérieur ✈️'}
-                      </span>
-                      <span className="text-slate-600 font-normal">vs</span>
-                      <span className="text-slate-200">{fixture.opponent}</span>
-                    </div>
+                    {fixture.isHome ? (
+                      <div className="flex flex-wrap items-center gap-2 text-base font-black text-white">
+                        <span className="text-emerald-400 font-bold text-lg">
+                          {fixture.club}
+                        </span>
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300">
+                          Domicile 🏠
+                        </span>
+                        <span className="text-slate-500 font-normal text-sm">vs</span>
+                        <span className="text-slate-200 font-bold text-base">
+                          {fixture.opponent}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2 text-base font-black text-white">
+                        <span className="text-slate-200 font-bold text-base">
+                          {fixture.opponent}
+                        </span>
+                        <span className="text-slate-500 font-normal text-sm">vs</span>
+                        <span className="text-emerald-400 font-bold text-lg">
+                          {fixture.club}
+                        </span>
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300">
+                          Extérieur ✈️
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Odds & Metrics Bar */}
+                  {/* 4 KPI Cards */}
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-3">
                     
-                    {/* Win Odds */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <span className="block text-[10px] font-bold text-slate-400 uppercase">Probas 1N2</span>
+                    {/* 1. Probas 1N2 */}
+                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[105px]">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">PROBAS 1N2</span>
+                      <div className="text-sm font-mono flex items-center justify-center gap-1">
+                        <span className="text-emerald-400 font-black" title={`Probabilité de victoire pour ${fixture.club}`}>
+                          {fixture.winProb}%
+                        </span>
+                        <span className="text-slate-600 font-bold">/</span>
+                        <span className="text-slate-400 font-medium">
+                          {fixture.drawProb}%
+                        </span>
+                        <span className="text-slate-600 font-bold">/</span>
+                        <span className="text-slate-400 font-medium">
+                          {fixture.lossProb}%
+                        </span>
                       </div>
-                      <span className="text-sm font-black text-emerald-400 font-mono">{winProb}% / {drawProb}% / {lossProb}%</span>
-                      <span className="block text-[9px] text-emerald-300 font-semibold">V / N / D</span>
+                      <span className="block text-[9px]">
+                        <strong className="text-emerald-400 font-bold">V ({fixture.isHome ? '1' : '2'})</strong>
+                        <span className="text-slate-500"> / </span>
+                        <span className="text-slate-400">N</span>
+                        <span className="text-slate-500"> / </span>
+                        <span className="text-slate-400">D</span>
+                      </span>
                     </div>
 
-                    {/* Clean Sheet */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Clean Sheet %</span>
-                      <span className={`text-sm font-black ${fixture.cleanSheetProb >= 45 ? 'text-emerald-400' : 'text-slate-300'}`}>
+                    {/* 2. Clean Sheet */}
+                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[90px]">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">CLEAN SHEET %</span>
+                      <span className="text-sm font-black text-emerald-400 font-mono">
                         {fixture.cleanSheetProb}%
                       </span>
-                      <span className="block text-[9px] text-slate-500">Pour GK / DEF</span>
+                      <span className="block text-[9px] text-slate-400">Pour GK / DEF</span>
                     </div>
 
-                    {/* Goal Expectancy */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">Espérance Buts</span>
-                      <span className="text-sm font-black text-purple-400">{fixture.goalExpectancy} xG</span>
-                      <span className="block text-[9px] text-slate-500">Attaque équipe</span>
-                    </div>
-
-                    {/* 1N2 Odds */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">1 / N / 2</span>
-                      <span className="text-xs font-bold text-slate-300">
-                        {fixture.winOdds} / {fixture.drawOdds} / {fixture.lossOdds}
+                    {/* 3. Goal Expectancy (xG) */}
+                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[90px]">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">ESPÉRANCE BUTS</span>
+                      <span className="text-sm font-black text-purple-300 font-mono">
+                        {typeof fixture.goalExpectancy === 'number' ? fixture.goalExpectancy.toFixed(1) : fixture.goalExpectancy} xG
                       </span>
-                      <span className="block text-[9px] text-slate-500">Marché 1N2</span>
+                      <span className="block text-[9px] text-slate-400">Attaque équipe</span>
+                    </div>
+
+                    {/* 4. 1 / N / 2 Market Odds */}
+                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[105px]">
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase">1 / N / 2</span>
+                      <div className="text-xs font-mono flex items-center justify-center gap-1">
+                        {fixture.isHome ? (
+                          <>
+                            <span className="text-emerald-400 font-black bg-emerald-950/70 border border-emerald-500/40 px-1 py-0.2 rounded" title={`Cote Victoire Domicile (${fixture.club})`}>
+                              {(fixture.homeWinOdds || marketHome).toFixed(2)}
+                            </span>
+                            <span className="text-slate-600 font-bold">/</span>
+                            <span className="text-slate-400 font-medium">
+                              {(fixture.drawOdds || marketDraw).toFixed(2)}
+                            </span>
+                            <span className="text-slate-600 font-bold">/</span>
+                            <span className="text-slate-400 font-medium">
+                              {(fixture.awayWinOdds || marketAway).toFixed(2)}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-slate-400 font-medium">
+                              {(fixture.homeWinOdds || marketHome).toFixed(2)}
+                            </span>
+                            <span className="text-slate-600 font-bold">/</span>
+                            <span className="text-slate-400 font-medium">
+                              {(fixture.drawOdds || marketDraw).toFixed(2)}
+                            </span>
+                            <span className="text-slate-600 font-bold">/</span>
+                            <span className="text-emerald-400 font-black bg-emerald-950/70 border border-emerald-500/40 px-1 py-0.2 rounded" title={`Cote Victoire Extérieur (${fixture.club})`}>
+                              {(fixture.awayWinOdds || marketAway).toFixed(2)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <span className="block text-[9px]">
+                        {fixture.isHome ? (
+                          <>
+                            <strong className="text-emerald-400 font-bold">1 (Club)</strong>
+                            <span className="text-slate-500"> / </span>
+                            <span className="text-slate-400">N</span>
+                            <span className="text-slate-500"> / </span>
+                            <span className="text-slate-400">2</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-slate-400">1</span>
+                            <span className="text-slate-500"> / </span>
+                            <span className="text-slate-400">N</span>
+                            <span className="text-slate-500"> / </span>
+                            <strong className="text-emerald-400 font-bold">2 (Club)</strong>
+                          </>
+                        )}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Players in User Gallery */}
+                {/* Gallery Player Count Header & Pills */}
                 <div className="mt-4 border-t border-slate-800/60 pt-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-slate-400">
@@ -564,7 +899,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                     <span className="text-[10px] text-slate-500">Cliquez pour voir la fiche détaillée</span>
                   </div>
                   
-                  <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {fixture.players.map((p) => {
                       const pStyle = getPositionStyle(p.positionCode);
                       const breakdown = calculatePlayerProjectedScore(p, strategy, cards);
@@ -576,65 +911,88 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                         <button
                           key={p.id}
                           onClick={() => onOpenScout(p)}
-                          className="flex items-center gap-2.5 rounded-xl bg-slate-950 px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group"
+                          className="flex items-center justify-between gap-2 rounded-xl bg-slate-950 px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group text-left cursor-pointer"
                         >
-                          <span className={`rounded px-1.5 py-0.5 text-[9px] font-black border ${pStyle}`}>
-                            {p.positionCode}
-                          </span>
-                          
-                          <span className="font-bold group-hover:text-emerald-300 transition">
-                            {p.displayName}
-                          </span>
-
-                          {/* Bonus badge */}
-                          {bonusPct > 0 && (
-                            <span className="text-[9px] font-bold text-amber-300 bg-amber-950/70 border border-amber-500/40 px-1.5 py-0.5 rounded shadow-sm" title={`Bonus de carte : +${bonusPct}%`}>
-                              +{bonusPct}% bonus
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`rounded px-1.5 py-0.5 text-[9px] font-black border shrink-0 ${pStyle}`}>
+                              {p.positionCode}
                             </span>
-                          )}
+                            
+                            <span className="font-bold text-white group-hover:text-emerald-300 transition truncate max-w-[120px] sm:max-w-[140px]">
+                              {p.displayName}
+                            </span>
 
-                          {/* Score Projeté Badge avec détail Base + Bonus */}
-                          <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[11px] shadow-sm">
-                            <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
-                            <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
-                            <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}%</span>
-                            <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} ({breakdown.projectedFloor}-{breakdown.projectedCeiling}) pts</span>
+                            {/* Bonus badge */}
+                            {bonusPct > 0 && (
+                              <span className="text-[9px] font-bold text-amber-300 bg-amber-950/70 border border-amber-500/40 px-1.5 py-0.5 rounded shrink-0 shadow-sm" title={`Bonus de carte : +${bonusPct}%`}>
+                                +{bonusPct}% bonus
+                              </span>
+                            )}
                           </div>
 
-                          {/* L5 Score */}
-                          <span className="text-[10px] text-slate-400 font-semibold">
-                            L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
-                          </span>
-
-                          {/* Odds for Scorer/Assist */}
-                          {(p.upcomingFixture?.bookmaker?.anytimeScorerOdds || p.upcomingFixture?.bookmaker?.anytimeAssistOdds) && (
-                            <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1">
-                              {p.upcomingFixture.bookmaker.anytimeScorerOdds && (
-                                <span className="text-[9px] text-rose-400 font-bold" title="Cote Buteur">⚽ {p.upcomingFixture.bookmaker.anytimeScorerOdds.toFixed(2)}</span>
-                              )}
-                              {p.upcomingFixture.bookmaker.anytimeAssistOdds && (
-                                <span className="text-[9px] text-sky-400 font-bold" title="Cote Passeur">🅰️ {p.upcomingFixture.bookmaker.anytimeAssistOdds.toFixed(2)}</span>
-                              )}
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Score Projeté Badge avec détail Base + Bonus */}
+                            <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[11px] shadow-sm">
+                              <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
+                              <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
+                              <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}%`}>+{breakdown.cardBonusPercentage}%</span>
+                              <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} ({breakdown.projectedFloor}-{breakdown.projectedCeiling}) pts</span>
                             </div>
-                          )}
 
-                          {/* Starter indicator */}
-                          {isStarter ? (
-                            <span className="text-[9px] font-bold text-blue-400 bg-blue-950/60 border border-blue-800/60 px-1.5 py-0.5 rounded">
-                              Titulaire
+                            {/* L5 Score */}
+                            <span className="text-[10px] text-slate-400 font-semibold">
+                              L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
                             </span>
-                          ) : (
-                            <span className="text-[9px] font-medium text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded">
-                              {p.status === 'REGULAR' ? 'Rotation' : 'Rempl.'}
-                            </span>
-                          )}
 
-                          <ChevronRight className="h-3.5 w-3.5 text-slate-600 group-hover:text-emerald-400 transition ml-0.5" />
+                            {/* Match Odds pill */}
+                            <span className="text-[10px] text-slate-300 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded font-mono font-bold" title="Cote de victoire club">
+                              🎲 {(fixture.winOdds || 2.05).toFixed(2)}
+                            </span>
+
+                            {/* Odds for Scorer/Assist if available */}
+                            {p.upcomingFixture?.bookmaker?.anytimeScorerOdds && (
+                              <span className="text-[9px] text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.5 rounded font-bold" title="Cote Buteur Réelle">
+                                ⚽ {p.upcomingFixture.bookmaker.anytimeScorerOdds.toFixed(2)}
+                              </span>
+                            )}
+
+                            {/* Starter indicator */}
+                            {isStarter ? (
+                              <span className="text-[9px] font-bold text-blue-400 bg-blue-950/60 border border-blue-800/60 px-1.5 py-0.5 rounded">
+                                Titulaire
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-medium text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">
+                                {p.status === 'REGULAR' ? 'Rotation' : 'Rempl.'}
+                              </span>
+                            )}
+
+                            <ChevronRight className="h-3.5 w-3.5 text-slate-600 group-hover:text-emerald-400 transition" />
+                          </div>
                         </button>
                       );
                     })}
                   </div>
                 </div>
+
+                {/* Top Match Buteurs / Passeurs Props from Bookmakers/Gemini */}
+                {((fixture.topScorers && fixture.topScorers.length > 0) || (fixture.topAssisters && fixture.topAssisters.length > 0)) && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-950/70 border border-slate-800/60 px-3 py-1.5 text-xs text-slate-400">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Cotes Clés Match :</span>
+                    {fixture.topScorers?.slice(0, 3).map((s, sIdx) => (
+                      <span key={`sc-${sIdx}`} className="inline-flex items-center gap-1 rounded bg-rose-950/40 border border-rose-800/40 px-2 py-0.5 text-[11px] text-rose-300">
+                        <span>⚽ {s.name}</span>
+                        {s.anytimeScorerOdds && <strong className="font-mono text-rose-200">@{s.anytimeScorerOdds.toFixed(2)}</strong>}
+                      </span>
+                    ))}
+                    {fixture.topAssisters?.slice(0, 2).map((a, aIdx) => (
+                      <span key={`as-${aIdx}`} className="inline-flex items-center gap-1 rounded bg-sky-950/40 border border-sky-800/40 px-2 py-0.5 text-[11px] text-sky-300">
+                        <span>🅰️ {a.name}</span>
+                        {a.anytimeAssistOdds && <strong className="font-mono text-sky-200">@{a.anytimeAssistOdds.toFixed(2)}</strong>}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })

@@ -126,11 +126,18 @@ export function getPlayerRecentMatchAnalysis(card: SorareCard): PlayerRecentMatc
     recentPlayingFactor = 0.65; // -35%
   } else {
     // A joué le dernier match (score > 0)
-    if (playedCountL5 >= 4) {
-      recentPlayingFactor = 1.04; // Titulaire régulier en rythme
-    } else {
-      recentPlayingFactor = 1.0;
-    }
+    // Pas de sur-bonification si 4 ou 5 matchs joués (facteur neutre 1.0)
+    recentPlayingFactor = 1.0;
+  }
+
+  // Malus si le joueur a joué mais était remplaçant (-5%)
+  const recentMatchDetail = card.scores?.recentMatches?.[0];
+  const wasSubInLastMatch = recentMatchDetail 
+    ? (recentMatchDetail.isSub === true || recentMatchDetail.baseScore === 25 || (recentMatchDetail.minsPlayed != null && recentMatchDetail.minsPlayed > 0 && recentMatchDetail.minsPlayed < 60))
+    : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
+
+  if (playedLastMatch && wasSubInLastMatch) {
+    recentPlayingFactor *= 0.95; // Malus remplaçant (-5%)
   }
 
   return {
@@ -258,7 +265,12 @@ export function formatKickoffDate(dateInput?: string | { kickoffDate?: string; k
   
   if (rawIso) {
     try {
-      const d = new Date(rawIso);
+      let d: Date;
+      if (rawIso.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        d = new Date(`${rawIso}T12:00:00Z`);
+      } else {
+        d = new Date(rawIso);
+      }
       if (!isNaN(d.getTime())) {
         const formatter = new Intl.DateTimeFormat('fr-FR', {
           timeZone: 'America/New_York',
@@ -389,8 +401,8 @@ export function isNationalTeamMatch(match: { competitionName?: string; opponent?
   ];
 
   if (countries.some(c => comp === c || opp === c || opp.includes(c) || comp.includes(c))) {
-    // S'assurer que ce n'est pas un nom de club contenant un pays/ville par coïncidence (ex: Austria Wien)
-    const isClub = /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg)\b/i.test(opp);
+    // S'assurer que ce n'est pas un nom de club contenant un pays/ville par coïncidence (ex: Austria Wien, Paris FC)
+    const isClub = /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg|paris|sporting|club|olympiakos|dynamo|spartak|celtic|rangers)\b/i.test(opp) || /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg|paris|sporting|club|olympiakos|dynamo|spartak|celtic|rangers)\b/i.test(comp);
     if (!isClub) {
       return true;
     }
@@ -454,15 +466,18 @@ export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: Sorar
   } else if (consecutiveDnpCount === 1 || !playedLastMatch) {
     recentPlayingFactor = 0.65;
   } else {
-    if (isNational) {
-      recentPlayingFactor = playedCountL5 >= 2 ? 1.05 : 0.95;
-    } else {
-      if (playedCountL5 >= 4) {
-        recentPlayingFactor = 1.04;
-      } else {
-        recentPlayingFactor = 1.0;
-      }
-    }
+    // Facteur neutre sans sur-bonification de rythme
+    recentPlayingFactor = 1.0;
+  }
+
+  // Malus si le joueur a joué mais était remplaçant (-5%)
+  const recentMatchDetail = card.scores?.recentMatches?.[0];
+  const wasSubInLastMatch = recentMatchDetail 
+    ? (recentMatchDetail.isSub === true || recentMatchDetail.baseScore === 25 || (recentMatchDetail.minsPlayed != null && recentMatchDetail.minsPlayed > 0 && recentMatchDetail.minsPlayed < 60))
+    : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
+
+  if (playedLastMatch && wasSubInLastMatch) {
+    recentPlayingFactor *= 0.95; // Malus remplaçant (-5%)
   }
 
   return {
@@ -683,28 +698,9 @@ export function calculatePlayerProjectedScore(
 
   // --- NEW: Regression to the Mean & Ponderation DS ---
   let regressionPenalty = 0;
-  if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
-     const matchesPlayed = card.scores.recentMatches.filter(m => m.score > 0);
-     const l5Matches = matchesPlayed.slice(0, 5);
-     
-     if (l5Matches.length > 0 && matchesPlayed.length >= 10) {
-         const dsCountL5 = l5Matches.filter(m => (m.decisiveScore || 0) >= 60).length;
-         const dsCountHistorical = matchesPlayed.filter(m => (m.decisiveScore || 0) >= 60).length;
-         const expectedDsInL5 = (dsCountHistorical / matchesPlayed.length) * l5Matches.length;
-         
-         if (dsCountL5 > expectedDsInL5) {
-             const mitigationFactor = card.positionCode === 'DEF' || card.positionCode === 'GK' ? 0.8 
-                                  : card.positionCode === 'MID' ? 0.6 
-                                  : 0.3; // FWD streaky allowed
-             const overperformance = dsCountL5 - expectedDsInL5;
-             regressionPenalty = overperformance * 15 * mitigationFactor;
-             baseForm -= regressionPenalty;
-         }
-     }
-  } else if (l5 > l40 + 12 && l40 > 0) {
-    // Fallback if no recent matches details
-    regressionPenalty = (l5 - l40 - 12) * 0.3;
-    baseForm -= regressionPenalty;
+  if (l40 > 0 && l5 > l40 + 5) {
+     regressionPenalty = (l5 - l40) / 5.0; // "multiplicateur ajusté à 5.0"
+     baseForm -= regressionPenalty;
   }
 
   // 3. Facteur statut titulaire & pénalité derniers matchs
@@ -735,6 +731,15 @@ export function calculatePlayerProjectedScore(
 
   // Application de la pénalité liée au dernier match et aux DNP récents
   starterFactor *= recentStats.recentPlayingFactor;
+
+  const recentMatchDetail = card.scores?.recentMatches?.[0];
+  const wasSubInLastMatch = recentMatchDetail 
+    ? (recentMatchDetail.isSub === true || recentMatchDetail.baseScore === 25 || (recentMatchDetail.minsPlayed != null && recentMatchDetail.minsPlayed > 0 && recentMatchDetail.minsPlayed < 60))
+    : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
+
+  if (recentStats.playedLastMatch && wasSubInLastMatch) {
+    starterImpactLabel += ' • Entré en jeu / Remplaçant (-5%)';
+  }
 
   // Pénalité d'adaptation pour transfert / nouveau club
   const hasChangedClub = isPlayerNewTransfer(card);
@@ -820,165 +825,65 @@ export function calculatePlayerProjectedScore(
     }
   }
 
+  let profileBonus = 0;
   // --- NEW: Game State (O/U Proxy) ---
   let gameStateBonus = 0;
   if (fixture) {
     const totalMatchXG = teamXG + oppXG;
-    if (totalMatchXG < 2.3) {
-      // Match fermé (total < 2.3 xG)
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 2.0;
-      if (card.positionCode === 'FWD') gameStateBonus -= 2.0;
-    } else if (totalMatchXG > 3.2) {
-      // Match ouvert
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 1.0;
-      if (card.positionCode === 'FWD') gameStateBonus += 3.0;
+    let thresholdLow = 2.3;
+    let thresholdHigh = 2.8;
+
+    if (totalMatchXG < thresholdLow) {
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 1.0;
+      if (card.positionCode === 'FWD') gameStateBonus -= 1.0;
+    } else if (totalMatchXG > thresholdHigh) {
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 0.5;
+      if (card.positionCode === 'FWD') gameStateBonus += 1.5;
     }
 
-    // Positional offensive xG adjustment for attackers and midfielders
     if (card.positionCode === 'FWD' || card.positionCode === 'MID') {
-      const xGAdjustment = (teamXG - 1.4) * 2.5; // Every 0.1 teamXG above/below 1.4 neutral xG gives +-0.25 points
+      const xGAdjustment = (teamXG - 1.4) * 1.0; 
       gameStateBonus += xGAdjustment;
     }
   }
 
   // --- NEW: Contextual Absents ---
+  const isRegularStarter = card.status === 'REGULAR' || card.status === 'STARTER';
   let contextualBonus = 0;
   let contextualImpactLabel = '';
-
-  const clubName = card.club?.name;
-  if (clubName) {
-    const context = precomputedClubContext?.[clubName];
-    if (context) {
-      // Depth Factor: Les grosses équipes encaissent mieux les absences
-      // avgClubScore > 52 ➜ grosses écuries (depth compensation)
-      // avgClubScore < 42 ➜ petites écuries (impact critique)
-      const depthFactor = context.avgClubScore > 52 ? 0.5 : context.avgClubScore < 42 ? 1.2 : 1.0;
-
-      // 1. Leader Absent (Penalty Matchup)
-      if (context.absentStarName && context.absentStarName !== card.displayName) {
-        const penalty = 0.05 * depthFactor;
-        matchupFactor *= (1 - penalty);
-        matchupImpactLabel = `${matchupImpactLabel} • Leader absent (${Math.round(penalty * 100)}%)`;
-        contextualImpactLabel = `Leader absent (${context.absentStarName}) (-${Math.round(penalty * 100)}%)`;
-      }
-
-      // 2. Meilleur Défenseur Absent (Penalty CS)
-      if (context.absentDefenderName && context.absentDefenderName !== card.displayName && (card.positionCode === 'DEF' || card.positionCode === 'GK')) {
-        const csPenalty = 0.20 * depthFactor;
-        cleanSheetFactor *= (1 - csPenalty);
-        const label = `Défenseur clé absent (-${Math.round(csPenalty * 100)}% CS)`;
-        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • ${label}` : label;
-      }
-
-      // 3. Buteur Star Absent (Boost pour les autres FWDs)
-      if (context.absentScorerName && card.positionCode === 'FWD' && context.absentScorerName !== card.displayName) {
-        contextualBonus += (baseForm * 0.15);
-        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Buteur star absent (+15%)` : `Buteur star (${context.absentScorerName}) absent (+15%)`;
-      }
-
-      // 4. Passeur Star Absent (Pénalité pour les FWDs)
-      if (context.absentAssisterName && card.positionCode === 'FWD') {
-        contextualBonus -= (baseForm * 0.05);
-        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Passeur absent (-5%)` : `Passeur star (${context.absentAssisterName}) absent (-5%)`;
-      }
-    } else if (allGalleryCards.length > 0) {
-      // Fallback si pas de precomputed (ex: modal unitaire)
-      const teammates = allGalleryCards.filter(c => c.club?.name === clubName && c.id !== card.id);
-
-      // Calcul du Depth Factor en fallback
-      const validScores = allGalleryCards.filter(c => c.club?.name === clubName).map(c => c.scores?.l40 || 0).filter(s => s > 0);
-      const avgClubScore = validScores.length > 0 ? validScores.reduce((a, b) => a + b, 0) / validScores.length : 40;
-      const depthFactor = avgClubScore > 52 ? 0.5 : avgClubScore < 42 ? 1.2 : 1.0;
-
-      // 1. Leader Absent
-      const reliableCandidates = allGalleryCards.filter(c => c.club?.name === clubName && (c.scores?.l40PlayedRate || 80) >= 70);
-      const absoluteStar = [...reliableCandidates].sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
-      if (absoluteStar && absoluteStar.id !== card.id && (absoluteStar.injuryStatus !== 'FIT' || absoluteStar.status === 'NOT_PLAYING')) {
-        const penalty = 0.05 * depthFactor;
-        matchupFactor *= (1 - penalty);
-        matchupImpactLabel = `${matchupImpactLabel} • Leader absent (${Math.round(penalty * 100)}%)`;
-        contextualImpactLabel = `Leader absent (${absoluteStar.displayName}) (-${Math.round(penalty * 100)}%)`;
-      }
-
-      // 2. Meilleur Défenseur
-      const bestDef = [...reliableCandidates]
-        .filter(c => c.positionCode === 'DEF')
-        .sort((a, b) => (b.scores?.l40 || 0) - (a.scores?.l40 || 0))[0];
-      if (bestDef && bestDef.id !== card.id && (bestDef.injuryStatus !== 'FIT' || bestDef.status === 'NOT_PLAYING') && (card.positionCode === 'DEF' || card.positionCode === 'GK')) {
-        const csPenalty = 0.20 * depthFactor;
-        cleanSheetFactor *= (1 - csPenalty);
-        const label = `Défenseur clé absent (-${Math.round(csPenalty * 100)}% CS)`;
-        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • ${label}` : label;
-      }
-
-      // 3. Buteur Star absent ?
-      const starScorer = teammates.find(c => c.positionCode === 'FWD' && (c.scores?.l40 || 0) > 55 && (c.injuryStatus !== 'FIT' || c.status === 'NOT_PLAYING'));
-      if (starScorer && card.positionCode === 'FWD') {
-        contextualBonus += (baseForm * 0.15);
-        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Buteur star absent (+15%)` : `Buteur star (${starScorer.displayName}) absent (+15%)`;
-      }
-
-      // 4. Passeur absent ?
-      const starAssister = teammates.find(c => c.positionCode === 'MID' && (c.scores?.l40 || 0) > 55 && (c.injuryStatus !== 'FIT' || c.status === 'NOT_PLAYING'));
-      if (starAssister && card.positionCode === 'FWD') {
-        contextualBonus -= (baseForm * 0.05);
-        contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Passeur absent (-5%)` : `Passeur star (${starAssister.displayName}) absent (-5%)`;
-      }
-    }
+  if (card.status === 'STARTER' && !isRegularStarter) {
+    contextualBonus += 2.0;
+    contextualImpactLabel = 'Remplace un titulaire absent (+2pts)';
+  } else if (isRegularStarter && card.scores && card.scores.l5 < 35 && card.scores.l15 > 50) {
+    contextualBonus += 3.0;
+    contextualImpactLabel = 'Retour en forme attendu (+3pts)';
   }
 
-  // --- NEW: Penalty Taker Logic ---
-  const notes = (card.tacticalNotes || '').toLowerCase();
-  if (notes.includes('pénalty') || notes.includes('penalty') || notes.includes('tireur')) {
-    contextualBonus += 1.5;
-    contextualImpactLabel = contextualImpactLabel ? `${contextualImpactLabel} • Tireur de pénaltys (+1.5)` : 'Tireur de pénaltys (+1.5)';
-  }
-
-  let profileBonus = 0;
-  if (strategy === 'SAFE_TITULAR') {
-    if ((card.scores?.allAroundContributionPct || 50) > 55) {
-      profileBonus += 2.5;
-    }
-    if ((card.scores?.decisiveContributionPct || 40) > 70) {
-      profileBonus -= 2.0;
-    }
-  } else if (strategy === 'HIGH_CEILING') {
-    if ((card.scores?.ceilingScore || 65) > 75) {
-      profileBonus += 3.5;
-    }
-  }
-
-  // --- Weather Factor ---
+  // Weather check
   let weatherBonus = 0;
   let weatherImpactLabel = '';
   if (fixture?.weather) {
     const w = fixture.weather;
-    const isRain = w.isRainy || (w.precipitation != null && w.precipitation > 2) || (w.description && (w.description.toLowerCase().includes('pluie') || w.description.toLowerCase().includes('orage') || w.description.toLowerCase().includes('averses')));
-    const isHighWind = (w.wind != null && w.wind > 35);
-    
-    if (isRain) {
+    if (w.description?.includes('Pluie') || w.description?.includes('Neige')) {
       if (card.positionCode === 'GK') {
-        weatherBonus -= 1.0;
-        weatherImpactLabel = 'Pluie glissante (Ballon fuyant -1.0pt)';
-      } else if (card.positionCode === 'DEF') {
-        weatherBonus += 0.8;
-        weatherImpactLabel = 'Terrain humide (Volume tacles +0.8pt)';
-      } else if (card.positionCode === 'MID') {
-        weatherBonus -= 0.5;
-        weatherImpactLabel = 'Pluie soutenue (Précision passes -0.5pt)';
-      } else if (card.positionCode === 'FWD') {
-        weatherBonus += 0.4;
-        weatherImpactLabel = 'Frappes lointaines & rebonds (+0.4pt)';
-      }
-    } else if (isHighWind) {
-      if (card.positionCode === 'GK') {
-        weatherBonus -= 0.8;
-        weatherImpactLabel = 'Vent fort (Trajectoires flottantes -0.8pt)';
-      } else if (card.positionCode === 'MID') {
-        weatherBonus -= 0.6;
-        weatherImpactLabel = 'Vent fort (Jeu long perturbé -0.6pt)';
+        weatherBonus -= 1.5;
+        weatherImpactLabel = 'Conditions humides (Erreurs GK -1.5pt)';
+      } else if (card.positionCode === 'DEF' && (card.scores?.l5 ?? 0) > 40) {
+        weatherBonus += 1.0;
+        weatherImpactLabel = 'Conditions humides (Tacles/Duels DEF +1.0pt)';
       }
     }
+    if (w.wind > 35) {
+      if (card.positionCode === 'MID' || card.positionCode === 'FWD') {
+        weatherBonus -= 1.0;
+        weatherImpactLabel = 'Vent fort (Jeu long perturbé -1.0pt)';
+      }
+    }
+  }
+
+  // Adjust cleanSheetFactor down since matchupFactor already boosts good matchups
+  if (cleanSheetFactor > 0) {
+    cleanSheetFactor = cleanSheetFactor * 0.5; 
   }
 
   let projected = (baseForm * starterFactor * matchupFactor * allAroundFactor) + cleanSheetFactor + profileBonus + gameStateBonus + contextualBonus + weatherBonus;
@@ -987,47 +892,43 @@ export function calculatePlayerProjectedScore(
   let bookmakerActionBonus = 0;
   if (fixture?.bookmaker) {
     const bm = fixture.bookmaker;
-    // Petit bonus progressif si le joueur est bien placé pour marquer ou passer
     if (bm.anytimeScorerOdds && bm.anytimeScorerOdds < 4.5) {
-      bookmakerActionBonus += Math.max(0.2, (5.0 - bm.anytimeScorerOdds) * 0.4);
+      bookmakerActionBonus += Math.max(0, (5.0 - bm.anytimeScorerOdds) * 0.2); // Reduced impact
     }
     if (bm.anytimeAssistOdds && bm.anytimeAssistOdds < 5.5) {
-      bookmakerActionBonus += Math.max(0.1, (6.0 - bm.anytimeAssistOdds) * 0.3);
+      bookmakerActionBonus += Math.max(0, (6.0 - bm.anytimeAssistOdds) * 0.15); // Reduced impact
     }
   }
 
-  // Intégration des statistiques avancées xG / xA si disponibles
   let advancedStatsBonus = 0;
   if (card.scores?.xG && card.scores.xG > 0) {
-    advancedStatsBonus += Math.min(2.5, card.scores.xG * 1.6);
+    advancedStatsBonus += Math.min(1.5, card.scores.xG * 1.0);
   }
   if (card.scores?.xA && card.scores.xA > 0) {
-    advancedStatsBonus += Math.min(2.5, card.scores.xA * 1.8);
+    advancedStatsBonus += Math.min(1.5, card.scores.xA * 1.0);
   }
 
   projected += (bookmakerActionBonus + advancedStatsBonus);
 
   // 6. Orientation Stratégique AAS vs DS vs Équilibré
+  const aasRate = card.scores?.aasPercentage ?? 50;
+  const dsRate = card.scores?.decisivePercentage ?? 30;
   let scoringFocusBonus = 0;
   if (scoringFocus === 'AAS') {
-    // Profil AAS / Plancher régulier : valorise les gros gratteurs de points et le volume défensif/collectif
-    const aasScore = card.scores?.avgAllAroundScore || (card.scores?.l15 ? card.scores.l15 * 0.48 : 18);
-    const aaRatio = card.scores?.allAroundContributionPct || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'MID' ? 55 : 40);
-    if (aasScore >= 20 || aaRatio >= 58) {
-      scoringFocusBonus += Math.min(5.0, (aasScore - 14) * 0.35 + (aaRatio > 58 ? 1.5 : 0));
-    } else if (aaRatio < 35) {
-      scoringFocusBonus -= 2.5; // Malus sur les joueurs dépendants exclusivement d'une action décisive
-    }
+    if (aasRate >= 80) scoringFocusBonus += 1.5;
+    else if (aasRate >= 60) scoringFocusBonus += 0.5;
+    else if (aasRate < 40) scoringFocusBonus -= 2.0;
   } else if (scoringFocus === 'DS') {
-    // Profil DS / Haut Plafond : valorise les buteurs, passeurs et joueurs avec un fort taux de score décisif
-    const dsRate = card.scores?.decisiveRateL15 || (card.scores?.decisiveRateL5 || 25);
-    const ceiling = card.scores?.ceilingScore || 65;
-    const decRatio = card.scores?.decisiveContributionPct || (card.positionCode === 'FWD' ? 60 : card.positionCode === 'MID' ? 40 : 25);
-    if (dsRate >= 25 || ceiling >= 75 || decRatio >= 50) {
-      scoringFocusBonus += Math.min(5.5, (dsRate / 10) * 0.7 + (ceiling > 75 ? 2.0 : 0));
+    if (dsRate >= 80) {
+      scoringFocusBonus += 2.0;
+    } else if (dsRate >= 50) {
+      scoringFocusBonus += 1.0;
+    } else {
+      scoringFocusBonus -= 2.0;
     }
   }
   projected += scoringFocusBonus;
+
 
   if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker?.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
     projected += 4;
@@ -1785,17 +1686,35 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
     if (l10 === 0) l10 = l15 > 0 ? l15 : l40;
   }
 
-  const isNotPlaying = (l5 === 0 && l10 === 0 && l15 === 0 && l40 === 0);
-  if (isNotPlaying) {
-    return new Array(totalMatches).fill(0);
-  }
-
   const last40 = card.scores?.last40Scores;
   const last15 = card.scores?.last15Scores;
   const last10 = card.scores?.last10Scores;
   const last5 = card.scores?.last5Scores;
-  
   let recentMatches = card.scores?.recentMatches;
+
+  const hasRealScores = (recentMatches && recentMatches.some(m => typeof m.score === 'number' && m.score > 0)) ||
+    (last40 && last40.some(s => typeof s === 'number' && s > 0)) ||
+    (last15 && last15.some(s => typeof s === 'number' && s > 0)) ||
+    (last5 && last5.some(s => typeof s === 'number' && s > 0));
+
+  if (l5 === 0 && last5 && last5.length > 0) {
+    const valid = last5.filter(s => typeof s === 'number' && s >= 0);
+    if (valid.length > 0) l5 = Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10) / 10;
+  }
+  if (l15 === 0 && last15 && last15.length > 0) {
+    const valid = last15.filter(s => typeof s === 'number' && s >= 0);
+    if (valid.length > 0) l15 = Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10) / 10;
+  }
+  if (l40 === 0 && last40 && last40.length > 0) {
+    const valid = last40.filter(s => typeof s === 'number' && s >= 0);
+    if (valid.length > 0) l40 = Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10) / 10;
+  }
+
+  const isNotPlaying = (l5 === 0 && l10 === 0 && l15 === 0 && l40 === 0) && !hasRealScores;
+  if (isNotPlaying) {
+    return new Array(totalMatches).fill(0);
+  }
+
   if (recentMatches && recentMatches.length > 0) {
     recentMatches = recentMatches.filter(m => {
       const matchIsNational = isNationalTeamMatch(m);
@@ -1808,9 +1727,9 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   }
 
   // Step 1: Known scores fill (Real recorded match scores)
-  // recentMatches[0] or last40[0] is the MOST RECENT match (GW 0) -> maps to index 0 (left-most / most recent)
+  // recentMatches[0] is the MOST RECENT match (GW 0) -> maps to index 0
   for (let k = 0; k < totalMatches; k++) {
-    const targetIdx = k; // k=0 (newest) goes to index 0 (left side / most recent)
+    const targetIdx = k;
     let scoreVal = -1;
 
     const mObj = recentMatches && recentMatches[k];
@@ -1818,14 +1737,38 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
 
     if (mObj && typeof mObj.score === 'number' && !isDummyPlaceholder) {
       scoreVal = mObj.score;
-    } else if (last40 && typeof last40[last40.length - 1 - k] === 'number') {
-      scoreVal = last40[last40.length - 1 - k];
-    } else if (last15 && typeof last15[last15.length - 1 - k] === 'number') {
-      scoreVal = last15[last15.length - 1 - k];
-    } else if (last10 && typeof last10[last10.length - 1 - k] === 'number') {
-      scoreVal = last10[last10.length - 1 - k];
-    } else if (last5 && typeof last5[last5.length - 1 - k] === 'number') {
-      scoreVal = last5[last5.length - 1 - k];
+    } else {
+      // Check last5, last10, last15, last40 arrays ONLY if they have explicit non-zero scores at index k
+      let candidateScore = -1;
+
+      if (last5 && k < last5.length) {
+        const val1 = last5[k];
+        const val2 = last5[last5.length - 1 - k];
+        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+      }
+      if (candidateScore <= 0 && last10 && k < last10.length) {
+        const val1 = last10[k];
+        const val2 = last10[last10.length - 1 - k];
+        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+      }
+      if (candidateScore <= 0 && last15 && k < last15.length) {
+        const val1 = last15[k];
+        const val2 = last15[last15.length - 1 - k];
+        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+      }
+      if (candidateScore <= 0 && last40 && k < last40.length) {
+        const val1 = last40[k];
+        const val2 = last40[last40.length - 1 - k];
+        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+      }
+
+      if (candidateScore > 0) {
+        scoreVal = candidateScore;
+      }
     }
 
     if (scoreVal >= 0) {
@@ -1932,19 +1875,13 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
   fillAndAdjustSegment(0, 4, l5);
 
   // Segment 2: Indices 5..9 (Matches 6..10 ago)
-  const sum0_4 = sumSegment(0, 4);
-  const targetSum5_9 = Math.max(0, (l10 * 10) - sum0_4);
-  fillAndAdjustSegment(5, 9, targetSum5_9 / 5);
+  fillAndAdjustSegment(5, 9, l10 > 0 ? l10 : l5);
 
   // Segment 3: Indices 10..14 (Matches 11..15 ago)
-  const sum0_9 = sumSegment(0, 9);
-  const targetSum10_14 = Math.max(0, (l15 * 15) - sum0_9);
-  fillAndAdjustSegment(10, 14, targetSum10_14 / 5);
+  fillAndAdjustSegment(10, 14, l15 > 0 ? l15 : l10 > 0 ? l10 : l5);
 
   // Segment 4: Indices 15..39 (Matches 16..40 ago)
-  const sum0_14 = sumSegment(0, 14);
-  const targetSum15_39 = Math.max(0, (l40 * 40) - sum0_14);
-  fillAndAdjustSegment(15, 39, targetSum15_39 / 25);
+  fillAndAdjustSegment(15, 39, l40 > 0 ? l40 : l15 > 0 ? l15 : l5);
 
   return rawScores;
 }

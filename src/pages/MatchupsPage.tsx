@@ -7,6 +7,7 @@ interface MatchupsPageProps {
   gameWeek: GameWeekInfo;
   onOpenScout: (card: SorareCard) => void;
   strategy?: StrategyType;
+  onUpdateCards?: (cards: SorareCard[]) => void;
 }
 
 export const MatchupsPage: React.FC<MatchupsPageProps> = (props) => {

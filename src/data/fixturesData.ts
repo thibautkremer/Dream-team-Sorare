@@ -268,7 +268,7 @@ export const FIXTURES_CATALOG: Record<string, ClubFixtureDefinition> = {
     kickoffDate: '2026-08-21T18:45:00Z',
     kickoffFormatted: 'Ven. 21 août à 20:45',
     kickoffRelative: 'Dans 4 jours',
-    difficultyRating: 3,
+    difficultyRating: 4,
     winProb: 20,
     drawProb: 26,
     lossProb: 54,

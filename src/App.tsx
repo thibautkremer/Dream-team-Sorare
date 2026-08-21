@@ -13,8 +13,8 @@ import { LiveScoringView } from './components/LiveScoringView';
 import { LineupExportModal } from './components/LineupExportModal';
 import { StorageService } from './utils/storage';
 import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey } from './utils/optimizer';
-import { CURRENT_GAME_WEEK } from './data/mockGallery';
-import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters } from './types';
+
+import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters, PlayingStatus } from './types';
 import { CheckCircle2, AlertCircle, ShieldAlert } from 'lucide-react';
 
 export default function App() {
@@ -23,6 +23,7 @@ export default function App() {
   const [cards, setCards] = useState<SorareCard[]>([]);
   const [exportLineupTarget, setExportLineupTarget] = useState<Lineup | null>(null);
   const [degradedModeInfo, setDegradedModeInfo] = useState<{ isDegraded: boolean; reason?: string } | null>(null);
+  const [gameWeek, setGameWeek] = useState(48); // Fallback to 48 initially
   
   const [filters, setFilters] = useState<LineupOptimizationFilters>({
     rarity: 'ALL',
@@ -47,7 +48,7 @@ export default function App() {
 
   const [lineup, setLineup] = useState<Lineup>(() => {
     const initialCards = StorageService.getCards();
-    return optimizeLineup(initialCards, 'BALANCED', CURRENT_GAME_WEEK.number, filters);
+    return optimizeLineup(initialCards, 'BALANCED', gameWeek, filters);
   });
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -79,7 +80,7 @@ export default function App() {
   // Generate 4 compositions dynamically whenever cards, deferred filters, or deferred strategy change (preserving locked ones)
   useEffect(() => {
     if (cards.length > 0) {
-      const fourCompos = generateFourDistinctLineups(cards, deferredStrategy, CURRENT_GAME_WEEK.number, deferredFilters);
+      const fourCompos = generateFourDistinctLineups(cards, deferredStrategy, gameWeek, deferredFilters);
       setCompositions(prevComps => {
         if (!prevComps || prevComps.length === 0) {
           setLineup(fourCompos[0]);
@@ -149,6 +150,40 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
+  // --- NEW: Flux API-Football / Opta (Polling XI de départ) ---
+  useEffect(() => {
+    const pollStartingXI = async () => {
+      if (!isOnline) return;
+      try {
+        // En conditions réelles, /api/sports/starting-xi interroge API-Football ou Opta
+        const res = await fetch('/api/sports/starting-xi');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.confirmedSlugs && data.confirmedSlugs.length > 0) {
+            setCards(prevCards => {
+              let changed = false;
+              const newCards = prevCards.map(c => {
+                if (data.confirmedSlugs.includes(c.slug)) {
+                  changed = true;
+                  return { ...c, status: 'STARTER' as PlayingStatus, starterConfidence: 100 };
+                }
+                return c;
+              });
+              return changed ? newCards : prevCards;
+            });
+          }
+        }
+      } catch (e) {
+        // Silent fail for polling
+      }
+    };
+    
+    // Poll every 5 minutes
+    const intervalId = setInterval(pollStartingXI, 5 * 60 * 1000);
+    pollStartingXI();
+    return () => clearInterval(intervalId);
+  }, [isOnline]);
+
   // Load cards on startup and sync with Sorare live API
   useEffect(() => {
     const initCards = async () => {
@@ -157,7 +192,7 @@ export default function App() {
       
       // Generate optimal initial lineup
       if (loadedCards.length > 0) {
-        setLineup(optimizeLineup(loadedCards, 'BALANCED', CURRENT_GAME_WEEK.number));
+        setLineup(optimizeLineup(loadedCards, 'BALANCED', gameWeek));
       }
     };
     initCards();
@@ -165,6 +200,17 @@ export default function App() {
     // Auto-sync with Sorare API in background on startup
     const autoSync = async () => {
       try {
+        // Fetch dynamic game week first
+        const gwRes = await fetch('/api/sorare/gameweek');
+        let currentGw = gameWeek;
+        if (gwRes.ok) {
+          const gwData = await gwRes.json();
+          if (gwData.gameWeek) {
+            setGameWeek(gwData.gameWeek);
+            currentGw = gwData.gameWeek;
+          }
+        }
+
         const currentName = StorageService.getUsername();
         const apiKey = StorageService.getApiKey();
         const url = `/api/sorare/user-cards?username=${encodeURIComponent(currentName)}`;
@@ -179,7 +225,7 @@ export default function App() {
               StorageService.saveUserMeta(data.user);
             }
             setCards(data.cards);
-            setLineup(optimizeLineup(data.cards, 'BALANCED', CURRENT_GAME_WEEK.number));
+            setLineup(optimizeLineup(data.cards, 'BALANCED', currentGw));
             setLastSynced(new Date().toISOString());
             console.log(`[Sorare] Synced ${data.cards.length} real cards on startup`);
           }
@@ -387,7 +433,7 @@ export default function App() {
             StorageService.saveUserMeta(data.user);
           }
           setCards(data.cards);
-          setLineup(optimizeLineup(data.cards, 'BALANCED', CURRENT_GAME_WEEK.number));
+          setLineup(optimizeLineup(data.cards, 'BALANCED', gameWeek));
           const syncTimestamp = new Date().toISOString();
           setLastSynced(syncTimestamp);
           showToast(
@@ -429,7 +475,7 @@ export default function App() {
         body: JSON.stringify({
           cards,
           strategy,
-          gameWeek: CURRENT_GAME_WEEK.number,
+          gameWeek: gameWeek,
           filters,
         }),
       });
@@ -450,7 +496,7 @@ export default function App() {
             id: `lineup-gemini-${Date.now()}`,
             name: `Compo 1`,
             strategy,
-            gameWeek: CURRENT_GAME_WEEK.number,
+            gameWeek: gameWeek,
             slots: { gk, def, mid, fwd, extra },
             captainSlot: (rec.captainSlot as any) || 'fwd',
             projectedTotal: aiData.projectedTotalScore || 340,
@@ -475,7 +521,7 @@ export default function App() {
           };
 
           // Generate 4 distinct lineups using filter constraints
-          const otherLineups = generateFourDistinctLineups(cards, strategy, CURRENT_GAME_WEEK.number, filters);
+          const otherLineups = generateFourDistinctLineups(cards, strategy, gameWeek, filters);
           const fourTeams = [
             { ...primaryLineup, name: 'Compo 1' },
             { ...(otherLineups[1] || otherLineups[0]), name: 'Compo 2' },
@@ -493,7 +539,7 @@ export default function App() {
       throw new Error('Erreur API IA');
     } catch (e: any) {
       console.warn('Fallback to deterministic 4 SO5 lineups with filters', e);
-      const fourTeams = generateFourDistinctLineups(cards, strategy, CURRENT_GAME_WEEK.number, filters);
+      const fourTeams = generateFourDistinctLineups(cards, strategy, gameWeek, filters);
       setCompositions(fourTeams);
       setLineup(fourTeams[0]);
       setSelectedCompoIndex(0);
@@ -672,7 +718,7 @@ export default function App() {
             starterConfidence: 90,
             injuryStatus: 'FIT',
             upcomingFixture: {
-              gameWeek: CURRENT_GAME_WEEK.number,
+              gameWeek: gameWeek,
               opponent: 'Adversaire',
               isHome: true,
               difficultyRating: 3,
@@ -706,7 +752,7 @@ export default function App() {
           id: l.id || `imported-${i + 1}`,
           name: l.name || `Compo Sorare ${i + 1}`,
           strategy: 'BALANCED',
-          gameWeek: CURRENT_GAME_WEEK.number,
+          gameWeek: gameWeek,
           slots,
           captainSlot: capSlot,
           projectedTotal: Math.round(baseTotal * 10) / 10,
@@ -745,7 +791,7 @@ export default function App() {
         setCurrentTab={setCurrentTab}
         username={username}
         setUsername={setUsername}
-        gameWeek={CURRENT_GAME_WEEK}
+        gameWeek={{ number: gameWeek }}
         isSyncing={isSyncing}
         onSync={handleSyncWithSorare}
         isOnline={isOnline}
@@ -856,9 +902,13 @@ export default function App() {
         {currentTab === 'matchups' && (
           <MatchupsPage
             cards={cards}
-            gameWeek={CURRENT_GAME_WEEK}
+            gameWeek={{ number: gameWeek }}
             onOpenScout={(c) => setScoutCard(c)}
             strategy={strategy}
+            onUpdateCards={(newCards) => {
+              setCards(newCards);
+              StorageService.saveCards(newCards);
+            }}
           />
         )}
 
@@ -869,7 +919,7 @@ export default function App() {
             lineup={lineup}
             compositions={compositions}
             onOpenScout={(c) => setScoutCard(c)}
-            gameWeek={CURRENT_GAME_WEEK.number}
+            gameWeek={gameWeek}
             strategy={strategy}
           />
         )}
@@ -878,7 +928,7 @@ export default function App() {
         {currentTab === 'ai-coach' && (
           <AICoachPage
             cards={cards}
-            gameWeekNumber={CURRENT_GAME_WEEK.number}
+            gameWeekNumber={gameWeek}
           />
         )}
 
@@ -893,7 +943,7 @@ export default function App() {
         <LineupExportModal
           lineup={exportLineupTarget}
           onClose={() => setExportLineupTarget(null)}
-          gameWeek={CURRENT_GAME_WEEK.number}
+          gameWeek={gameWeek}
         />
       )}
 

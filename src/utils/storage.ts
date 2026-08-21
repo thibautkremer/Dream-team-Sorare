@@ -102,6 +102,21 @@ export class StorageService {
     if (memoryCardsCache && memoryCardsCache.length > 0) {
       return memoryCardsCache;
     }
+    
+    // Attempt immediate synchronous read from localStorage (light data)
+    try {
+      const lsData = localStorage.getItem(STORAGE_KEYS.CARDS);
+      if (lsData) {
+        const parsed = JSON.parse(lsData);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          memoryCardsCache = parsed;
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading light cards from localStorage', e);
+    }
+    
     if (MOCK_GALLERY && Array.isArray(MOCK_GALLERY) && MOCK_GALLERY.length > 0) {
       memoryCardsCache = MOCK_GALLERY;
       return MOCK_GALLERY;
@@ -114,9 +129,10 @@ export class StorageService {
    */
   static async getCardsAsync(): Promise<SorareCard[]> {
     if (memoryCardsCache && memoryCardsCache.length > 0) {
+      // Memory cache is already fully hydrated
       return memoryCardsCache;
     }
-    // Try IndexedDB first
+    // Try IndexedDB first for heavy data
     const idbCards = await idbGet<SorareCard[]>('gallery_cards');
     if (idbCards && Array.isArray(idbCards) && idbCards.length > 0) {
       memoryCardsCache = idbCards;
@@ -133,14 +149,30 @@ export class StorageService {
     if (!Array.isArray(cards)) return;
     memoryCardsCache = cards;
     
-    // Save to IndexedDB asynchronously
+    // Save to IndexedDB asynchronously (heavy data)
     idbSet('gallery_cards', cards).catch(() => {});
 
     try {
       localStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
-      // Removed localStorage save for cards completely to prevent 5MB QuotaExceededError
+      
+      // Save light version to localStorage to avoid QuotaExceededError (5MB)
+      // We only keep essential properties for initial UI render
+      const lightCards = cards.map(c => ({
+        id: c.id,
+        name: c.displayName || c.name || '',
+        displayName: c.displayName || c.name || '',
+        rarity: c.rarity,
+        scores: c.scores,
+        starterConfidence: c.starterConfidence,
+        status: c.status,
+        club: c.club,
+        positionCode: c.positionCode,
+        pictureUrl: c.pictureUrl
+      })).slice(0, 300); // Limit to top 300 cards to stay well within localStorage limits
+      
+      localStorage.setItem(STORAGE_KEYS.CARDS, JSON.stringify(lightCards));
     } catch (e) {
-      console.warn('Could not save to localStorage', e);
+      console.warn('Could not save light cards to localStorage', e);
     }
   }
 

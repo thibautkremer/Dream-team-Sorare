@@ -897,6 +897,12 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                         {/* Real Match Score Badge from Sorare API */}
                         {sorareLive?.game && (sorareLive.game.statusTyped === 'in_play' || sorareLive.game.statusTyped === 'played' || sorareLive.game.statusTyped === 'finished' || sorareLive.game.statusTyped === 'ft') && (
                           <span className="text-[10px] font-black text-white bg-slate-950 border border-emerald-500/40 px-2 py-0.5 rounded flex items-center gap-1.5 ml-1">
+                            {sorareLive.game.statusTyped === 'in_play' && (
+                              <span className="animate-pulse text-red-500 flex items-center gap-0.5">
+                                <div className="h-1.5 w-1.5 rounded-full bg-red-500"></div>
+                                {sorareLive.game.minute ? `${sorareLive.game.minute}'` : 'Live'}
+                              </span>
+                            )}
                             {sorareLive.game.homeTeamPicture && (
                               <img src={sorareLive.game.homeTeamPicture} alt="" className="h-3.5 w-3.5 object-contain" />
                             )}
@@ -934,9 +940,9 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                         )}
 
                         {/* Starter status badge */}
-                        {isStarter ? (
+                        {isStarter || card.status === 'CONFIRMED' ? (
                           <span className="text-[10px] font-bold text-blue-400 bg-blue-950/60 border border-blue-800/60 px-1.5 py-0.5 rounded">
-                            ⚡ Titulaire confirmé
+                            ⚡ {card.status === 'CONFIRMED' ? 'Confirmé (Opta)' : 'Titulaire'}
                           </span>
                         ) : (
                           <span className="text-[10px] font-medium text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
@@ -949,6 +955,48 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                           • {recentAnalysis.lastMatchLabel}
                         </span>
                       </div>
+
+                      {/* Player Props Visualizer (Bookmakers) */}
+                      {fixture?.bookmaker && (
+                        <div className="flex items-center gap-3 mt-2">
+                          {(() => {
+                            let dsLabel = "DS (But/Passe)";
+                            let dsValue = 0;
+                            let dsColor = "bg-amber-400";
+                            let dsTextColor = "text-amber-400";
+
+                            if (card.positionCode === 'GK' || card.positionCode === 'DEF') {
+                              dsLabel = "DS (Clean Sheet)";
+                              dsValue = fixture.bookmaker.cleanSheetProb || 0;
+                              dsColor = "bg-emerald-400";
+                              dsTextColor = "text-emerald-400";
+                            } else {
+                              dsLabel = card.positionCode === 'MID' ? "DS (Passe D. / But)" : "DS (But / Passe D.)";
+                              const goalProb = fixture.bookmaker.anytimeScorerOdds ? (1 / fixture.bookmaker.anytimeScorerOdds) * 100 : 0;
+                              const assistProb = fixture.bookmaker.anytimeAssistOdds ? (1 / fixture.bookmaker.anytimeAssistOdds) * 100 : 0;
+                              dsValue = Math.max(goalProb, assistProb); // Or combine them slightly
+                            }
+
+                            if (dsValue > 0) {
+                              return (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] font-bold text-slate-400 uppercase">{dsLabel}</span>
+                                  <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                    <div 
+                                      className={`h-full ${dsColor}`} 
+                                      style={{ width: `${Math.min(100, dsValue)}%` }} 
+                                    />
+                                  </div>
+                                  <span className={`text-[10px] font-bold ${dsTextColor}`}>
+                                    {Math.round(dsValue)}%
+                                  </span>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      )}
                     </div>
                   </div>
 

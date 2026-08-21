@@ -73,12 +73,38 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
   };
 
   const handleDirectSubmit = () => {
-    setIsSubmitting(true);
-    // Simulate submission flow or open Sorare arena
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setSubmitSuccess(true);
-    }, 1200);
+    const width = 600;
+    const height = 700;
+    const left = window.innerWidth / 2 - width / 2;
+    const top = window.innerHeight / 2 - height / 2;
+    // Mocking Sorare OAuth URL
+    const oauthPopup = window.open(
+      '/oauth/callback?code=mock-code',
+      'SorareAuth',
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
+
+    const messageListener = async (event: MessageEvent) => {
+      if (event.data?.type === 'SORARE_OAUTH_SUCCESS') {
+        window.removeEventListener('message', messageListener);
+        const token = event.data.token;
+        setIsSubmitting(true);
+        try {
+          const res = await fetch('/api/sorare/export-lineup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, lineup })
+          });
+          if (res.ok) {
+            setSubmitSuccess(true);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+        setIsSubmitting(false);
+      }
+    };
+    window.addEventListener('message', messageListener);
   };
 
   return (
@@ -162,15 +188,22 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
               </p>
             </div>
             
-            <a
-              href="https://sorare.com/football/play"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-black text-slate-950 shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 transition whitespace-nowrap"
+            <button
+              onClick={handleDirectSubmit}
+              disabled={isSubmitting || submitSuccess}
+              className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-black text-slate-950 shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 transition whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span>Accéder à Sorare.com</span>
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
+              {isSubmitting ? (
+                <span>Connexion en cours...</span>
+              ) : submitSuccess ? (
+                <span>Soumis avec succès !</span>
+              ) : (
+                <>
+                  <span>Soumettre via OAuth</span>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </>
+              )}
+            </button>
           </div>
 
           {/* Option 2: Copy Discord/Social Shareable Summary */}

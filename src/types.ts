@@ -1,6 +1,6 @@
 export type PositionCode = 'GK' | 'DEF' | 'MID' | 'FWD';
 export type SlotPosition = 'GK' | 'DEF' | 'MID' | 'FWD' | 'EXTRA';
-export type PlayingStatus = 'STARTER' | 'REGULAR' | 'SUPER_SUBSTITUTE' | 'SUBSTITUTE' | 'NOT_PLAYING' | 'BENCH' | 'DOUBTFUL';
+export type PlayingStatus = 'STARTER' | 'REGULAR' | 'SUPER_SUBSTITUTE' | 'SUBSTITUTE' | 'NOT_PLAYING' | 'BENCH' | 'DOUBTFUL' | 'CONFIRMED';
 export type InjuryStatus = 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED';
 export type StrategyType = 'BALANCED' | 'SAFE_TITULAR' | 'HIGH_CEILING' | 'PURE_FORM';
 export type ScoringFocus = 'BALANCED' | 'AAS' | 'DS';
@@ -10,12 +10,24 @@ export interface BookmakerOdds {
   win?: number; // e.g. 1.65 (60% win prob)
   draw?: number; // e.g. 3.80
   loss?: number; // e.g. 5.20
+  homeWinOdds?: number;
+  awayWinOdds?: number;
   cleanSheetProb?: number; // 0 - 100 % (critical for DEF/GK)
+  opponentCleanSheetProb?: number;
   goalExpectancy?: number; // Team xG e.g. 2.1
   opponentGoalExpectancy?: number; // Opponent xG e.g. 0.8
   anytimeScorerOdds?: number; // e.g. 2.10
   anytimeAssistOdds?: number; // e.g. 3.40
   winProbability?: number;
+  drawProbability?: number;
+  lossProbability?: number;
+  homeTeamName?: string;
+  awayTeamName?: string;
+  source?: string;
+  sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+  groundingUrls?: string[];
+  topScorers?: Array<{ name: string; team: string; anytimeScorerOdds: number }>;
+  topAssisters?: Array<{ name: string; team: string; anytimeAssistOdds: number }>;
 }
 
 export interface WeatherCondition {
@@ -175,6 +187,8 @@ export interface SorareCard {
     avgAllAroundScore?: number;
     decisiveContributionPct?: number;
     allAroundContributionPct?: number;
+    aasPercentage?: number;
+    decisivePercentage?: number;
     floorScore?: number;
     ceilingScore?: number;
     l5Played?: number;
@@ -297,9 +311,9 @@ export interface SorareOfficialLineup {
 
 export interface GameWeekInfo {
   number: number;
-  label: string;
-  startDate: string;
-  endDate: string;
+  label?: string;
+  startDate?: string;
+  endDate?: string;
   deadline?: string;
   isOpen?: boolean;
   status?: string;
