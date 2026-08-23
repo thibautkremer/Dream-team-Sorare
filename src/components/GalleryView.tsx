@@ -1,11 +1,13 @@
 import React, { useState, useMemo, useTransition } from 'react';
 import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw } from 'lucide-react';
-import { SorareCard, PositionCode, PlayingStatus } from '../types';
+import { SorareCard, PositionCode, PlayingStatus, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
 
 interface GalleryViewProps {
   cards: SorareCard[];
+  strategy?: StrategyType;
+  isLoadingCards?: boolean;
   onOpenScout: (card: SorareCard) => void;
   onAssignToSlot: (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   onAddCard: (card: SorareCard) => void;
@@ -17,6 +19,8 @@ const CARDS_PER_PAGE = 36;
 
 export const GalleryView: React.FC<GalleryViewProps> = ({
   cards,
+  strategy = 'BALANCED',
+  isLoadingCards = false,
   onOpenScout,
   onAssignToSlot,
   onAddCard,
@@ -27,6 +31,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [localSearch, setLocalSearch] = useState('');
   const [isPending, startTransition] = useTransition();
   const [selectedPosition, setSelectedPosition] = useState<PositionCode | 'ALL'>('ALL');
+  // AUDIT FIX (4.3): quick one-click toggle to hide injured/suspended/DNP players, separate from
+  // the existing multi-value status dropdown (which requires deliberately picking "DNP" to filter
+  // FOR them rather than a fast way to hide them).
+  const [hideUnavailable, setHideUnavailable] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<PlayingStatus | 'ALL'>('ALL');
   const [selectedRarity, setSelectedRarity] = useState<string>('ALL');
   const [selectedBonusTier, setSelectedBonusTier] = useState<'ALL' | '0-4' | '5-9' | '10-14' | '15-19' | '20+'>('ALL');
@@ -82,15 +90,19 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return res;
   }, [cards]);
 
-  // Memoized Map of card projected scores to avoid re-evaluating calculatePlayerProjectedScore inside loops
+  // Memoized Map of card projected scores to avoid re-evaluating calculatePlayerProjectedScore inside loops.
+  // BUGFIX: this used to always score with the 'BALANCED' strategy regardless of the strategy
+  // actually selected by the user, so the score shown here could silently differ from the one
+  // used by the Optimizer/Pitch view. Now uses the real active strategy (falls back to BALANCED
+  // only if none was passed in, for backward compatibility).
   const projectionsMap = useMemo(() => {
     const map = new Map<string, ReturnType<typeof calculatePlayerProjectedScore>>();
     const precomputedContext = precomputeClubContexts(cards);
     cards.forEach(card => {
-      map.set(card.id, calculatePlayerProjectedScore(card, 'BALANCED', cards, precomputedContext));
+      map.set(card.id, calculatePlayerProjectedScore(card, strategy, cards, precomputedContext));
     });
     return map;
-  }, [cards]);
+  }, [cards, strategy]);
 
   const filteredCards = useMemo(() => {
     return cards.filter(card => {
@@ -117,7 +129,11 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
       };
 
       const matchesPos = selectedPosition === 'ALL' || card.positionCode === selectedPosition;
-      
+
+      const matchesAvailability = !hideUnavailable || (
+        card.status !== 'NOT_PLAYING' && card.injuryStatus !== 'INJURED' && card.injuryStatus !== 'SUSPENDED'
+      );
+
       let matchesStatus = true;
       if (selectedStatus !== 'ALL') {
         const requiredLevel = getStatusLevel(selectedStatus);
@@ -161,7 +177,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
       let matchesScore = true;
       if (minProjectedScore > 0) {
         const cached = projectionsMap.get(card.id);
-        const projScore = cached ? cached.projectedScore : calculatePlayerProjectedScore(card).projectedScore;
+        const projScore = cached ? cached.projectedScore : calculatePlayerProjectedScore(card, strategy).projectedScore;
         matchesScore = projScore >= minProjectedScore;
       }
 
@@ -175,9 +191,9 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         matchesDs = getCardDsL15(card) >= minDsL15;
       }
 
-      return matchesSearch && matchesPos && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore && matchesAas && matchesDs;
+      return matchesSearch && matchesPos && matchesAvailability && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore && matchesAas && matchesDs;
     });
-  }, [cards, searchTerm, selectedPosition, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore, minAasL15, minDsL15, projectionsMap]);
+  }, [cards, searchTerm, selectedPosition, hideUnavailable, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore, minAasL15, minDsL15, projectionsMap]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
@@ -465,6 +481,23 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           </button>
         </div>
 
+        {/* AUDIT FIX (4.3): quick one-click toggle to hide injured/suspended/DNP players */}
+        <div className="mt-3">
+          <button
+            onClick={() => { setHideUnavailable(v => !v); setCurrentPage(1); }}
+            className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition border ${
+              hideUnavailable
+                ? 'border-amber-400 bg-amber-500/15 text-amber-300'
+                : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700'
+            }`}
+          >
+            <span className={`h-3.5 w-3.5 rounded-full border flex items-center justify-center ${hideUnavailable ? 'border-amber-400 bg-amber-400' : 'border-slate-600'}`}>
+              {hideUnavailable && <span className="h-1.5 w-1.5 rounded-full bg-slate-950" />}
+            </span>
+            <span>Masquer les indisponibles (blessés / suspendus / DNP)</span>
+          </button>
+        </div>
+
         {/* Filters and Search Bar */}
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
           
@@ -658,7 +691,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
 
         {/* Filter Badges Active */}
-        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0 || minAasL15 > 0 || minDsL15 > 0) && (
+        {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || hideUnavailable || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0 || minAasL15 > 0 || minDsL15 > 0) && (
           <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/60">
             <span className="text-[11px] text-slate-400">Filtres actifs :</span>
             {maxMatchDate && (
@@ -705,6 +738,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 setLocalSearch('');
                 setSearchTerm('');
                 setSelectedPosition('ALL');
+                setHideUnavailable(false);
                 setSelectedStatus('ALL');
                 setSelectedRarity('ALL');
                 setSelectedBonusTier('ALL');
@@ -730,7 +764,16 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
       </div>
 
       {/* Cards Grid - Each Card is Clickable to Open Player Scout Modal */}
-      {paginatedCards.length === 0 ? (
+      {isLoadingCards && cards.length === 0 ? (
+        // AUDIT FIX: was previously showing "Aucune carte ne correspond à vos filtres" (a filter
+        // empty-state) during the brief window before IndexedDB hydration resolves, which
+        // misleadingly implied the user's filters were the problem rather than a loading state.
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center animate-pulse">
+          <div className="mx-auto h-8 w-8 rounded-full border-2 border-slate-600 border-t-emerald-400 animate-spin mb-3" />
+          <p className="text-sm font-semibold text-slate-300">Chargement de votre galerie...</p>
+          <p className="text-xs text-slate-500 mt-1">Récupération de vos cartes depuis le stockage local.</p>
+        </div>
+      ) : paginatedCards.length === 0 ? (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center">
           <Filter className="mx-auto h-8 w-8 text-slate-600 mb-2" />
           <p className="text-sm font-semibold text-slate-300">Aucune carte ne correspond à vos filtres</p>
@@ -766,7 +809,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             const winProb = getPlayerWinProbability(card.upcomingFixture);
             const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
             const cachedBreakdown = projectionsMap.get(card.id);
-            const breakdown = cachedBreakdown || calculatePlayerProjectedScore(card, 'BALANCED', cards);
+            const breakdown = cachedBreakdown || calculatePlayerProjectedScore(card, strategy, cards);
             const projScore = breakdown.projectedScore;
 
             return (
@@ -1122,7 +1165,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <div className="text-right shrink-0 border-l border-slate-800/80 pl-4">
                 <span className="block text-[10px] text-slate-500 font-semibold">Proj. Match</span>
                 <span className="text-sm font-black text-amber-300">
-                  {calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards).projectedScore} pts
+                  {calculatePlayerProjectedScore(selectedCardForReplace, strategy, cards).projectedScore} pts
                 </span>
               </div>
             </div>
@@ -1220,7 +1263,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                                     )}
                                   </div>
                                   <p className="text-[10px] text-slate-500 truncate">
-                                    L5: {currentAlignedPlayer.scores?.l5 || 0} • Proj: {calculatePlayerProjectedScore(currentAlignedPlayer, 'BALANCED', cards).projectedScore} pts
+                                    L5: {currentAlignedPlayer.scores?.l5 || 0} • Proj: {calculatePlayerProjectedScore(currentAlignedPlayer, strategy, cards).projectedScore} pts
                                   </p>
                                 </div>
                               </div>
@@ -1350,7 +1393,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
                     {/* Projected score */}
                     {(() => {
-                      const breakdown = calculatePlayerProjectedScore(playerToReplaceCard, 'BALANCED', cards);
+                      const breakdown = calculatePlayerProjectedScore(playerToReplaceCard, strategy, cards);
                       return (
                         <div className="space-y-1.5 pt-1">
                           <div className="flex items-center justify-between text-xs">
@@ -1425,7 +1468,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
                 {/* Projected score */}
                 {(() => {
-                  const breakdown = calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards);
+                  const breakdown = calculatePlayerProjectedScore(selectedCardForReplace, strategy, cards);
                   return (
                     <div className="space-y-1.5 pt-1">
                       <div className="flex items-center justify-between text-xs">
@@ -1476,8 +1519,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
                 {/* Projected score Delta */}
                 {(() => {
-                  const oldProj = playerToReplaceCard ? calculatePlayerProjectedScore(playerToReplaceCard, 'BALANCED', cards).projectedScore : 0;
-                  const newProj = calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards).projectedScore;
+                  const oldProj = playerToReplaceCard ? calculatePlayerProjectedScore(playerToReplaceCard, strategy, cards).projectedScore : 0;
+                  const newProj = calculatePlayerProjectedScore(selectedCardForReplace, strategy, cards).projectedScore;
                   const diff = Math.round((newProj - oldProj) * 10) / 10;
                   return (
                     <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-lg text-center">
@@ -1544,8 +1587,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
               {/* Composition Score Outlook */}
               {(() => {
-                const oldProj = playerToReplaceCard ? calculatePlayerProjectedScore(playerToReplaceCard, 'BALANCED', cards).projectedScore : 0;
-                const newProj = calculatePlayerProjectedScore(selectedCardForReplace, 'BALANCED', cards).projectedScore;
+                const oldProj = playerToReplaceCard ? calculatePlayerProjectedScore(playerToReplaceCard, strategy, cards).projectedScore : 0;
+                const newProj = calculatePlayerProjectedScore(selectedCardForReplace, strategy, cards).projectedScore;
                 const diff = Math.round((newProj - oldProj) * 10) / 10;
                 const currentCompo = compositions[selectedCompoIndexForReplace];
                 const currentCompoScore = currentCompo?.projectedTotalWithCaptain || currentCompo?.projectedTotal || 0;
