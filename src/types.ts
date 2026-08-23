@@ -24,7 +24,7 @@ export interface BookmakerOdds {
   homeTeamName?: string;
   awayTeamName?: string;
   source?: string;
-  sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+  sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker' | 'estimated_mirror';
   groundingUrls?: string[];
   topScorers?: Array<{ name: string; team: string; anytimeScorerOdds: number }>;
   topAssisters?: Array<{ name: string; team: string; anytimeAssistOdds: number }>;
@@ -253,6 +253,10 @@ export interface Lineup {
   scoringFocus?: ScoringFocus;
   gameWeek: number;
   isLocked?: boolean;
+  // AUDIT FIX (2.15): tracks whether this composition has unsaved manual edits (a swap made via
+  // handleSwapPlayerInSlot) that haven't been protected by locking. Used to warn the user before
+  // silently discarding those edits on the next filter/strategy-triggered regeneration.
+  isManuallyEdited?: boolean;
   slots: {
     gk: SorareCard | null;
     def: SorareCard | null;
