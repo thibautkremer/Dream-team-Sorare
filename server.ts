@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { MOCK_GALLERY } from './src/data/mockGallery';
-import { getClubUpcomingFixture, normalizeClubName, FIXTURES_CATALOG } from './src/data/fixturesData';
+import { getClubUpcomingFixture, normalizeClubName, FIXTURES_CATALOG, getCurrentGameWeekNumber } from './src/data/fixturesData';
 
 dotenv.config();
 
@@ -12,6 +12,25 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// --- Lightweight access guard for sensitive routes (admin dashboard + Gemini-costing AI routes) ---
+// Opt-in via APP_ACCESS_TOKEN env var: if unset, behaves exactly as before (no breaking change for
+// the current single-user deployment). If set, callers must send it as `x-app-token` header or
+// `?token=` query param. This is intentionally simple (shared secret, not full auth/sessions) but
+// closes the "wide open to the internet" exposure on the routes that cost real money (Gemini) or
+// leak cross-user debug data (admin logs / debug-raya).
+const APP_ACCESS_TOKEN = process.env.APP_ACCESS_TOKEN || '';
+function requireAppToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!APP_ACCESS_TOKEN) {
+    // No token configured -> guard is a no-op (keeps local/dev usage frictionless).
+    return next();
+  }
+  const provided = (req.headers['x-app-token'] as string) || (req.query.token as string) || '';
+  if (provided === APP_ACCESS_TOKEN) {
+    return next();
+  }
+  return res.status(401).json({ success: false, error: 'Unauthorized: missing or invalid access token.' });
+}
 
 export interface ApiLogEntry {
   id: string;
@@ -43,7 +62,42 @@ function addApiLog(entry: Omit<ApiLogEntry, 'id' | 'timestamp'>) {
 }
 
 // In-memory cache for user cards (slug -> { timestamp, cards, user })
-const userCardsCache = new Map<string, { timestamp: number; cards: any[]; user: any }>();
+// Bounded LRU cache: keeps memory usage predictable even if many distinct Sorare
+// accounts are looked up over the lifetime of the server process. Existing TTL logic
+// (15 min freshness check) still applies at each read site; this only bounds the
+// number of *distinct users* kept in memory at once (max 20, evicting the least
+// recently touched one first).
+class BoundedUserCardsCache extends Map<string, { timestamp: number; cards: any[]; user: any }> {
+  private readonly maxEntries: number;
+  constructor(maxEntries = 20) {
+    super();
+    this.maxEntries = maxEntries;
+  }
+  // Any read/write "touches" the entry so it becomes the most recently used one.
+  private touch(key: string) {
+    if (super.has(key)) {
+      const value = super.get(key)!;
+      super.delete(key);
+      super.set(key, value);
+    }
+  }
+  get(key: string) {
+    this.touch(key);
+    return super.get(key);
+  }
+  set(key: string, value: { timestamp: number; cards: any[]; user: any }) {
+    super.delete(key); // re-insert to push to the "most recent" end
+    super.set(key, value);
+    while (this.size > this.maxEntries) {
+      const oldestKey = this.keys().next().value;
+      if (oldestKey === undefined) break;
+      super.delete(oldestKey);
+    }
+    return this;
+  }
+}
+
+const userCardsCache = new BoundedUserCardsCache(20);
 
 // Lazy GoogleGenAI Initialization
 let aiClient: GoogleGenAI | null = null;
@@ -184,7 +238,7 @@ app.get('/api/match-odds/all', (req, res) => {
 });
 
 // Single match search via Gemini Search Grounding
-app.post('/api/match-odds/fetch-match', async (req, res) => {
+app.post('/api/match-odds/fetch-match', requireAppToken, async (req, res) => {
   const { homeTeam, awayTeam, players } = req.body;
   if (!homeTeam || !awayTeam) {
     return res.status(400).json({ error: 'homeTeam et awayTeam requis' });
@@ -225,7 +279,7 @@ app.post('/api/match-odds/fetch-match', async (req, res) => {
 });
 
 // Sync all distinct matches present in user cards via Gemini Search Grounding / Bookmaker Catalog
-app.post('/api/match-odds/sync-gemini', async (req, res) => {
+app.post('/api/match-odds/sync-gemini', requireAppToken, async (req, res) => {
   const { slug, cards: incomingCards } = req.body;
   const targetSlug = cleanSlug(slug || 'thib-8');
   
@@ -372,13 +426,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Admin Logs endpoints
-app.get('/api/admin/logs', (req, res) => {
+// Admin Logs endpoints (guarded: see requireAppToken above)
+app.get('/api/admin/logs', requireAppToken, (req, res) => {
   console.log('Received request for /api/admin/logs');
   res.json({ logs: apiLogs, total: apiLogs.length });
 });
 
-app.post('/api/admin/logs/clear', (req, res) => {
+app.post('/api/admin/logs/clear', requireAppToken, (req, res) => {
   apiLogs.length = 0;
   res.json({ success: true });
 });
@@ -1035,8 +1089,12 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
           activeGame = latestSo5Game || upcomingClubGame;
         }
 
-        const liveScore = liveSo5?.score != null ? Math.round(Number(liveSo5.score) * 10) / 10 : null;
-        const decisiveScore = liveSo5?.decisiveScore?.totalScore != null ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10 : null;
+        const liveScore = (liveSo5?.score != null && liveSo5?.game?.id === activeGame?.id)
+          ? Math.round(Number(liveSo5.score) * 10) / 10
+          : null;
+        const decisiveScore = (liveSo5?.decisiveScore?.totalScore != null && liveSo5?.game?.id === activeGame?.id)
+          ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10
+          : null;
 
         const scoreEntry = {
           cardId: node.id,
@@ -1293,8 +1351,21 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               activeGame = latestSo5Game || upcomingClubGame;
             }
 
-            const liveScore = liveSo5?.score != null ? Math.round(Number(liveSo5.score) * 10) / 10 : null;
-            const decisiveScore = liveSo5?.decisiveScore?.totalScore != null ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10 : null;
+            // COHERENCE FIX (audit): `liveSo5` falls back to `so5Scores[0]` (the player's most
+            // recently COMPLETED match, possibly from a past gameweek) whenever none of their
+            // last 3 SO5 scores are tagged as genuinely live/in_play/ht by Sorare — which is
+            // common, since SO5 scores are often only fully populated once a match is over. That
+            // stale score was previously shown as "Score en direct" even when it belonged to a
+            // different, older match than the one actually featured in the match badge
+            // (`activeGame`). We now only trust liveScore/decisiveScore when they genuinely
+            // belong to the same game as `activeGame` — otherwise we honestly show "no live score
+            // yet" (null) rather than a mismatched number from an old match.
+            const liveScore = (liveSo5?.score != null && liveSo5?.game?.id === activeGame?.id)
+              ? Math.round(Number(liveSo5.score) * 10) / 10
+              : null;
+            const decisiveScore = (liveSo5?.decisiveScore?.totalScore != null && liveSo5?.game?.id === activeGame?.id)
+              ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10
+              : null;
 
             const scoreEntry = {
               cardId: player.id,
@@ -1509,7 +1580,7 @@ app.get('/api/sorare/user-lineups', async (req, res) => {
 });
 
 // Helper for cleaning Sorare username slugs
-app.get('/api/admin/debug-raya', (req, res) => {
+app.get('/api/admin/debug-raya', requireAppToken, (req, res) => {
   const cards = Array.from(userCardsCache.values()).flatMap(c => c.cards);
   const raya = cards.find(c => c.displayName?.toLowerCase().includes('david raya') || c.slug === 'david-raya');
   if (raya) {
@@ -2223,7 +2294,9 @@ export interface RealMatchOddsEntry {
   topScorers?: Array<{ name: string; team: string; anytimeScorerOdds: number }>;
   topAssisters?: Array<{ name: string; team: string; anytimeAssistOdds: number }>;
   source: string;
-  sourceType: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+  // 'estimated_mirror' = fully computed locally from static fixture strength ratings, NOT sourced
+  // from any real bookmaker. It must never be confused with genuinely fetched data.
+  sourceType: 'gemini_search' | 'odds_api' | 'verified_bookmaker' | 'estimated_mirror';
   groundingUrls?: string[];
   updatedAt: string;
 }
@@ -2238,6 +2311,12 @@ function makeMatchKey(teamA: string, teamB: string): string {
 }
 
 // Initial Verified Live Bookmaker Seeds (Winamax, Betclic, Unibet, Oddschecker)
+// NOTE (audit fix): these 5 matches were manually captured from real bookmaker odds at
+// authoring time. They are NOT re-fetched live, so `updatedAt` must reflect the actual
+// capture date rather than "now" (which would falsely suggest the odds are freshly live
+// every time the server restarts). Refresh this constant + the odds below by hand whenever
+// this seed list is next updated, or better: replace it with a real scheduled sync.
+const SEED_CAPTURED_AT = '2026-08-19T00:00:00.000Z';
 const INITIAL_REAL_BOOKMAKER_MATCHES: RealMatchOddsEntry[] = [
   {
     matchKey: makeMatchKey('Olympique de Marseille', 'RC Strasbourg Alsace'),
@@ -2281,7 +2360,7 @@ const INITIAL_REAL_BOOKMAKER_MATCHES: RealMatchOddsEntry[] = [
     source: 'Winamax & Betclic Live (Cotes Officielles)',
     sourceType: 'verified_bookmaker',
     groundingUrls: ['https://www.winamax.fr', 'https://www.betclic.fr'],
-    updatedAt: new Date().toISOString(),
+    updatedAt: SEED_CAPTURED_AT, // static seed, NOT refreshed live (see comment above)
   },
   {
     matchKey: makeMatchKey('Paris Saint-Germain', 'Angers SCO'),
@@ -2322,7 +2401,7 @@ const INITIAL_REAL_BOOKMAKER_MATCHES: RealMatchOddsEntry[] = [
     source: 'Winamax & Unibet Live (Cotes Officielles)',
     sourceType: 'verified_bookmaker',
     groundingUrls: ['https://www.winamax.fr', 'https://www.unibet.fr'],
-    updatedAt: new Date().toISOString(),
+    updatedAt: SEED_CAPTURED_AT, // static seed, NOT refreshed live (see comment above)
   },
   {
     matchKey: makeMatchKey('Stade Rennais F.C.', 'Stade Brestois 29'),
@@ -2362,7 +2441,7 @@ const INITIAL_REAL_BOOKMAKER_MATCHES: RealMatchOddsEntry[] = [
     source: 'Betclic Live',
     sourceType: 'verified_bookmaker',
     groundingUrls: ['https://www.betclic.fr'],
-    updatedAt: new Date().toISOString(),
+    updatedAt: SEED_CAPTURED_AT, // static seed, NOT refreshed live (see comment above)
   },
   {
     matchKey: makeMatchKey('AS Monaco', 'RC Lens'),
@@ -2402,7 +2481,7 @@ const INITIAL_REAL_BOOKMAKER_MATCHES: RealMatchOddsEntry[] = [
     source: 'Winamax Live',
     sourceType: 'verified_bookmaker',
     groundingUrls: ['https://www.winamax.fr'],
-    updatedAt: new Date().toISOString(),
+    updatedAt: SEED_CAPTURED_AT, // static seed, NOT refreshed live (see comment above)
   },
   {
     matchKey: makeMatchKey('Real Madrid', 'Real Valladolid CF'),
@@ -2442,7 +2521,7 @@ const INITIAL_REAL_BOOKMAKER_MATCHES: RealMatchOddsEntry[] = [
     source: 'Oddschecker & Betclic Live',
     sourceType: 'verified_bookmaker',
     groundingUrls: ['https://www.oddschecker.com', 'https://www.betclic.fr'],
-    updatedAt: new Date().toISOString(),
+    updatedAt: SEED_CAPTURED_AT, // static seed, NOT refreshed live (see comment above)
   }
 ];
 
@@ -3242,9 +3321,12 @@ function generateSymmetricMatchOdds(homeTeam: string, awayTeam: string): RealMat
       homeFDR,
       awayFDR,
     },
-    source: 'Catalogue Officiel Fixtures SO5 (Miroir Mathématique)',
-    sourceType: 'verified_bookmaker',
-    groundingUrls: ['https://www.winamax.fr', 'https://www.betclic.fr'],
+    // Honest labeling: this entire entry is computed locally from static difficulty ratings,
+    // not from any real bookmaker feed. Do NOT claim 'verified_bookmaker' and do NOT fabricate
+    // grounding URLs pointing at real bookmaker sites (Winamax/Betclic never produced this data).
+    source: 'Estimation interne (miroir mathématique, aucune source bookmaker réelle)',
+    sourceType: 'estimated_mirror',
+    groundingUrls: undefined,
     updatedAt: new Date().toISOString(),
   };
 
@@ -3276,7 +3358,7 @@ function getResolvedMatchOdds(clubName: string, opponentName: string, isHome: bo
     homeTeamName?: string;
     awayTeamName?: string;
     source?: string;
-    sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+    sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker' | 'estimated_mirror';
     groundingUrls?: string[];
     topScorers?: any[];
     topAssisters?: any[];
@@ -3627,7 +3709,9 @@ app.get('/api/sorare/user-cards', async (req, res) => {
     const maxPages = 200; // 200 pages * 12 cards = 2400 cards max
 
     for (let page = 1; page <= maxPages; page++) {
-      console.log(`[Sorare Sync] Fetching page ${page}, headers:`, JSON.stringify(headers));
+      // Never log secret headers in clear text (Cloud Run logs are not a safe place for API keys).
+      const redactedHeaders = { ...headers, ...(headers.APIKEY ? { APIKEY: '***redacted***' } : {}) };
+      console.log(`[Sorare Sync] Fetching page ${page}, headers:`, JSON.stringify(redactedHeaders));
       const responseResult = await fetchGraphQLWithRetry(
         'https://api.sorare.com/graphql',
         { query, variables: { slug, after } },
@@ -3671,9 +3755,19 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       const hasNext = user.cards?.pageInfo?.hasNextPage;
       after = user.cards?.pageInfo?.endCursor;
 
+      // AUDIT FIX (4.2): estimatedTotalPages used to be a fixed guess (15 or 25) for the whole
+      // sync, so a gallery bigger than that guess would show a misleadingly-stuck ~100% progress
+      // bar while still fetching. We don't have a verified `totalCount` field to query safely
+      // (risking a GraphQL schema error), so instead we dynamically grow the estimate whenever
+      // we're about to exceed it and more pages are still coming — keeps the percentage honest
+      // without touching the query itself.
+      const baseEstimate = hasApiKey ? 15 : 25;
+      const prevEstimate = syncProgressMap.get(slug)?.estimatedTotalPages || baseEstimate;
+      const dynamicEstimate = (hasNext && page >= prevEstimate - 2) ? page + 5 : prevEstimate;
+
       syncProgressMap.set(slug, {
         fetchedPages: page,
-        estimatedTotalPages: hasApiKey ? 15 : 25,
+        estimatedTotalPages: dynamicEstimate,
         fetchedCards: allRawNodes.length,
         status: (hasNext && after) ? 'fetching' : 'processing'
       });
@@ -3683,8 +3777,10 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         break;
       }
 
-      // Small pacing delay between pages (150ms) to avoid triggering burst rate limits
-      await new Promise((r) => setTimeout(r, 150));
+      // Pacing delay between pages to avoid triggering burst rate limits (429).
+      // Sorare's public rate limit is stricter without a personal API key, so we pace more
+      // conservatively in that case (800ms) than with a key (150ms).
+      await new Promise((r) => setTimeout(r, hasApiKey ? 150 : 800));
     }
 
     if (allRawNodes.length > 0) {
@@ -3965,7 +4061,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
 
 
           fixture = {
-            gameWeek: 48,
+            gameWeek: getCurrentGameWeekNumber(),
             opponent: opponentName,
             isHome,
             difficultyRating: diffRating,
@@ -4287,7 +4383,7 @@ function compareServerCandidates(a: any, b: any): number {
 }
 
 // Deterministic SO5 Lineup Computation Helper (for fallback or server computation)
-function computeServerOptimalSO5(cards: any[], strategy: string = 'BALANCED', gameWeek: number = 48, filters: any = {}) {
+function computeServerOptimalSO5(cards: any[], strategy: string = 'BALANCED', gameWeek: number = getCurrentGameWeekNumber(), filters: any = {}) {
   // Score breakdown per card based on strategy and recent match participation
   const scored = cards.map((c: any) => {
     if (c.injuryStatus === 'INJURED' || c.injuryStatus === 'SUSPENDED' || c.status === 'NOT_PLAYING') {
@@ -4433,7 +4529,7 @@ function computeServerOptimalSO5(cards: any[], strategy: string = 'BALANCED', ga
 }
 
 // Fallback Tactical Assistant Chat Generator
-function generateFallbackChatAssistant(query: string, gallery: any[], gameWeek: number = 48): string {
+function generateFallbackChatAssistant(query: string, gallery: any[], gameWeek: number = getCurrentGameWeekNumber()): string {
   const q = (query || '').toLowerCase();
   const validCards = Array.isArray(gallery) ? gallery.filter((c: any) => c.status !== 'NOT_PLAYING') : [];
   
@@ -4485,11 +4581,11 @@ N'hésite pas si tu souhaites comparer deux joueurs en particulier ou ajuster le
 }
 
 // 3. AI Lineup Optimization (Gemini 3.1 Flash Lite) with Filter Constraints
-app.post('/api/ai/optimize-lineup', async (req, res) => {
+app.post('/api/ai/optimize-lineup', requireAppToken, async (req, res) => {
   const {
     cards,
     strategy = 'BALANCED',
-    gameWeek = 48,
+    gameWeek = getCurrentGameWeekNumber(),
     filters = {},
     customPreferences = '',
   } = req.body;
@@ -4498,12 +4594,21 @@ app.post('/api/ai/optimize-lineup', async (req, res) => {
     return res.status(400).json({ error: 'La liste de cartes est requise.' });
   }
 
+  // AUDIT FIX: neither `cards` (whole gallery, unbounded) nor `customPreferences` (free text) had
+  // any size cap before being folded into the Gemini prompt — an unauthenticated (or authenticated
+  // but malicious) caller could send an oversized payload to inflate cost. 1500 cards is generous
+  // for any real Sorare gallery; 500 chars is generous for a manager's stated preferences.
+  const MAX_CARDS_FOR_AI = 1500;
+  const MAX_PREFERENCES_CHARS = 500;
+  const boundedCards = cards.slice(0, MAX_CARDS_FOR_AI);
+  const boundedPreferences = typeof customPreferences === 'string' ? customPreferences.slice(0, MAX_PREFERENCES_CHARS) : '';
+
   try {
     const ai = getAI();
     const model = 'gemini-2.5-flash';
 
     // Apply active optimization filters to the player pool
-    let filteredCandidates = cards.filter((c: any) => {
+    let filteredCandidates = boundedCards.filter((c: any) => {
       // 1. Exclude injured / suspended / not playing
       if (c.injuryStatus === 'INJURED' || c.injuryStatus === 'SUSPENDED' || c.status === 'NOT_PLAYING') {
         return false;
@@ -4558,19 +4663,19 @@ app.post('/api/ai/optimize-lineup', async (req, res) => {
     const hasFwd = filteredCandidates.some((c: any) => c.positionCode === 'FWD');
 
     if (!hasGk) {
-      const bestGks = cards.filter((c: any) => c.positionCode === 'GK' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
+      const bestGks = boundedCards.filter((c: any) => c.positionCode === 'GK' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
       if (bestGks.length > 0) filteredCandidates.push(bestGks[0]);
     }
     if (!hasDef) {
-      const bestDefs = cards.filter((c: any) => c.positionCode === 'DEF' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
+      const bestDefs = boundedCards.filter((c: any) => c.positionCode === 'DEF' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
       if (bestDefs.length > 0) filteredCandidates.push(bestDefs[0]);
     }
     if (!hasMid) {
-      const bestMids = cards.filter((c: any) => c.positionCode === 'MID' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
+      const bestMids = boundedCards.filter((c: any) => c.positionCode === 'MID' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
       if (bestMids.length > 0) filteredCandidates.push(bestMids[0]);
     }
     if (!hasFwd) {
-      const bestFwds = cards.filter((c: any) => c.positionCode === 'FWD' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
+      const bestFwds = boundedCards.filter((c: any) => c.positionCode === 'FWD' && c.status !== 'NOT_PLAYING' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate)).sort((a: any, b: any) => (b.scores?.l5 || 0) - (a.scores?.l5 || 0));
       if (bestFwds.length > 0) filteredCandidates.push(bestFwds[0]);
     }
 
@@ -4646,7 +4751,7 @@ Rédige une analyse tactique percutante, professionnelle et justifiée en franç
     const prompt = `Voici les cartes disponibles du joueur Thib 8 pour la Game Week ${gameWeek} respectant les filtres :
 ${JSON.stringify(simplifiedRoster, null, 2)}
 ${constraintsText}
-Préférences manager : ${customPreferences || 'Optimiser pour le score SO5 le plus élevé possible en respectant les filtres.'}
+Préférences manager : ${boundedPreferences || 'Optimiser pour le score SO5 le plus élevé possible en respectant les filtres.'}
 
 Renvoie la composition optimale SO5 avec le capitaine, les justifications par poste, les forces, les risques, et les filtres respectés.`;
 
@@ -4738,7 +4843,7 @@ Renvoie la composition optimale SO5 avec le capitaine, les justifications par po
       
       for (const slotKey of slots) {
         const pId = parsed.recommendedLineup[slotKey];
-        const cardObj = cards.find((c: any) => c.id === pId);
+        const cardObj = boundedCards.find((c: any) => c.id === pId);
         if (cardObj && !isCardMatchOnOrBeforeDate(cardObj, filters.maxMatchDate)) {
           const expectedPos = slotPosMap[slotKey];
           const validReplacement = filteredCandidates.find((c: any) => {
@@ -4769,8 +4874,8 @@ Renvoie la composition optimale SO5 avec le capitaine, les justifications par po
 });
 
 // 4. AI Player Scout Report
-app.post('/api/ai/scout-player', async (req, res) => {
-  const { player, gameWeek = 48 } = req.body;
+app.post('/api/ai/scout-player', requireAppToken, async (req, res) => {
+  const { player, gameWeek = getCurrentGameWeekNumber() } = req.body;
   if (!player) {
     return res.status(400).json({ error: 'Données joueur manquantes.' });
   }
@@ -4856,13 +4961,25 @@ Rédige une fiche d'analyse avec :
 });
 
 // 5. AI Tactical Assistant Chat
-app.post('/api/ai/chat', async (req, res) => {
-  const { messages, gallery, gameWeek = 48 } = req.body;
+app.post('/api/ai/chat', requireAppToken, async (req, res) => {
+  const { messages, gallery, gameWeek = getCurrentGameWeekNumber() } = req.body;
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Messages array required.' });
   }
 
   const userLastMessage = messages[messages.length - 1]?.content || 'Quelle est la meilleure composition ?';
+
+  // Cap the conversation history sent to Gemini: keep only the most recent turns and clip
+  // very long individual messages, so an open-ended chat can't grow the prompt (and the bill)
+  // without bound. 20 messages / 2000 chars per message is generous for a tactical chat.
+  const MAX_HISTORY_MESSAGES = 20;
+  const MAX_MESSAGE_CHARS = 2000;
+  const boundedMessages = messages
+    .slice(-MAX_HISTORY_MESSAGES)
+    .map((m: any) => ({
+      role: m?.role,
+      content: typeof m?.content === 'string' ? m.content.slice(0, MAX_MESSAGE_CHARS) : '',
+    }));
 
   try {
     const ai = getAI();
@@ -4889,7 +5006,7 @@ Réponds de façon experte, concise, motivante et stratégique en français. Pro
 ${galleryContext}
 
 Historique de la conversation :
-${messages.map(m => `${m.role === 'user' ? 'Manager (Thib 8)' : 'Coach IA'}: ${m.content}`).join('\n')}
+${boundedMessages.map((m: any) => `${m.role === 'user' ? 'Manager (Thib 8)' : 'Coach IA'}: ${m.content}`).join('\n')}
 
 Dernière question du manager : "${userLastMessage}"`;
 
@@ -4966,21 +5083,42 @@ app.post('/api/sorare/export-lineup', async (req, res) => {
   const { token, lineup } = req.body;
   if (!token) return res.status(401).json({ success: false, error: 'OAuth token missing' });
 
-  // Simulation de la mutation GraphQL createOrUpdateLineup
+  // AUDIT FIX: this route has never actually talked to Sorare (no registered OAuth app, no real
+  // GraphQL mutation call) — it was previously returning `message: 'Lineup exported successfully
+  // to Sorare'`, which is false and could mislead a manager into thinking their team was really
+  // submitted. It now explicitly reports itself as a simulation. To make this real: implement
+  // Sorare's OAuth2 token exchange, then call the real `createOrUpdateLineup` mutation below.
   // const mutation = `mutation createOrUpdateLineup(...) { ... }`
   // await fetch('https://api.sorare.com/graphql', { headers: { 'Authorization': `Bearer ${token}` }})
-  
-  res.json({ success: true, message: 'Lineup exported successfully to Sorare' });
+
+  res.json({
+    success: true,
+    simulated: true,
+    message: 'Simulation locale uniquement — aucune donnée n\'a été envoyée à Sorare. Validez votre composition sur sorare.com.',
+  });
 });
 
 app.get('/api/sorare/gameweek', async (req, res) => {
+  // BUGFIX (audit): this endpoint used to unconditionally return a hardcoded `48`, with a comment
+  // admitting it was simulated. It now tries a real Sorare GraphQL query first (best case: the
+  // true live game week), and falls back to the locally-computed GAME_WEEK_ANCHOR-based number
+  // (see fixturesData.ts) if the query fails or the app has no Sorare API key configured — but it
+  // never silently freezes on a stale literal again.
+  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
   try {
-    // Dans une implémentation complète on interroge l'API Sorare (query { currentSo5GameWeek { number } })
-    // Pour la démo, on simule une requête et on retourne la GW dynamique
-    res.json({ success: true, gameWeek: 48 });
-  } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch gameweek' });
+    if (customApiKey) {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', APIKEY: customApiKey };
+      const query = `query { so5 { currentSo5OneWeekGameWeek { number } } }`;
+      const result = await fetchGraphQLWithRetry('https://api.sorare.com/graphql', { query }, headers, 1);
+      const liveNumber = result?.data?.data?.so5?.currentSo5OneWeekGameWeek?.number;
+      if (typeof liveNumber === 'number' && liveNumber > 0) {
+        return res.json({ success: true, gameWeek: liveNumber, source: 'sorare_live' });
+      }
+    }
+  } catch (err) {
+    console.warn('[GameWeek] Live Sorare query failed, using computed fallback:', (err as any)?.message || err);
   }
+  return res.json({ success: true, gameWeek: getCurrentGameWeekNumber(), source: 'computed_fallback' });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
