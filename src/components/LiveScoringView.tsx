@@ -98,43 +98,85 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
   const [liveScoresMap, setLiveScoresMap] = useState<Record<string, any>>({});
   const [liveSyncStatus, setLiveSyncStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [lastSorareSyncTime, setLastSorareSyncTime] = useState<Date | null>(null);
+  // AUDIT: exposed in the UI so coverage is verifiable at a glance (how many gallery players are
+  // actually being live-tracked right now vs just displayed statically).
+  const [lastLiveTrackedCount, setLastLiveTrackedCount] = useState(0);
 
-  const fetchSorareLiveScores = useCallback(async (slugsToFetch?: string[]) => {
-    setIsRefreshing(true);
-    setLiveSyncStatus('loading');
+  // AUDIT FIX (robustness pass): sending an unbounded number of slugs in a single GraphQL request
+  // risks a query-size/complexity failure or slow response, which would then silently return NO
+  // live data for anyone in that batch (the server's fallback only kicks in when the ENTIRE
+  // response is empty). We now split into fixed-size chunks and fetch them with limited
+  // concurrency, merging every chunk's results — so one oversized request can no longer take down
+  // live data for the whole gallery, and coverage scales safely with gallery size.
+  const CHUNK_SIZE = 100;
+  const MAX_CONCURRENT_CHUNKS = 3;
+
+  const fetchLiveScoresChunk = useCallback(async (chunk: string[]): Promise<Record<string, any> | null> => {
     try {
       const username = StorageService.getUsername() || 'thib-8';
       const apiKey = StorageService.getApiKey() || '';
-      
-      const payloadSlugs = slugsToFetch || [];
-      
-      let res;
-      if (payloadSlugs.length > 0) {
-        res = await fetch(`/api/sorare/live-scoring`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(apiKey ? { 'x-sorare-api-key': apiKey } : {})
-          },
-          body: JSON.stringify({ username, slugs: payloadSlugs })
-        });
-      } else {
-        // No active slugs aligned. Skip the request entirely to save API quota and rate limits.
-        setLiveSyncStatus('idle');
-        setIsRefreshing(false);
-        setLastRefreshed(new Date());
-        return;
+      const res = await fetch(`/api/sorare/live-scoring`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-sorare-api-key': apiKey } : {})
+        },
+        body: JSON.stringify({ username, slugs: chunk })
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data?.liveScores || null;
+    } catch (err) {
+      console.warn('[LiveScoringView] Erreur de récupération d\'un lot de joueurs:', err);
+      return null;
+    }
+  }, []);
+
+  const fetchSorareLiveScores = useCallback(async (slugsToFetch?: string[]) => {
+    const payloadSlugs = slugsToFetch || [];
+    setLastLiveTrackedCount(payloadSlugs.length);
+    if (payloadSlugs.length === 0) {
+      // No active slugs aligned. Skip the request entirely to save API quota and rate limits.
+      setLiveSyncStatus('idle');
+      setLastRefreshed(new Date());
+      return;
+    }
+
+    setIsRefreshing(true);
+    setLiveSyncStatus('loading');
+    try {
+      // Split into chunks and fetch with bounded concurrency (MAX_CONCURRENT_CHUNKS at a time),
+      // so a large gallery (hundreds of players with a match today) is fully covered without
+      // firing dozens of simultaneous requests at Sorare's API at once.
+      const chunks: string[][] = [];
+      for (let i = 0; i < payloadSlugs.length; i += CHUNK_SIZE) {
+        chunks.push(payloadSlugs.slice(i, i + CHUNK_SIZE));
       }
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data.liveScores) {
-          setLiveScoresMap(data.liveScores);
-          setLiveSyncStatus('success');
-          setLastSorareSyncTime(new Date());
-        } else {
-          setLiveSyncStatus('error');
+      const mergedScores: Record<string, any> = {};
+      let anyChunkSucceeded = false;
+
+      for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_CHUNKS) {
+        const batch = chunks.slice(i, i + MAX_CONCURRENT_CHUNKS);
+        const results = await Promise.all(batch.map(fetchLiveScoresChunk));
+        results.forEach(chunkResult => {
+          if (chunkResult) {
+            anyChunkSucceeded = true;
+            Object.assign(mergedScores, chunkResult);
+          }
+        });
+        // Small pacing pause between waves of concurrent batches, to stay well within Sorare's
+        // rate limits on large galleries that need many chunks (this only matters for very large
+        // galleries; most users will only ever need a single wave).
+        if (i + MAX_CONCURRENT_CHUNKS < chunks.length) {
+          await new Promise(r => setTimeout(r, 400));
         }
+      }
+
+      if (anyChunkSucceeded) {
+        setLiveScoresMap(mergedScores);
+        setLiveSyncStatus('success');
+        setLastSorareSyncTime(new Date());
       } else {
         setLiveSyncStatus('error');
       }
@@ -145,7 +187,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       setIsRefreshing(false);
       setLastRefreshed(new Date());
     }
-  }, []);
+  }, [fetchLiveScoresChunk]);
 
   // Safe lineups list (ensure at least current lineup exists)
   const activeCompositions: Lineup[] = useMemo(() => {
@@ -155,7 +197,8 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     return [lineup];
   }, [compositions, lineup]);
 
-  // Extract unique active player slugs
+  // Extract unique active player slugs (players aligned in any composition — always fetched,
+  // since they matter most to the manager).
   const activeSlugs = useMemo(() => {
     const slugSet = new Set<string>();
     activeCompositions.forEach(comp => {
@@ -168,17 +211,60 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     return Array.from(slugSet);
   }, [activeCompositions]);
 
-  // Fetch real live scores from Sorare GraphQL on component mount and refresh every 60s
+  // BUGFIX (audit): live data used to be fetched ONLY for players aligned in a composition
+  // (activeSlugs), even though this view defaults to showing the *entire* gallery
+  // ('all_gallery'). That meant most players displayed here never had any live match/score data
+  // at all — only a clock-based minute guess, with the actual score always blank. We now also
+  // include every gallery player whose fixture kick-off falls in a plausible "about to start /
+  // live / just finished" window, so real Sorare data is fetched for everyone who could
+  // plausibly be live right now — not just the players aligned in a composition, and not capped
+  // to an arbitrary small number either (requests are chunked+batched, see
+  // fetchSorareLiveScores above, so covering hundreds of players safely is fine). A generous
+  // hard ceiling (SAFETY_MAX_SLUGS) only exists to protect against a pathological edge case
+  // (e.g. a many-thousand-card gallery), not to silently truncate a normal one.
+  //
+  // BUGFIX #2: this was originally a `useMemo` keyed on `[cards]`, so `Date.now()` was captured
+  // once at mount and never re-evaluated — a player whose match kicks off later in the day would
+  // never enter the fetch list even after 5-minute refreshes. This is now a plain function
+  // recomputed at call time (on mount AND on every 5-minute tick), so "now" is always fresh.
+  const getLiveWindowSlugs = useCallback((): string[] => {
+    const nowMs = Date.now();
+    const WINDOW_BEFORE_MS = 60 * 60 * 1000; // include a match up to 60min before kickoff
+    const WINDOW_AFTER_MS = 130 * 60 * 1000; // ...and up to 130min after (covers 90min + stoppage + delay)
+    const SAFETY_MAX_SLUGS = 600;
+    const extra: string[] = [];
+    for (const card of cards) {
+      if (extra.length >= SAFETY_MAX_SLUGS) break;
+      const kickoff = card.upcomingFixture?.kickoffDate;
+      if (!kickoff || !card.slug) continue;
+      const kickoffMs = new Date(kickoff).getTime();
+      if (isNaN(kickoffMs)) continue;
+      if (nowMs >= kickoffMs - WINDOW_BEFORE_MS && nowMs <= kickoffMs + WINDOW_AFTER_MS) {
+        extra.push(card.slug);
+      }
+    }
+    return extra;
+  }, [cards]);
+
+  const getSlugsToFetchLive = useCallback((): string[] => {
+    return Array.from(new Set([...activeSlugs, ...getLiveWindowSlugs()]));
+  }, [activeSlugs, getLiveWindowSlugs]);
+
+  // Fetch real live scores from Sorare GraphQL on component mount and refresh every 5 minutes.
+  // (Was every 60s — throttled to 5 min per product decision to stay well within Sorare's rate
+  // limits given this now covers a much larger set of players than before.)
+  // Slugs are recomputed fresh on every call (see getSlugsToFetchLive/getLiveWindowSlugs above),
+  // so newly-kicking-off matches later in the day get picked up on the next 5-min tick.
   useEffect(() => {
-    fetchSorareLiveScores(activeSlugs);
+    fetchSorareLiveScores(getSlugsToFetchLive());
     const interval = setInterval(() => {
-      fetchSorareLiveScores(activeSlugs);
-    }, 60000);
+      fetchSorareLiveScores(getSlugsToFetchLive());
+    }, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [fetchSorareLiveScores, activeSlugs]);
+  }, [fetchSorareLiveScores, getSlugsToFetchLive]);
 
   const handleManualRefresh = () => {
-    fetchSorareLiveScores(activeSlugs);
+    fetchSorareLiveScores(getSlugsToFetchLive());
   };
 
   // Build a lookup map of player id -> array of { compoIndex, compoName, isCaptain, slot }
@@ -280,6 +366,14 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       let matchStatusLabel = 'À venir';
 
       const statusLower = (liveGame?.statusTyped || (fixture as any)?.status || '').toLowerCase();
+      // Real Sorare statuses observed: 'live', 'ht' (half-time), 'in_play' (older naming), 'finished'/'played'/'ft'.
+      const isRealLiveStatus = statusLower === 'live' || statusLower === 'in_play' || statusLower === 'ht';
+      const isRealFinishedStatus = statusLower === 'finished' || statusLower === 'played' || statusLower === 'ft';
+      // Only trust homeGoals/awayGoals as "real" once the match has actually started — a
+      // not-yet-started game legitimately reports 0-0 via the `?? 0` default server-side, which
+      // must not be displayed as if it were a real live score.
+      const hasRealScore = Boolean(liveGame) && (isRealLiveStatus || isRealFinishedStatus) &&
+        liveGame.homeGoals != null && liveGame.awayGoals != null;
 
       if (hasMatch && (liveGame || fixture)) {
         kickoffStr = liveGame?.date ? formatKickoffDate({ kickoffDate: liveGame.date }) : (fixture ? formatKickoffDate(fixture) : 'Prochainement');
@@ -287,18 +381,20 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
         const relLower = (fixture?.kickoffRelative || '').toLowerCase();
 
         // 1. Check real official live indicators from Sorare API or fixture status
-        if (statusLower === 'live' || statusLower === 'in_play' || statusLower === 'ht' || relLower.includes('en direct') || relLower.includes('en cours')) {
+        if (isRealLiveStatus || relLower.includes('en direct') || relLower.includes('en cours')) {
           matchStatusCategory = 'LIVE';
-          kickoffStr = '🔴 En direct';
-          matchStatusLabel = liveGame ? `🔴 En direct (API Sorare) • ${liveGame.homeTeam} ${liveGame.homeGoals}-${liveGame.awayGoals} ${liveGame.awayTeam}` : '🔴 En direct • Match en cours';
+          kickoffStr = hasRealScore ? `🔴 ${liveGame.homeGoals}-${liveGame.awayGoals}` : '🔴 En direct';
+          matchStatusLabel = hasRealScore ? `🔴 En direct (API Sorare) • ${liveGame.homeTeam} ${liveGame.homeGoals}-${liveGame.awayGoals} ${liveGame.awayTeam}` : '🔴 En direct • Match en cours';
         }
         // 2. Check real official finished indicators
-        else if (statusLower === 'finished' || statusLower === 'played' || statusLower === 'ft' || relLower.includes('terminé') || relLower.includes('hier')) {
+        else if (isRealFinishedStatus || relLower.includes('terminé') || relLower.includes('hier')) {
           matchStatusCategory = 'FINISHED';
-          kickoffStr = '🏁 Terminé';
-          matchStatusLabel = liveGame ? `🏁 Terminé (API Sorare) • ${liveGame.homeTeam} ${liveGame.homeGoals}-${liveGame.awayGoals} ${liveGame.awayTeam}` : '🏁 Match terminé';
+          kickoffStr = hasRealScore ? `🏁 ${liveGame.homeGoals}-${liveGame.awayGoals}` : '🏁 Terminé';
+          matchStatusLabel = hasRealScore ? `🏁 Terminé (API Sorare) • ${liveGame.homeTeam} ${liveGame.homeGoals}-${liveGame.awayGoals} ${liveGame.awayTeam}` : '🏁 Match terminé';
         }
         // 3. Dynamic match timing calculation based on real kickoff time vs current reference time
+        // (fallback only used when Sorare hasn't reported a recognized live/finished status yet —
+        // e.g. live data wasn't fetched for this player. Never fabricates a score in that case.)
         else if (!isNaN(kickoffMs)) {
           const diffMinutes = (refMs - kickoffMs) / (60 * 1000);
           if (diffMinutes >= -15 && diffMinutes <= 115) {
@@ -500,7 +596,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
             <div className="flex flex-wrap items-center gap-2 mb-1.5">
               <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
               <span className="text-xs font-black text-emerald-400 uppercase tracking-wider">
-                Calendrier Réel • Game Week {gameWeek || 48}
+                Calendrier Réel • Game Week {gameWeek}
               </span>
               <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
                 Données Officielles Sorare
@@ -516,6 +612,16 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
             </h2>
             <p className="text-xs text-slate-300 mt-1 max-w-2xl">
               Visualisez les <strong>vrais matchs programmés</strong> et suivez le <strong>score projeté SO5</strong> de tous vos joueurs alignés dans vos différentes équipes.
+            </p>
+            {/* AUDIT: honest coverage indicator — makes it obvious, at a glance, exactly how many
+                of the gallery's players currently have real live data being tracked (vs. just
+                being displayed with static/no live info because their match isn't near "now"). */}
+            <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
+              <Radio className="h-3 w-3 text-emerald-500" />
+              <span>
+                {lastLiveTrackedCount} joueur{lastLiveTrackedCount > 1 ? 's' : ''} suivi{lastLiveTrackedCount > 1 ? 's' : ''} en direct sur {cards.length} dans la galerie
+                {lastSorareSyncTime && ` • Dernière sync ${lastSorareSyncTime.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
+              </span>
             </p>
           </div>
 
@@ -794,7 +900,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
             <p className="text-base font-bold text-white">Aucun joueur ne correspond à vos filtres actuels</p>
             <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
               {matchStatusFilter.live && !matchStatusFilter.upcoming ? (
-                <>Aucun match n'est en cours actuellement. Les premiers matchs officiels de la GW{gameWeek || 48} debutent à partir de <strong>Vendredi 21 août</strong>.</>
+                <>Aucun match n'est en cours actuellement pour la GW{gameWeek}. Consultez l'onglet "À venir" pour voir les prochains coups d'envoi.</>
               ) : (
                 <>Modifiez vos filtres de statut, de championnat ou de position pour afficher vos joueurs.</>
               )}
@@ -894,13 +1000,21 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                           </span>
                         )}
 
-                        {/* Real Match Score Badge from Sorare API */}
-                        {sorareLive?.game && (sorareLive.game.statusTyped === 'in_play' || sorareLive.game.statusTyped === 'played' || sorareLive.game.statusTyped === 'finished' || sorareLive.game.statusTyped === 'ft') && (
+                        {/* Real Match Score Badge from Sorare API.
+                            BUGFIX (audit): this used to only render for statusTyped === 'in_play',
+                            but Sorare's real API returns 'live' (and 'ht' at half-time) — exactly
+                            the values already checked elsewhere in this file (see matchStatusLabel
+                            logic above). Because 'live'/'ht' were missing here, the score badge
+                            silently never appeared during an actual live match — only the
+                            clock-guessed minute counter did. Now covers the full real status set. */}
+                        {sorareLive?.game && ['live', 'in_play', 'ht', 'played', 'finished', 'ft'].includes((sorareLive.game.statusTyped || '').toLowerCase()) && (
                           <span className="text-[10px] font-black text-white bg-slate-950 border border-emerald-500/40 px-2 py-0.5 rounded flex items-center gap-1.5 ml-1">
-                            {sorareLive.game.statusTyped === 'in_play' && (
+                            {['live', 'in_play', 'ht'].includes((sorareLive.game.statusTyped || '').toLowerCase()) && (
                               <span className="animate-pulse text-red-500 flex items-center gap-0.5">
                                 <div className="h-1.5 w-1.5 rounded-full bg-red-500"></div>
-                                {sorareLive.game.minute ? `${sorareLive.game.minute}'` : 'Live'}
+                                {(sorareLive.game.statusTyped || '').toLowerCase() === 'ht'
+                                  ? 'MT'
+                                  : (sorareLive.game.minute ? `${sorareLive.game.minute}'` : 'Live')}
                               </span>
                             )}
                             {sorareLive.game.homeTeamPicture && (
