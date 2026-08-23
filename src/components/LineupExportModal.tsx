@@ -19,6 +19,7 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
 
   const slots = lineup.slots;
   const captainCard = slots[lineup.captainSlot];
+  const filledSlotsCount = (['gk', 'def', 'mid', 'fwd', 'extra'] as const).filter(k => !!slots[k]).length;
 
   // 1. Generate Official Sorare GraphQL Mutation
   const graphQLPayload = {
@@ -72,15 +73,22 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
     setTimeout(() => setCopiedType(null), 2500);
   };
 
-  const handleDirectSubmit = () => {
+  // AUDIT FIX: this flow is NOT a real Sorare OAuth integration — there is no registered Sorare
+  // OAuth app for this project, so this button cannot actually submit a lineup to Sorare. It used
+  // to open a fake OAuth popup and then silently claim "Soumis avec succès !" as if it had really
+  // worked, which risked a manager believing their team was locked in for the deadline when
+  // nothing was sent. It is now explicitly labeled as a local simulation and the popup / success
+  // state are clearly marked as such. To make this real, implement Sorare's actual OAuth2 flow
+  // (https://api.sorare.com/oauth/token) and wire it into /api/sorare/export-lineup server-side.
+  const handleSimulatedSubmit = () => {
     const width = 600;
     const height = 700;
     const left = window.innerWidth / 2 - width / 2;
     const top = window.innerHeight / 2 - height / 2;
-    // Mocking Sorare OAuth URL
+    // This popup does NOT talk to Sorare — it's a local demo page only.
     const oauthPopup = window.open(
       '/oauth/callback?code=mock-code',
-      'SorareAuth',
+      'SorareAuthDemo',
       `width=${width},height=${height},left=${left},top=${top}`
     );
 
@@ -122,7 +130,7 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
                 <span>Export & Soumission Sorare SO5</span>
                 <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-400">GW {gameWeek}</span>
               </h2>
-              <p className="text-xs text-slate-400">Exportez votre équipe optimisée ou soumettez-la en direct</p>
+              <p className="text-xs text-slate-400">Exportez votre équipe optimisée pour la valider sur Sorare</p>
             </div>
           </div>
 
@@ -132,6 +140,14 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
           >
             <X className="h-4 w-4" />
           </button>
+        </div>
+
+        {/* Honest disclaimer: the "submit" button below is a local simulation only */}
+        <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-950/20 p-3 flex items-start gap-2.5">
+          <Shield className="h-4 w-4 text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-200/90 leading-relaxed">
+            <span className="font-black text-amber-300">Important :</span> ce mode "Soumission" ne se connecte pas réellement à Sorare (aucune intégration OAuth Sorare officielle n'est branchée). Pour valider votre composition avant la deadline, utilisez le bouton "Ouvrir sorare.com" ci-dessous ou copiez le résumé/payload et alignez vos joueurs manuellement sur le site officiel.
+          </p>
         </div>
 
         {/* Selected Composition Summary */}
@@ -176,30 +192,53 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
         {/* Action Options */}
         <div className="mt-4 space-y-3">
           
-          {/* Option 1: Direct Sorare Submission button */}
+          {/* Option 1a: Real link to Sorare's own lineup page (the only way to actually submit today) */}
           <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-black text-emerald-300 flex items-center gap-1.5">
                 <Sparkles className="h-4 w-4 text-emerald-400" />
-                <span>Ouvrir l'Arène Sorare & Valider</span>
+                <span>Ouvrir sorare.com pour valider</span>
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Accédez directement au lobby officiel Sorare pour placer vos 5 joueurs en quelques secondes.
+                Ouvre le site officiel Sorare dans un nouvel onglet — copiez le résumé texte ci-dessous pour aligner rapidement vos 5 joueurs vous-même.
               </p>
             </div>
-            
+
+            <a
+              href="https://sorare.com/football/so5/my-team"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-black text-slate-950 shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 transition whitespace-nowrap"
+            >
+              <span>Ouvrir sorare.com</span>
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </div>
+
+          {/* Option 1b: Local simulation only — clearly labeled as such, no false success claim */}
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-black text-slate-300 flex items-center gap-1.5">
+                <Sparkles className="h-4 w-4 text-slate-400" />
+                <span>Simuler la soumission (démo, non connecté)</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Teste le flux d'interface uniquement — n'envoie rien à Sorare.
+              </p>
+            </div>
+
             <button
-              onClick={handleDirectSubmit}
+              onClick={handleSimulatedSubmit}
               disabled={isSubmitting || submitSuccess}
-              className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-black text-slate-950 shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 transition whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-4 py-2.5 text-xs font-black text-slate-200 hover:bg-slate-700 transition whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? (
-                <span>Connexion en cours...</span>
+                <span>Simulation en cours...</span>
               ) : submitSuccess ? (
-                <span>Soumis avec succès !</span>
+                <span>Simulation terminée (non envoyé à Sorare)</span>
               ) : (
                 <>
-                  <span>Soumettre via OAuth</span>
+                  <span>Lancer la simulation</span>
                   <ExternalLink className="h-3.5 w-3.5" />
                 </>
               )}
@@ -268,7 +307,7 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
         <div className="mt-5 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
           <div className="flex items-center gap-1.5 text-emerald-400">
             <CheckCircle2 className="h-4 w-4" />
-            <span>5/5 titulaires confirmés • 0 duel direct</span>
+            <span>{filledSlotsCount}/5 postes remplis dans cette composition</span>
           </div>
           <button
             onClick={onClose}
