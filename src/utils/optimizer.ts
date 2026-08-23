@@ -573,15 +573,21 @@ export function calculatePlayerProjectedScore(
         if (l15 > 45 || l40 > 45 || card.status === 'STARTER' || card.status === 'REGULAR') {
           // On restaure ses moyennes historiques réelles de club en ignorant l'absence récente en sélection
           l5 = l15 > 0 ? l15 : l40;
+          // COHERENCE FIX (audit): this used to fabricate `playedCountL5: 5` and
+          // `recentPlayingFactor: 1.0` — i.e. full certainty, as if the player had actually
+          // started all 5 recent club matches — even though there is ZERO real recent club match
+          // data here (we're falling back to L15/L40 historical averages precisely because none
+          // exists). That overstated confidence flatters the projection. Softened to reflect
+          // genuine uncertainty while still trusting the card's own STARTER/REGULAR status.
           recentStats = {
             playedLastMatch: true,
             lastMatchScore: l5,
             lastMatchLabel: 'Titulaire Club (Forme Rétrospective)',
-            playedCountL5: 5,
+            playedCountL5: 3,
             consecutiveDnpCount: 0,
-            recentPlayingFactor: 1.0,
+            recentPlayingFactor: 0.90,
           };
-          filterLabel = 'Données club rétrospectives (trêve nationale exclue)';
+          filterLabel = 'Données club rétrospectives (trêve nationale exclue, confiance réduite)';
         }
       } else {
         // Échéance NATIONALE mais pas de match de sélection dans l'historique récent
@@ -738,6 +744,10 @@ export function calculatePlayerProjectedScore(
     : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
 
   if (recentStats.playedLastMatch && wasSubInLastMatch) {
+    // BUGFIX (coherence audit): this label used to claim a -5% penalty but starterFactor was
+    // never actually multiplied by 0.95 — the score was flattered relative to what the system's
+    // own explanation told the user. Now genuinely applied.
+    starterFactor *= 0.95;
     starterImpactLabel += ' • Entré en jeu / Remplaçant (-5%)';
   }
 
@@ -777,12 +787,16 @@ export function calculatePlayerProjectedScore(
       case 1:
         matchupFactor = 1.12;
         matchupImpactLabel = 'Très Favorable (FDR 1 : +12%)';
-        allAroundFactor = (card.positionCode === 'MID') ? 1.05 : 1.0; // Boost possession pour MID
+        // Halved vs the original +5%/+3%: matchupFactor already captures this same
+        // difficultyRating-derived favorability, so applying the full boost again here would
+        // double-count the same signal for MID (same fix pattern already applied to
+        // cleanSheetFactor below, for consistency).
+        allAroundFactor = (card.positionCode === 'MID') ? 1.025 : 1.0; // Boost possession pour MID
         break;
       case 2:
         matchupFactor = 1.05;
         matchupImpactLabel = 'Favorable (FDR 2 : +5%)';
-        allAroundFactor = (card.positionCode === 'MID') ? 1.03 : 1.0;
+        allAroundFactor = (card.positionCode === 'MID') ? 1.015 : 1.0;
         break;
       case 3:
         matchupFactor = 1.00;
@@ -826,7 +840,17 @@ export function calculatePlayerProjectedScore(
   }
 
   let profileBonus = 0;
-  // --- NEW: Game State (O/U Proxy) ---
+  // --- Game State (O/U Proxy) ---
+  // COHERENCE FIX (audit): both the threshold bonus below and the xG-delta adjustment are
+  // derived from teamXG/oppXG, which are themselves either taken directly from bookmaker data
+  // OR (when unavailable) derived FROM the very same difficultyRating that already drives
+  // matchupFactor a few lines above. That means a big favorite could get rewarded for the same
+  // underlying "easy/high-scoring fixture" fact three times over: once multiplicatively via
+  // matchupFactor (+12% for FDR1), once via this threshold bonus, and once via the xG-delta term
+  // — compounding into unrealistically inflated projections for star players in good fixtures
+  // (traced example: a 66.8-pt weighted form could reach ~82.7 projected, +24%, largely from this
+  // redundancy). Halved here, consistent with the same "avoid double-counting" correction already
+  // applied to cleanSheetFactor and allAroundFactor elsewhere in this function.
   let gameStateBonus = 0;
   if (fixture) {
     const totalMatchXG = teamXG + oppXG;
@@ -834,24 +858,31 @@ export function calculatePlayerProjectedScore(
     let thresholdHigh = 2.8;
 
     if (totalMatchXG < thresholdLow) {
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 1.0;
-      if (card.positionCode === 'FWD') gameStateBonus -= 1.0;
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 0.5;
+      if (card.positionCode === 'FWD') gameStateBonus -= 0.5;
     } else if (totalMatchXG > thresholdHigh) {
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 0.5;
-      if (card.positionCode === 'FWD') gameStateBonus += 1.5;
+      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 0.25;
+      if (card.positionCode === 'FWD') gameStateBonus += 0.75;
     }
 
     if (card.positionCode === 'FWD' || card.positionCode === 'MID') {
-      const xGAdjustment = (teamXG - 1.4) * 1.0; 
+      const xGAdjustment = (teamXG - 1.4) * 0.5;
       gameStateBonus += xGAdjustment;
     }
   }
 
-  // --- NEW: Contextual Absents ---
+  // --- Contextual Absents ---
+  // BUGFIX: the previous condition `card.status === 'STARTER' && !isRegularStarter` could never
+  // be true, since isRegularStarter is defined as (status === 'REGULAR' || status === 'STARTER'),
+  // so status === 'STARTER' already guarantees isRegularStarter === true. This branch was dead
+  // code and the "Remplace un titulaire absent" bonus never fired.
+  // Fix: use `starterConfidence` (derived from actual recent playing time, see server.ts) as the
+  // real signal for "listed as a starter for this fixture, but hasn't consistently started
+  // recently" — i.e. likely stepping in for an injured/rotated regular.
   const isRegularStarter = card.status === 'REGULAR' || card.status === 'STARTER';
   let contextualBonus = 0;
   let contextualImpactLabel = '';
-  if (card.status === 'STARTER' && !isRegularStarter) {
+  if (card.status === 'STARTER' && (card.starterConfidence ?? 100) < 60) {
     contextualBonus += 2.0;
     contextualImpactLabel = 'Remplace un titulaire absent (+2pts)';
   } else if (isRegularStarter && card.scores && card.scores.l5 < 35 && card.scores.l15 > 50) {
@@ -1365,33 +1396,45 @@ export function optimizeLineup(
     const stacks = getLineupClubStacks(tempSlots);
     const totalStackedPlayers = stacks.reduce((sum, s) => sum + s.count, 0);
 
+    // PERF FIX: calculatePlayerProjectedScore is deterministic and pure, but was being called
+    // TWICE per slot (once for .projectedScore, once for .projectedCeiling) with identical
+    // arguments — pure wasted computation, doubled again by the up-to-3 gkRootsToTry iterations
+    // and the 4x generateFourDistinctLineups calls. Call it once per player and reuse the result.
+    const gkBreakdown = rootGk ? calculatePlayerProjectedScore(rootGk, strategy, cards, clubContext, focus) : null;
+    const defBreakdown = selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext, focus) : null;
+    const midBreakdown = selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext, focus) : null;
+    const fwdBreakdown = selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext, focus) : null;
+    const extraBreakdown = selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext, focus) : null;
+
     const teamPlayers: { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; player: SorareCard | null; score: number; ceiling: number }[] = [
       {
         slot: 'gk', player: rootGk,
-        score: rootGk ? calculatePlayerProjectedScore(rootGk, strategy, cards, clubContext, focus).projectedScore : 0,
-        ceiling: rootGk ? calculatePlayerProjectedScore(rootGk, strategy, cards, clubContext, focus).projectedCeiling : 0
+        score: gkBreakdown?.projectedScore || 0,
+        ceiling: gkBreakdown?.projectedCeiling || 0
       },
       {
         slot: 'def', player: selectedDef,
-        score: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext, focus).projectedScore : 0,
-        ceiling: selectedDef ? calculatePlayerProjectedScore(selectedDef, strategy, cards, clubContext, focus).projectedCeiling : 0
+        score: defBreakdown?.projectedScore || 0,
+        ceiling: defBreakdown?.projectedCeiling || 0
       },
       {
         slot: 'mid', player: selectedMid,
-        score: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext, focus).projectedScore : 0,
-        ceiling: selectedMid ? calculatePlayerProjectedScore(selectedMid, strategy, cards, clubContext, focus).projectedCeiling : 0
+        score: midBreakdown?.projectedScore || 0,
+        ceiling: midBreakdown?.projectedCeiling || 0
       },
       {
         slot: 'fwd', player: selectedFwd,
-        score: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext, focus).projectedScore : 0,
-        ceiling: selectedFwd ? calculatePlayerProjectedScore(selectedFwd, strategy, cards, clubContext, focus).projectedCeiling : 0
+        score: fwdBreakdown?.projectedScore || 0,
+        ceiling: fwdBreakdown?.projectedCeiling || 0
       },
       {
         slot: 'extra', player: selectedExtra,
-        score: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext, focus).projectedScore : 0,
-        ceiling: selectedExtra ? calculatePlayerProjectedScore(selectedExtra, strategy, cards, clubContext, focus).projectedCeiling : 0
+        score: extraBreakdown?.projectedScore || 0,
+        ceiling: extraBreakdown?.projectedCeiling || 0
       },
     ];
+
+
 
     const sortedForCaptain = [...teamPlayers]
       .filter(p => p.player !== null)
@@ -1490,7 +1533,9 @@ export function optimizeLineup(
         }
         return rList;
       })(),
-      captainReasoning: `${captainName} présente le meilleur score projeté (${captainObj?.score} pts) de l'équipe.`,
+      captainReasoning: (strategy === 'HIGH_CEILING' || focus === 'DS')
+        ? `${captainName} présente le meilleur plafond de points (${captainObj?.ceiling} pts, stratégie Plafond Haut) de l'équipe.`
+        : `${captainName} présente le meilleur score projeté (${captainObj?.score} pts) de l'équipe.`,
       cleanSheetOutlook: selectedGk?.upcomingFixture ? `${selectedGk.upcomingFixture.bookmaker?.cleanSheetProb || 45}% de clean sheet pour ${selectedGk.displayName}` : 'Favorable',
       tacticalPerPosition: {
         gk: selectedGk ? `${selectedGk.displayName} - Face à ${selectedGk.upcomingFixture?.opponent}.` : 'Non défini',
