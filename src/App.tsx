@@ -21,6 +21,10 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState<'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin'>('pitch');
   const [username, setUsernameState] = useState<string>(StorageService.getUsername());
   const [cards, setCards] = useState<SorareCard[]>([]);
+  // AUDIT FIX: true until the initial IndexedDB hydration (getCardsAsync) resolves, so the UI can
+  // show a proper loading skeleton instead of briefly flashing a misleading "no cards match your
+  // filters" empty-state message while the real (untruncated) gallery is still loading.
+  const [isLoadingCards, setIsLoadingCards] = useState(true);
   const [exportLineupTarget, setExportLineupTarget] = useState<Lineup | null>(null);
   const [degradedModeInfo, setDegradedModeInfo] = useState<{ isDegraded: boolean; reason?: string } | null>(null);
   const [gameWeek, setGameWeek] = useState(48); // Fallback to 48 initially
@@ -87,6 +91,22 @@ export default function App() {
           setSelectedCompoIndex(0);
           return fourCompos;
         }
+        // AUDIT FIX (2.15): previously, a manual edit (player swap) on a composition that wasn't
+        // locked was silently discarded the moment a filter/strategy change regenerated the 4
+        // compos, with no warning. We now detect this case (isManuallyEdited && !isLocked) and
+        // surface a toast before the edit is overwritten, so the user understands why their
+        // change disappeared instead of just being surprised.
+        const overwrittenEditedNames = prevComps
+          .filter(c => c && c.isManuallyEdited && !c.isLocked)
+          .map(c => c.name);
+        if (overwrittenEditedNames.length > 0) {
+          setTimeout(() => {
+            showToast(
+              `Modification manuelle non verrouillée annulée sur ${overwrittenEditedNames.join(', ')} (verrouillez 🔒 une compo pour protéger vos changements).`,
+              'info'
+            );
+          }, 0);
+        }
         const merged = fourCompos.map((newCompo, idx) => {
           const existing = prevComps[idx];
           if (existing && existing.isLocked) {
@@ -97,6 +117,7 @@ export default function App() {
             id: existing?.id || newCompo.id,
             name: existing?.name || newCompo.name,
             isLocked: existing?.isLocked || false,
+            isManuallyEdited: false,
           };
         });
         setLineup(merged[selectedCompoIndex] || merged[0]);
@@ -189,6 +210,7 @@ export default function App() {
     const initCards = async () => {
       const loadedCards = await StorageService.getCardsAsync();
       setCards(loadedCards);
+      setIsLoadingCards(false);
       
       // Generate optimal initial lineup
       if (loadedCards.length > 0) {
@@ -549,10 +571,17 @@ export default function App() {
     }
   };
 
-  // Slot swap handler
-  const handleSwapPlayerInSlot = (player: SorareCard) => {
-    if (!slotToSwap) return;
-    if (isPlayerAlreadyInLineup(lineup, player, slotToSwap)) {
+  // Slot swap handler.
+  // `targetSlot` is optional and defaults to the `slotToSwap` state (used by SlotSwapModal,
+  // which is only ever opened after a slot was already selected on a previous render).
+  // When called with an explicit `targetSlot` (see handleAssignToSlot below), we no longer
+  // depend on `slotToSwap` having been updated first — this fixes a stale-closure bug where
+  // `setSlotToSwap(slot)` followed synchronously by `handleSwapPlayerInSlot(card)` would still
+  // read the OLD `slotToSwap` value (often `null`), silently doing nothing.
+  const handleSwapPlayerInSlot = (player: SorareCard, targetSlot?: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => {
+    const resolvedSlot = targetSlot ?? slotToSwap;
+    if (!resolvedSlot) return;
+    if (isPlayerAlreadyInLineup(lineup, player, resolvedSlot)) {
       showToast("Ce joueur est déjà aligné dans cette composition sur un autre poste !", "error");
       return;
     }
@@ -562,7 +591,7 @@ export default function App() {
     setLineup(prev => {
       const updatedSlots = {
         ...prev.slots,
-        [slotToSwap]: player,
+        [resolvedSlot]: player,
       };
 
       const baseSum = (
@@ -593,14 +622,19 @@ export default function App() {
         setCompositions(comps => {
           const copy = [...comps];
           if (copy[selectedCompoIndex]) {
-            copy[selectedCompoIndex] = updatedLineup!;
+            // Mark as manually edited (unless already locked, in which case it's protected
+            // anyway) so the regeneration effect below can warn before discarding this edit.
+            copy[selectedCompoIndex] = {
+              ...updatedLineup!,
+              isManuallyEdited: !copy[selectedCompoIndex].isLocked,
+            };
           }
           return copy;
         });
       }
     }, 0);
 
-    showToast(`${player.displayName} assigné au poste ${slotToSwap.toUpperCase()}`);
+    showToast(`${player.displayName} assigné au poste ${resolvedSlot.toUpperCase()}`);
     setSlotToSwap(null);
   };
 
@@ -612,10 +646,11 @@ export default function App() {
     showToast(`Carte de ${newCard.displayName} ajoutée à la galerie !`);
   };
 
-  // Direct assign to slot from gallery or scout
+  // Direct assign to slot from gallery or scout.
+  // Pass `slot` explicitly to handleSwapPlayerInSlot instead of relying on `setSlotToSwap` +
+  // reading the state back synchronously (which was always stale — see fix above).
   const handleAssignToSlot = (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => {
-    setSlotToSwap(slot);
-    handleSwapPlayerInSlot(card);
+    handleSwapPlayerInSlot(card, slot);
     setCurrentTab('pitch');
   };
 
@@ -890,6 +925,8 @@ export default function App() {
         {currentTab === 'gallery' && (
           <GalleryPage
             cards={cards}
+            strategy={strategy}
+            isLoadingCards={isLoadingCards}
             onOpenScout={(c) => setScoutCard(c)}
             onAssignToSlot={handleAssignToSlot}
             onAddCard={handleAddCard}
