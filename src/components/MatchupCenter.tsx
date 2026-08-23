@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink } from 'lucide-react';
+import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink, AlertTriangle } from 'lucide-react';
 import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 import { getCardTotalBonus } from '../utils/sorareSlug';
@@ -47,10 +47,11 @@ interface FixtureAggregate {
   anytimeScorerOdds?: number;
   anytimeAssistOdds?: number;
   source?: string;
-  sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+  sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker' | 'estimated_mirror';
   groundingUrls?: string[];
   topScorers?: Array<{ name: string; anytimeScorerOdds?: number; team?: string }>;
   topAssisters?: Array<{ name: string; anytimeAssistOdds?: number; team?: string }>;
+  hasVerifiedData?: boolean;
   players: SorareCard[];
 }
 
@@ -145,7 +146,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     homeFDR: number;
     awayFDR: number;
     source?: string;
-    sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker';
+    sourceType?: 'gemini_search' | 'odds_api' | 'verified_bookmaker' | 'estimated_mirror';
     groundingUrls?: string[];
     topScorers?: any[];
     topAssisters?: any[];
@@ -164,7 +165,10 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
       const matchKey = `${normalizeClubName(homeTeam).toLowerCase()}_vs_${normalizeClubName(awayTeam).toLowerCase()}`;
 
       const bm = card.upcomingFixture.bookmaker;
-      const hasVerified = Boolean(bm && (bm.sourceType === 'verified_bookmaker' || bm.sourceType === 'gemini_search' || bm.homeWinOdds));
+      // Only genuinely-sourced data counts as "verified". 'estimated_mirror' (our own local
+      // formula fallback) and the mere presence of homeWinOdds (set even for estimates) must
+      // NOT be treated as verified, or estimated odds silently masquerade as real ones.
+      const hasVerified = Boolean(bm && (bm.sourceType === 'verified_bookmaker' || bm.sourceType === 'gemini_search' || bm.sourceType === 'odds_api'));
 
       // Home & Away odds from bookmaker
       const homeWinOdds = bm?.homeWinOdds || (isHome ? (bm?.win || 2.20) : (bm?.loss || 2.20));
@@ -218,8 +222,8 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           awayXG,
           homeFDR,
           awayFDR,
-          source: bm?.source || 'Winamax & Betclic Live (Cotes Officielles)',
-          sourceType: bm?.sourceType || 'verified_bookmaker',
+          source: bm?.source || 'Estimation interne (aucune source bookmaker réelle)',
+          sourceType: bm?.sourceType || 'estimated_mirror',
           groundingUrls: bm?.groundingUrls,
           topScorers: bm?.topScorers,
           topAssisters: bm?.topAssisters,
@@ -308,9 +312,16 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           anytimeAssistOdds: bm?.anytimeAssistOdds,
           topScorers: canonical?.topScorers || bm?.topScorers,
           topAssisters: canonical?.topAssisters || bm?.topAssisters,
-          source: canonical?.source || bm?.source || 'Winamax & Betclic Live (Cotes Officielles)',
-          sourceType: canonical?.sourceType || bm?.sourceType || 'verified_bookmaker',
+          // AUDIT FIX: this fallback used to unconditionally claim 'Winamax & Betclic Live (Cotes
+          // Officielles)' even when no real bookmaker data exists at all (sourceType already
+          // correctly defaults to 'estimated_mirror' just below — this human-readable string must
+          // match that honesty).
+          source: canonical?.source || bm?.source || 'Estimation interne (aucune source bookmaker réelle)',
+          sourceType: canonical?.sourceType || bm?.sourceType || 'estimated_mirror',
           groundingUrls: canonical?.groundingUrls || bm?.groundingUrls,
+          // Carried through so the UI can render an honest "Estimation" vs "Vérifié" badge
+          // instead of always showing the same green "verified" checkmark regardless of source.
+          hasVerifiedData: canonical?.hasVerifiedData ?? Boolean(bm && (bm.sourceType === 'verified_bookmaker' || bm.sourceType === 'gemini_search' || bm.sourceType === 'odds_api')),
           players: [card],
         });
       } else {
@@ -741,20 +752,36 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                         )}
                       </span>
 
-                      {/* Open-Meteo Weather Badge */}
+                      {/* Open-Meteo Weather Badge.
+                          AUDIT FIX (2.16): server already correctly tags the fallback as
+                          `source: 'Estimation Météo'` when both Open-Meteo calls fail, but this
+                          tooltip used to unconditionally claim "données météo réelles" regardless
+                          — now it actually reads wInfo.source. */}
                       {wInfo && (
-                        <span className="text-[10px] text-sky-300 font-bold flex items-center gap-1 bg-sky-950/80 px-2 py-0.5 rounded-md border border-sky-800/80" title={`Données météo réelles Open-Meteo pour ${wInfo.city}`}>
-                          <CloudSun className="h-3 w-3 text-sky-400" />
-                          <span>{wInfo.temp}°C • {wInfo.description}</span>
+                        <span
+                          className={`text-[10px] font-bold flex items-center gap-1 px-2 py-0.5 rounded-md border ${wInfo.source === 'Open-Meteo Live API' ? 'text-sky-300 bg-sky-950/80 border-sky-800/80' : 'text-amber-300 bg-amber-950/60 border-amber-500/30'}`}
+                          title={wInfo.source === 'Open-Meteo Live API' ? `Données météo réelles Open-Meteo pour ${wInfo.city}` : `Estimation (Open-Meteo indisponible pour ${wInfo.city})`}
+                        >
+                          <CloudSun className={`h-3 w-3 ${wInfo.source === 'Open-Meteo Live API' ? 'text-sky-400' : 'text-amber-400'}`} />
+                          <span>{wInfo.source !== 'Open-Meteo Live API' && 'Est. • '}{wInfo.temp}°C • {wInfo.description}</span>
                         </span>
                       )}
 
-                      {/* Source badge */}
+                      {/* Source badge — AUDIT FIX: used to always render the same green
+                          "verified" checkmark regardless of whether the data was real or a
+                          locally-computed estimate. Now reflects `hasVerifiedData` honestly. */}
                       {fixture.source && (
-                        <span className="text-[10px] text-emerald-300 font-bold flex items-center gap-1 bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-500/30">
-                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                          <span>{fixture.source}</span>
-                        </span>
+                        fixture.hasVerifiedData ? (
+                          <span className="text-[10px] text-emerald-300 font-bold flex items-center gap-1 bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-500/30" title="Donnée issue d'une source bookmaker réelle">
+                            <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                            <span>{fixture.source}</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-amber-300 font-bold flex items-center gap-1 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/30" title="Estimation calculée localement, non issue d'un bookmaker réel">
+                            <AlertTriangle className="h-3 w-3 text-amber-400" />
+                            <span>Estimation • {fixture.source}</span>
+                          </span>
+                        )
                       )}
                     </div>
 
