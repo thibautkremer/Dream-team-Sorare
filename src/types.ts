@@ -371,6 +371,8 @@ export interface MatchPerformanceDetail {
   penaltiesMissed?: number;
   penaltiesSaved?: number;
   wasFouled?: number;
+  isLive?: boolean;
+  minute?: number;
 }
 
 export interface UserGalleryState {

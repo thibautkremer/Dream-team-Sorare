@@ -66,6 +66,8 @@ export interface PlayerRecentMatchStats {
   playedCountL5: number;
   consecutiveDnpCount: number;
   recentPlayingFactor: number;
+  isLive?: boolean;
+  liveMinute?: number;
 }
 
 /**
@@ -76,12 +78,41 @@ export function getPlayerUniqueKey(card: SorareCard): string {
 }
 
 /**
- * Analyse la participation aux derniers matchs pour détecter les joueurs écartés ou remplaçants
+ * Analyse la participation aux derniers matchs pour détecter les joueurs écartés ou remplaçants.
+ * RÈGLE FONDAMENTALE : Le match le plus récent M1 (qu'il soit en direct, tout juste terminé ou enregistré)
+ * doit impérativement afficher le score actuel et conditionner la détection de titularisation.
  */
 export function getPlayerRecentMatchAnalysis(card: SorareCard): PlayerRecentMatchStats {
+  const recentMatches = card.scores?.recentMatches || [];
   const last5 = card.scores?.last5Scores || [];
-  
-  if (!last5 || last5.length === 0) {
+
+  // 1. Détection prioritaire du score M1 (match le plus récent ou en direct)
+  let lastMatchScore: number | undefined = undefined;
+  let isLive = false;
+  let liveMinute: number | undefined = undefined;
+
+  // A. Score live direct attaché à la carte
+  if (typeof (card as any).liveScore === 'number') {
+    lastMatchScore = (card as any).liveScore;
+    isLive = (card as any).isLive ?? true;
+    liveMinute = (card as any).liveMinute;
+  }
+  // B. Premier élément de recentMatches (M1 = index 0)
+  else if (recentMatches.length > 0 && typeof recentMatches[0]?.score === 'number' && recentMatches[0].opponent !== 'Match Futur/Passé') {
+    lastMatchScore = recentMatches[0].score;
+    isLive = (recentMatches[0] as any).isLive ?? false;
+    liveMinute = (recentMatches[0] as any).minute;
+  }
+  // C. Tableau last5Scores (index 0 est le plus récent M1, sinon dernier élément en repli)
+  else if (last5 && last5.length > 0) {
+    if (typeof last5[0] === 'number') {
+      lastMatchScore = last5[0];
+    } else if (typeof last5[last5.length - 1] === 'number') {
+      lastMatchScore = last5[last5.length - 1];
+    }
+  }
+
+  if (lastMatchScore === undefined) {
     const isStarter = card.status === 'STARTER';
     const isRegular = card.status === 'REGULAR';
     return {
@@ -91,28 +122,31 @@ export function getPlayerRecentMatchAnalysis(card: SorareCard): PlayerRecentMatc
       playedCountL5: isStarter ? 5 : isRegular ? 3 : 1,
       consecutiveDnpCount: 0,
       recentPlayingFactor: isStarter ? 1.0 : isRegular ? 0.90 : 0.40,
+      isLive: false,
     };
   }
 
-  // Le match le plus récent est le dernier élément du tableau last5Scores
-  const lastMatchScore = last5[last5.length - 1];
   const playedLastMatch = typeof lastMatchScore === 'number' && lastMatchScore > 0;
-  const playedCountL5 = last5.filter(s => s > 0).length;
+  const playedCountL5 = last5.length > 0 ? last5.filter(s => s > 0).length : (playedLastMatch ? 1 : 0);
 
-  // Calcul du nombre de DNP (non-joués / 0 min) consécutifs récents en partant de la fin
+  // Calcul du nombre de DNP consécutifs récents
   let consecutiveDnpCount = 0;
-  for (let i = last5.length - 1; i >= 0; i--) {
-    if (last5[i] <= 0) {
-      consecutiveDnpCount++;
-    } else {
-      break;
+  if (last5.length > 0) {
+    for (let i = 0; i < last5.length; i++) {
+      if (last5[i] <= 0) {
+        consecutiveDnpCount++;
+      } else {
+        break;
+      }
     }
+  } else if (!playedLastMatch) {
+    consecutiveDnpCount = 1;
   }
 
   // Facteur d'impact sur la titularisation et probabilité de jeu
   let recentPlayingFactor = 1.0;
 
-  if (playedCountL5 === 0) {
+  if (playedCountL5 === 0 && !playedLastMatch) {
     // 0 match joué sur les 5 derniers : joueur complètement hors de rotation
     recentPlayingFactor = 0.05;
   } else if (consecutiveDnpCount >= 3) {
@@ -126,12 +160,11 @@ export function getPlayerRecentMatchAnalysis(card: SorareCard): PlayerRecentMatc
     recentPlayingFactor = 0.65; // -35%
   } else {
     // A joué le dernier match (score > 0)
-    // Pas de sur-bonification si 4 ou 5 matchs joués (facteur neutre 1.0)
     recentPlayingFactor = 1.0;
   }
 
   // Malus si le joueur a joué mais était remplaçant (-5%)
-  const recentMatchDetail = card.scores?.recentMatches?.[0];
+  const recentMatchDetail = recentMatches[0];
   const wasSubInLastMatch = recentMatchDetail 
     ? (recentMatchDetail.isSub === true || recentMatchDetail.baseScore === 25 || (recentMatchDetail.minsPlayed != null && recentMatchDetail.minsPlayed > 0 && recentMatchDetail.minsPlayed < 60))
     : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
@@ -140,13 +173,20 @@ export function getPlayerRecentMatchAnalysis(card: SorareCard): PlayerRecentMatc
     recentPlayingFactor *= 0.95; // Malus remplaçant (-5%)
   }
 
+  const roundedScore = Math.round(lastMatchScore * 10) / 10;
+  const lastMatchLabel = isLive 
+    ? `En direct (${roundedScore} pts)` 
+    : (playedLastMatch ? `Dernier match joué (${roundedScore} pts)` : 'DNP dernier match (0 min)');
+
   return {
     playedLastMatch,
-    lastMatchScore: typeof lastMatchScore === 'number' ? lastMatchScore : 0,
-    lastMatchLabel: playedLastMatch ? `Dernier match joué (${lastMatchScore} pts)` : 'DNP dernier match (0 min)',
+    lastMatchScore: roundedScore,
+    lastMatchLabel,
     playedCountL5,
     consecutiveDnpCount,
     recentPlayingFactor,
+    isLive,
+    liveMinute,
   };
 }
 
@@ -1777,42 +1817,47 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
     const targetIdx = k;
     let scoreVal = -1;
 
-    const mObj = recentMatches && recentMatches[k];
-    const isDummyPlaceholder = mObj && mObj.opponent === 'Match Futur/Passé';
-
-    if (mObj && typeof mObj.score === 'number' && !isDummyPlaceholder) {
-      scoreVal = mObj.score;
+    // Pour M1 (index 0), vérifier prioritairement si un score live est disponible
+    if (k === 0 && typeof (card as any).liveScore === 'number') {
+      scoreVal = (card as any).liveScore;
     } else {
-      // Check last5, last10, last15, last40 arrays ONLY if they have explicit non-zero scores at index k
-      let candidateScore = -1;
+      const mObj = recentMatches && recentMatches[k];
+      const isDummyPlaceholder = mObj && mObj.opponent === 'Match Futur/Passé';
 
-      if (last5 && k < last5.length) {
-        const val1 = last5[k];
-        const val2 = last5[last5.length - 1 - k];
-        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
-        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
-      }
-      if (candidateScore <= 0 && last10 && k < last10.length) {
-        const val1 = last10[k];
-        const val2 = last10[last10.length - 1 - k];
-        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
-        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
-      }
-      if (candidateScore <= 0 && last15 && k < last15.length) {
-        const val1 = last15[k];
-        const val2 = last15[last15.length - 1 - k];
-        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
-        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
-      }
-      if (candidateScore <= 0 && last40 && k < last40.length) {
-        const val1 = last40[k];
-        const val2 = last40[last40.length - 1 - k];
-        if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
-        else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
-      }
+      if (mObj && typeof mObj.score === 'number' && !isDummyPlaceholder) {
+        scoreVal = mObj.score;
+      } else {
+        // Check last5, last10, last15, last40 arrays ONLY if they have explicit non-zero scores at index k
+        let candidateScore = -1;
 
-      if (candidateScore > 0) {
-        scoreVal = candidateScore;
+        if (last5 && k < last5.length) {
+          const val1 = last5[k];
+          const val2 = last5[last5.length - 1 - k];
+          if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+          else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+        }
+        if (candidateScore <= 0 && last10 && k < last10.length) {
+          const val1 = last10[k];
+          const val2 = last10[last10.length - 1 - k];
+          if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+          else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+        }
+        if (candidateScore <= 0 && last15 && k < last15.length) {
+          const val1 = last15[k];
+          const val2 = last15[last15.length - 1 - k];
+          if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+          else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+        }
+        if (candidateScore <= 0 && last40 && k < last40.length) {
+          const val1 = last40[k];
+          const val2 = last40[last40.length - 1 - k];
+          if (typeof val1 === 'number' && val1 > 0) candidateScore = val1;
+          else if (typeof val2 === 'number' && val2 > 0) candidateScore = val2;
+        }
+
+        if (candidateScore > 0) {
+          scoreVal = candidateScore;
+        }
       }
     }
 
@@ -2098,9 +2143,15 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
         if (bigChanceCreated > 0) allAroundDetails.push(`⚡ ${bigChanceCreated} occasion(s) créée(s)`);
       }
 
+      const isMatchLive = idx === 0 && Boolean((realMatch as any)?.isLive || (card as any).isLive);
+      const matchLiveMin = idx === 0 ? ((realMatch as any)?.minute || (card as any).liveMinute) : undefined;
+      const computedMatchLabel = idx === 0
+        ? (isMatchLive ? (matchLiveMin ? `🔴 En direct (${matchLiveMin}')` : '🔴 En direct (M1)') : 'Dernier match (M1)')
+        : `Match M${matchIndex}`;
+
       result.push({
         matchIndex,
-        matchLabel: `Match ${matchIndex}`,
+        matchLabel: computedMatchLabel,
         totalScore,
         isDNP: false,
         isStarter,
@@ -2137,6 +2188,8 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
         penaltiesMissed: penaltyKickMissed,
         penaltiesSaved: penaltySave,
         wasFouled,
+        isLive: isMatchLive,
+        minute: matchLiveMin,
       });
       return;
     }

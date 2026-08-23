@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useTransition } from 'react';
 import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus, StrategyType } from '../types';
-import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts } from '../utils/optimizer';
+import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
 
 interface GalleryViewProps {
@@ -929,6 +929,22 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                       </span>
                     </div>
                   </div>
+
+                  {/* M1 (Dernier match / En direct) Score Badge */}
+                  {(() => {
+                    const recent = getPlayerRecentMatchAnalysis(card);
+                    return (
+                      <div className="mt-2 flex items-center justify-between text-[10px] px-2 py-1 rounded-lg bg-slate-950/90 border border-slate-800/80">
+                        <span className="text-slate-400 font-medium flex items-center gap-1">
+                          {recent.isLive ? <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-500 animate-ping" /> : null}
+                          {recent.isLive ? '🔴 M1 (Live) :' : 'M1 (Dernier) :'}
+                        </span>
+                        <span className={`font-black ${recent.isLive ? 'text-amber-400 animate-pulse' : recent.playedLastMatch || recent.lastMatchScore > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                          {recent.playedLastMatch || recent.lastMatchScore > 0 ? `${recent.lastMatchScore} pts` : 'DNP (0 min)'}
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {/* Upcoming Matchup & Win Prob from Bookmaker */}
                   {card.upcomingFixture && (

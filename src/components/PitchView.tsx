@@ -278,9 +278,13 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
             {/* Last Match Status Badge */}
             <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-800">
-              <span className="text-slate-400">Dernier match:</span>
-              {recentStats.playedLastMatch ? (
-                <span className="text-emerald-400 font-extrabold">✓ {recentStats.lastMatchScore} pts</span>
+              <span className="text-slate-400">
+                {recentStats.isLive ? '🔴 M1 (En direct):' : 'M1 (Dernier):'}
+              </span>
+              {recentStats.playedLastMatch || recentStats.lastMatchScore > 0 ? (
+                <span className={`font-extrabold ${recentStats.isLive ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`}>
+                  {recentStats.isLive ? '🔴 ' : '✓ '}{recentStats.lastMatchScore} pts
+                </span>
               ) : (
                 <span className="text-rose-400 font-extrabold">⚠️ Non joué</span>
               )}

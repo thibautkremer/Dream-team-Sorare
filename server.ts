@@ -61,6 +61,22 @@ function addApiLog(entry: Omit<ApiLogEntry, 'id' | 'timestamp'>) {
   }
 }
 
+function normalizePlayerSlug(str: string): string {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/ø/g, 'o')
+    .replace(/æ/g, 'ae')
+    .replace(/œ/g, 'oe')
+    .replace(/ß/g, 'ss')
+    .replace(/ł/g, 'l')
+    .replace(/ð/g, 'd')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 // In-memory cache for user cards (slug -> { timestamp, cards, user })
 // Bounded LRU cache: keeps memory usage predictable even if many distinct Sorare
 // accounts are looked up over the lifetime of the server process. Existing TTL logic
@@ -1049,56 +1065,51 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
         if (!player) return;
 
         const so5Scores = Array.isArray(player.so5Scores) ? player.so5Scores.filter(Boolean) : [];
-        // Find if any SO5 score corresponds to a game that is live, or pick the first/latest
-        const liveSo5 = so5Scores.find((s: any) => {
+        // Sort so5Scores chronologically descending (newest game date first)
+        const sortedSo5 = [...so5Scores].sort((a: any, b: any) => {
+          const dateA = a.game?.date ? new Date(a.game.date).getTime() : 0;
+          const dateB = b.game?.date ? new Date(b.game.date).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        // 1. Check if any SO5 score is currently live / in play
+        const liveSo5 = sortedSo5.find((s: any) => {
           const st = (s.game?.statusTyped || '').toLowerCase();
-          return st === 'live' || st === 'in_play' || st === 'playing' || st === 'ht';
-        }) || so5Scores[0];
+          return st === 'live' || st === 'in_play' || st === 'playing' || st === 'ht' || st === 'in_progress';
+        });
 
-        const upcomingGame = player.activeClub?.upcomingGames?.[0];
-
-        const latestSo5Game = liveSo5?.game;
-        const upcomingClubGame = upcomingGame;
-
-        // Choose activeGame intelligently based on proximity to now and status
-        let activeGame = null;
+        const upcomingClubGame = player.activeClub?.upcomingGames?.[0];
         const nowMs = Date.now();
+        const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
-        if (latestSo5Game && upcomingClubGame) {
-          const statusSo5 = (latestSo5Game.statusTyped || '').toLowerCase();
-          const statusUp = (upcomingClubGame.statusTyped || '').toLowerCase();
+        let activeSo5: any = null;
+        let activeGame: any = null;
 
-          // If either game is currently live, prioritize the live game
-          if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'playing' || statusSo5 === 'ht') {
-            activeGame = latestSo5Game;
-          } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'playing' || statusUp === 'ht') {
-            activeGame = upcomingClubGame;
+        if (liveSo5) {
+          activeSo5 = liveSo5;
+          activeGame = liveSo5.game;
+        } else if (sortedSo5.length > 0) {
+          const latestSo5 = sortedSo5[0];
+          const tSo5 = latestSo5.game?.date ? new Date(latestSo5.game.date).getTime() : 0;
+          const isRecentGame = tSo5 > 0 && Math.abs(nowMs - tSo5) <= FIVE_DAYS_MS;
+
+          if (isRecentGame || !upcomingClubGame) {
+            activeSo5 = latestSo5;
+            activeGame = latestSo5.game || upcomingClubGame;
           } else {
-            // Compare time distance to now
-            const tSo5 = latestSo5Game.date ? new Date(latestSo5Game.date).getTime() : Infinity;
-            const tUp = upcomingClubGame.date ? new Date(upcomingClubGame.date).getTime() : Infinity;
-
-            const distSo5 = isNaN(tSo5) ? Infinity : Math.abs(nowMs - tSo5);
-            const distUp = isNaN(tUp) ? Infinity : Math.abs(nowMs - tUp);
-
-            if (distSo5 <= distUp) {
-              activeGame = latestSo5Game;
-            } else {
-              activeGame = upcomingClubGame;
-            }
+            activeGame = upcomingClubGame || latestSo5.game;
           }
         } else {
-          activeGame = latestSo5Game || upcomingClubGame;
+          activeGame = upcomingClubGame;
         }
 
-        const isMatchingActiveGame = Boolean(activeGame?.id && liveSo5?.game?.id && liveSo5.game.id === activeGame.id);
-        const liveScore = (isMatchingActiveGame && liveSo5?.score != null)
-          ? Math.round(Number(liveSo5.score) * 10) / 10
+        const liveScore = (activeSo5 && activeSo5.score != null)
+          ? Math.round(Number(activeSo5.score) * 10) / 10
           : null;
-        const decisiveScore = (isMatchingActiveGame && liveSo5?.decisiveScore?.totalScore != null)
-          ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10
+        const decisiveScore = (activeSo5 && activeSo5.decisiveScore?.totalScore != null)
+          ? Math.round(Number(activeSo5.decisiveScore.totalScore) * 10) / 10
           : null;
-        const so5ScoreId = isMatchingActiveGame ? (liveSo5?.id || null) : (liveSo5?.id || null);
+        const so5ScoreId = activeSo5?.id || null;
 
         const scoreEntry = {
           cardId: node?.id || node?.slug || '',
@@ -1110,7 +1121,7 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
           decisiveScore,
           so5ScoreId,
           clubPictureUrl: player.activeClub?.pictureUrl || '',
-          so5ScoresHistory: so5Scores.map((s: any) => ({
+          so5ScoresHistory: sortedSo5.map((s: any) => ({
             id: s?.id || null,
             score: s?.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
             decisiveScore: s?.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
@@ -1276,7 +1287,7 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               slug
               displayName
               playingStatus
-              so5Scores(last: 3) {
+              so5Scores(last: 2) {
                 id
                 score
                 decisiveScore { totalScore }
@@ -1314,65 +1325,95 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
       `;
 
       try {
-        const responseResult = await fetchGraphQLWithRetry(
-          'https://api.sorare.com/graphql',
-          { query, variables: { slugs } },
-          headers,
-          1
-        );
+        // Chunk size: 25 if authenticated with API key, 1 if unauthenticated (complexity limit 500)
+        const CHUNK_SIZE = customApiKey ? 25 : 1;
+        const chunks: string[][] = [];
+        for (let i = 0; i < slugs.length; i += CHUNK_SIZE) {
+          chunks.push(slugs.slice(i, i + CHUNK_SIZE));
+        }
 
-        if (responseResult.ok && responseResult.data?.data?.players) {
-          const playersData = responseResult.data.data.players || [];
-          playersData.forEach((player: any) => {
+        // Fetch chunks in batches to control concurrency
+        const CONCURRENCY = 8;
+        const allFetchedPlayers: any[] = [];
+
+        for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+          const batchChunks = chunks.slice(i, i + CONCURRENCY);
+          const batchPromises = batchChunks.map(async (chunk) => {
+            try {
+              const res = await fetchGraphQLWithRetry(
+                'https://api.sorare.com/graphql',
+                { query, variables: { slugs: chunk } },
+                headers,
+                1
+              );
+              if (res.ok && res.data?.data?.players) {
+                return res.data.data.players;
+              }
+            } catch (chunkErr) {
+              console.warn('[Sorare Live API] Error fetching chunk:', chunk, chunkErr);
+            }
+            return [];
+          });
+
+          const batchResults = await Promise.all(batchPromises);
+          batchResults.forEach(plist => {
+            if (Array.isArray(plist)) {
+              allFetchedPlayers.push(...plist.filter(Boolean));
+            }
+          });
+        }
+
+        if (allFetchedPlayers.length > 0) {
+          allFetchedPlayers.forEach((player: any) => {
             if (!player) return;
 
             const so5Scores = Array.isArray(player.so5Scores) ? player.so5Scores.filter(Boolean) : [];
-            const liveSo5 = so5Scores.find((s: any) => {
+            // Sort so5Scores chronologically descending (newest game date first)
+            const sortedSo5 = [...so5Scores].sort((a: any, b: any) => {
+              const dateA = a.game?.date ? new Date(a.game.date).getTime() : 0;
+              const dateB = b.game?.date ? new Date(b.game.date).getTime() : 0;
+              return dateB - dateA;
+            });
+
+            // 1. Check if any SO5 score is currently live / in play
+            const liveSo5 = sortedSo5.find((s: any) => {
               const st = (s.game?.statusTyped || '').toLowerCase();
-              return st === 'live' || st === 'in_play' || st === 'playing' || st === 'ht';
-            }) || so5Scores[0];
+              return st === 'live' || st === 'in_play' || st === 'playing' || st === 'ht' || st === 'in_progress';
+            });
 
-            const upcomingGame = player.activeClub?.upcomingGames?.[0];
-            const latestSo5Game = liveSo5?.game;
-            const upcomingClubGame = upcomingGame;
-
-            let activeGame = null;
+            const upcomingClubGame = player.activeClub?.upcomingGames?.[0];
             const nowMs = Date.now();
+            const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
 
-            if (latestSo5Game && upcomingClubGame) {
-              const statusSo5 = (latestSo5Game.statusTyped || '').toLowerCase();
-              const statusUp = (upcomingClubGame.statusTyped || '').toLowerCase();
+            let activeSo5: any = null;
+            let activeGame: any = null;
 
-              if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'playing' || statusSo5 === 'ht') {
-                activeGame = latestSo5Game;
-              } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'playing' || statusUp === 'ht') {
-                activeGame = upcomingClubGame;
+            if (liveSo5) {
+              activeSo5 = liveSo5;
+              activeGame = liveSo5.game;
+            } else if (sortedSo5.length > 0) {
+              const latestSo5 = sortedSo5[0];
+              const tSo5 = latestSo5.game?.date ? new Date(latestSo5.game.date).getTime() : 0;
+              const isRecentGame = tSo5 > 0 && Math.abs(nowMs - tSo5) <= FIVE_DAYS_MS;
+
+              if (isRecentGame || !upcomingClubGame) {
+                activeSo5 = latestSo5;
+                activeGame = latestSo5.game || upcomingClubGame;
               } else {
-                const tSo5 = latestSo5Game.date ? new Date(latestSo5Game.date).getTime() : Infinity;
-                const tUp = upcomingClubGame.date ? new Date(upcomingClubGame.date).getTime() : Infinity;
-
-                const distSo5 = isNaN(tSo5) ? Infinity : Math.abs(nowMs - tSo5);
-                const distUp = isNaN(tUp) ? Infinity : Math.abs(nowMs - tUp);
-
-                if (distSo5 <= distUp) {
-                  activeGame = latestSo5Game;
-                } else {
-                  activeGame = upcomingClubGame;
-                }
+                activeGame = upcomingClubGame || latestSo5.game;
               }
             } else {
-              activeGame = latestSo5Game || upcomingClubGame;
+              activeGame = upcomingClubGame;
             }
 
-            const isMatchingActiveGame = Boolean(activeGame?.id && liveSo5?.game?.id && liveSo5.game.id === activeGame.id);
-            const liveScore = (isMatchingActiveGame && liveSo5?.score != null)
-              ? Math.round(Number(liveSo5.score) * 10) / 10
+            const liveScore = (activeSo5 && activeSo5.score != null)
+              ? Math.round(Number(activeSo5.score) * 10) / 10
               : null;
-            const decisiveScore = (isMatchingActiveGame && liveSo5?.decisiveScore?.totalScore != null)
-              ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10
+            const decisiveScore = (activeSo5 && activeSo5.decisiveScore?.totalScore != null)
+              ? Math.round(Number(activeSo5.decisiveScore.totalScore) * 10) / 10
               : null;
 
-            const so5ScoreId = isMatchingActiveGame ? (liveSo5?.id || null) : (liveSo5?.id || null);
+            const so5ScoreId = activeSo5?.id || null;
 
             const scoreEntry = {
               cardId: player?.id || player?.slug || '',
@@ -1384,7 +1425,7 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               decisiveScore,
               so5ScoreId,
               clubPictureUrl: player.activeClub?.pictureUrl || '',
-              so5ScoresHistory: so5Scores.map((s: any) => ({
+              so5ScoresHistory: sortedSo5.map((s: any) => ({
                 id: s?.id || null,
                 score: s?.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
                 decisiveScore: s?.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
@@ -1432,12 +1473,52 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
 
             if (player?.slug) {
               liveScoresMap[player.slug] = scoreEntry;
+              const normSlug = normalizePlayerSlug(player.slug);
+              if (normSlug) liveScoresMap[normSlug] = scoreEntry;
             }
             if (player?.id) {
               liveScoresMap[player.id] = scoreEntry;
-              if (typeof player.id === 'string' && player.id.startsWith('Card:')) {
-                liveScoresMap[player.id.replace('Card:', '')] = scoreEntry;
+              if (typeof player.id === 'string') {
+                if (player.id.startsWith('Player:')) {
+                  liveScoresMap[player.id.replace('Player:', '')] = scoreEntry;
+                }
+                if (player.id.startsWith('Card:')) {
+                  liveScoresMap[player.id.replace('Card:', '')] = scoreEntry;
+                }
               }
+            }
+            if (player?.displayName) {
+              const normName = normalizePlayerSlug(player.displayName);
+              if (normName) liveScoresMap[normName] = scoreEntry;
+              const rawNameSlug = player.displayName.toLowerCase().replace(/[^a-z0-9]/g, '-');
+              if (rawNameSlug) liveScoresMap[rawNameSlug] = scoreEntry;
+            }
+
+            // Also map to any cached card IDs for this player
+            if (cached?.cards) {
+              cached.cards.forEach(c => {
+                const cPlayerSlug = c.playerSlug || (c.slug?.match(/^(.*?)-\d{4}-/) ? c.slug.match(/^(.*?)-\d{4}-/)?.[1] : c.slug);
+                const normCPlayerSlug = normalizePlayerSlug(cPlayerSlug || '');
+                const normCDisplayName = normalizePlayerSlug(c.displayName || '');
+                const normPDisplayName = normalizePlayerSlug(player.displayName || '');
+                const normPSlug = normalizePlayerSlug(player.slug || '');
+                if (
+                  cPlayerSlug === player?.slug ||
+                  (normCPlayerSlug && normCPlayerSlug === normPSlug) ||
+                  (normCDisplayName && normCDisplayName === normPDisplayName) ||
+                  c.displayName === player?.displayName
+                ) {
+                  if (c.id) {
+                    liveScoresMap[c.id] = scoreEntry;
+                    if (typeof c.id === 'string' && c.id.startsWith('Card:')) {
+                      liveScoresMap[c.id.replace('Card:', '')] = scoreEntry;
+                    }
+                  }
+                  if (c.slug) {
+                    liveScoresMap[c.slug] = scoreEntry;
+                  }
+                }
+              });
             }
           });
         }

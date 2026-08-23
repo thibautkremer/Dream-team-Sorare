@@ -212,6 +212,22 @@ export function getCardTotalBonus(card: SorareCard): number {
   return 0;
 }
 
+export function normalizePlayerSlug(str: string): string {
+  if (!str) return '';
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/ø/g, 'o')
+    .replace(/æ/g, 'ae')
+    .replace(/œ/g, 'oe')
+    .replace(/ß/g, 'ss')
+    .replace(/ł/g, 'l')
+    .replace(/ð/g, 'd')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 /**
  * Calcule dynamiquement les étoiles d'un joueur (de 1 à 5) selon sa note L15.
  * Représente la qualité/tier réel du joueur sur Sorare.

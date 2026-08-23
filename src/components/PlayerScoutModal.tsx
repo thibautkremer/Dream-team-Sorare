@@ -839,7 +839,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                           : 'text-slate-500'
                       }`}
                     >
-                      {globalIndex === 0 ? 'M1 (Dernier)' : `M${match.matchIndex}`}
+                      {globalIndex === 0 ? (match.isLive ? 'M1 (Live 🔴)' : 'M1 (Dernier)') : `M${match.matchIndex}`}
                     </span>
                   </button>
                 );

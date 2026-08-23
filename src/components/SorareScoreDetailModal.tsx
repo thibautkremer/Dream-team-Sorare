@@ -96,18 +96,6 @@ const STAT_LABELS_FR: Record<string, { label: string; unit?: string }> = {
   six_second_violation: { label: 'Règle des 6 secondes' },
 };
 
-const DECISIVE_LEVELS = [
-  { score: 0, level: -3, color: 'bg-rose-950/80 text-rose-300 border-rose-800/50' },
-  { score: 5, level: -2, color: 'bg-rose-900/70 text-rose-300 border-rose-700/50' },
-  { score: 15, level: -1, color: 'bg-amber-950/80 text-amber-300 border-amber-800/50' },
-  { score: 35, level: 0, color: 'bg-amber-900/60 text-amber-200 border-amber-700/50' },
-  { score: 60, level: 1, color: 'bg-emerald-900/70 text-emerald-300 border-emerald-700/50' },
-  { score: 70, level: 2, color: 'bg-emerald-500 text-slate-950 font-black border-emerald-400' },
-  { score: 80, level: 3, color: 'bg-teal-700/80 text-teal-200 border-teal-600/50' },
-  { score: 90, level: 4, color: 'bg-teal-600/90 text-white border-teal-500/50' },
-  { score: 100, level: 5, color: 'bg-cyan-500 text-slate-950 font-black border-cyan-400' },
-];
-
 export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
   card,
   sorareLive,
@@ -117,14 +105,14 @@ export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
   const [detailedStats, setDetailedStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    posDecisive: true,
-    negDecisive: true,
-    general: true,
-    defending: true,
-    possession: true,
-    passing: true,
-    attacking: true,
-    goalkeeping: true,
+    posDecisive: false,
+    negDecisive: false,
+    general: false,
+    defending: false,
+    possession: false,
+    passing: false,
+    attacking: false,
+    goalkeeping: false,
   });
 
   const cardBonus = getCardTotalBonus(card);
@@ -133,6 +121,8 @@ export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
 
   const baseLiveScore = sorareLive?.liveScore ?? null;
   const decisiveScore = sorareLive?.decisiveScore ?? (baseLiveScore != null && baseLiveScore >= 35 ? (baseLiveScore >= 60 ? 60 : 35) : 35);
+  const currentBaseScore = baseLiveScore != null ? baseLiveScore : decisiveScore;
+  const clampedScorePct = Math.max(0, Math.min(100, currentBaseScore != null ? currentBaseScore : 0));
   
   // Calculate final score with bonuses
   const finalLiveScore = baseLiveScore != null 
@@ -372,41 +362,70 @@ export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
         {/* Scrollable Content: Decisive & All-Around */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
 
-          {/* Decisive Score Section */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                <span>Score décisif</span>
-                <span className="text-emerald-400 font-black">{decisiveScore} pts</span>
-              </h3>
-            </div>
-
-            {/* Sorare Decisive Level Gauge */}
-            <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 mb-4">
-              <div className="grid grid-cols-9 gap-1 text-center font-bold text-[11px] mb-1">
-                {DECISIVE_LEVELS.map((lvl) => {
-                  const isCurrent = (decisiveScore >= lvl.score && (lvl.level === 5 || decisiveScore < DECISIVE_LEVELS[DECISIVE_LEVELS.indexOf(lvl) + 1]?.score));
-                  return (
-                    <div 
-                      key={lvl.level}
-                      className={`relative py-2 rounded-lg border transition-all ${
-                        isCurrent 
-                          ? 'bg-emerald-500 text-slate-950 font-black border-emerald-300 shadow-md shadow-emerald-500/20 scale-105 z-10' 
-                          : lvl.color
-                      }`}
-                    >
-                      {isCurrent && (
-                        <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-2 h-2 bg-white rounded-full shadow" />
-                      )}
-                      <div>{lvl.score}</div>
-                      <div className={`text-[9px] opacity-75 ${isCurrent ? 'text-slate-950 font-black' : 'text-slate-400'}`}>
-                        {lvl.level > 0 ? `+${lvl.level}` : lvl.level}
-                      </div>
-                    </div>
-                  );
-                })}
+          {/* Score Slider & Gauge Section (0 - 100) */}
+          <div className="bg-slate-950/90 p-4 rounded-2xl border border-slate-800/80 shadow-lg">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Score Joueur (0 - 100)</span>
+                <div className="text-base sm:text-lg font-black text-white flex items-center gap-2 mt-0.5">
+                  <span>Score brut :</span>
+                  <span className="text-amber-400 font-extrabold">{currentBaseScore != null ? `${currentBaseScore} pts` : '--'}</span>
+                  <span className="text-xs font-medium text-slate-400">(hors bonus)</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs font-bold text-slate-300">
+                  Décisif : <span className="text-emerald-400 font-black">{decisiveScore} pts</span>
+                </div>
+                <div className="text-xs font-bold text-slate-300">
+                  AAS : <span className={`font-black ${allAroundTotal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {allAroundTotal >= 0 ? `+${allAroundTotal}` : allAroundTotal} pts
+                  </span>
+                </div>
               </div>
             </div>
+
+            {/* Gradient Score Bar with Cursor */}
+            <div className="relative pt-6 pb-2 px-2">
+              {/* The Color Track */}
+              <div className="relative h-4 w-full rounded-full bg-gradient-to-r from-rose-600 via-amber-500 via-emerald-500 via-teal-400 to-cyan-400 shadow-inner border border-white/10">
+                {/* Milestone Tick Lines on the Bar */}
+                {[0, 15, 35, 60, 80, 100].map((tick) => (
+                  <div 
+                    key={tick}
+                    className="absolute top-0 bottom-0 w-0.5 bg-black/30 pointer-events-none -translate-x-1/2"
+                    style={{ left: `${tick}%` }}
+                  />
+                ))}
+
+                {/* The Cursor / Indicator Point at the Player's Current Score */}
+                <div 
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20 flex flex-col items-center pointer-events-none transition-all duration-300"
+                  style={{ left: `${clampedScorePct}%` }}
+                >
+                  {/* Floating Tag above cursor */}
+                  <div className="absolute -top-7 px-2 py-0.5 rounded-md bg-white text-slate-950 font-black text-[11px] shadow-xl whitespace-nowrap flex items-center gap-1 border border-slate-300">
+                    <span>{currentBaseScore != null ? `${currentBaseScore} pts` : '0 pts'}</span>
+                  </div>
+
+                  {/* Cursor Pin / Dot */}
+                  <div className="w-5 h-5 rounded-full bg-white border-2 border-slate-950 shadow-lg ring-4 ring-white/30 flex items-center justify-center">
+                    <div className="w-1.5 h-1.5 rounded-full bg-slate-900" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Ticks and Labels below the Bar */}
+              <div className="relative w-full h-6 mt-2 text-[10px] text-slate-400 font-bold">
+                <span className="absolute left-0 -translate-x-1/2">0</span>
+                <span className="absolute left-[15%] -translate-x-1/2 text-rose-300/80">15</span>
+                <span className="absolute left-[35%] -translate-x-1/2 text-amber-300">35 <span className="hidden sm:inline font-normal text-slate-400">(Start)</span></span>
+                <span className="absolute left-[60%] -translate-x-1/2 text-emerald-300">60</span>
+                <span className="absolute left-[80%] -translate-x-1/2 text-teal-300">80</span>
+                <span className="absolute left-[100%] -translate-x-1/2 text-cyan-300">100</span>
+              </div>
+            </div>
+          </div>
 
             {/* Decisive Action Collapsible Lists */}
             <div className="space-y-2">
@@ -492,7 +511,6 @@ export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
                 )}
               </div>
             </div>
-          </div>
 
           {/* All-Around Score Section */}
           <div>
