@@ -1,5 +1,34 @@
 import { UpcomingFixture, WeatherCondition } from '../types';
 
+// --- Single source of truth for the current Sorare SO5 Game Week number ---
+// BUGFIX (audit): `gameWeek: 48` used to be hardcoded as a literal in ~6 different places
+// across fixturesData.ts and server.ts, INCLUDING the branch that processes real, live data
+// from the Sorare API. That meant the whole app would silently keep claiming "GW 48" forever,
+// even long after the real Sorare game week moved on, with no error or visible signal.
+//
+// This app doesn't have a registered Sorare OAuth app (see LineupExportModal), so we can't
+// query Sorare's real `currentSo5GameWeek` GraphQL field yet. As a self-contained stopgap that
+// at least stops the number from being silently frozen, we derive the game week from elapsed
+// time since a known anchor (the week this static FIXTURES_CATALOG below was captured), assuming
+// ~5-day rolling Sorare gameweeks (matching the observed 21-25 Août 2026 window). Once real
+// Sorare OAuth is wired up, replace GAME_WEEK_ANCHOR-based math with a live GraphQL query.
+export const GAME_WEEK_ANCHOR = {
+  number: 48,
+  // Start date (UTC) of the week GW48's catalog below was captured.
+  startDate: '2026-08-21T00:00:00.000Z',
+  // Approximate length of a Sorare SO5 "Classic" gameweek, in days.
+  lengthDays: 5,
+};
+
+export function getCurrentGameWeekNumber(referenceDate: Date = new Date()): number {
+  const anchorMs = new Date(GAME_WEEK_ANCHOR.startDate).getTime();
+  const nowMs = referenceDate.getTime();
+  const elapsedDays = (nowMs - anchorMs) / (1000 * 60 * 60 * 24);
+  const elapsedGameWeeks = Math.floor(elapsedDays / GAME_WEEK_ANCHOR.lengthDays);
+  // Never go below the anchor number (guards against clock skew / dates before the anchor).
+  return GAME_WEEK_ANCHOR.number + Math.max(0, elapsedGameWeeks);
+}
+
 export interface ClubFixtureDefinition {
   clubName: string;
   opponent: string;
@@ -2419,7 +2448,7 @@ export function getClubUpcomingFixture(clubName: string, positionCode: 'GK' | 'D
   };
 
   return {
-    gameWeek: 48,
+    gameWeek: getCurrentGameWeekNumber(),
     opponent: def.opponent,
     isHome: def.isHome,
     difficultyRating: def.difficultyRating,
