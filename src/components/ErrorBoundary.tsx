@@ -25,6 +25,19 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.warn('ErrorBoundary caught error:', error, errorInfo);
+
+    // AUDIT FIX (2.16): this used to only log to the browser console, so a crash in production
+    // (where nobody has devtools open) left no trace anywhere. /api/admin/logs/client already
+    // exists server-side and is used elsewhere — just wasn't wired up here. Best-effort only:
+    // if this fails (e.g. offline), we don't want to throw from inside error handling itself.
+    fetch('/api/admin/logs/client', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: error.message || 'Unknown React render error',
+        error: `${error.stack || error}\n\nComponent stack:${errorInfo.componentStack}`,
+      }),
+    }).catch(() => { /* best-effort, never throw from an error boundary */ });
   }
 
   public render() {
