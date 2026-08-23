@@ -1,9 +1,11 @@
 import React from 'react';
 import { GalleryView } from '../components/GalleryView';
-import { SorareCard, Lineup } from '../types';
+import { SorareCard, Lineup, StrategyType } from '../types';
 
 interface GalleryPageProps {
   cards: SorareCard[];
+  strategy?: StrategyType;
+  isLoadingCards?: boolean;
   onOpenScout: (card: SorareCard) => void;
   onAssignToSlot: (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   onAddCard: (card: SorareCard) => void;
