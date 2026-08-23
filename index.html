@@ -2,7 +2,10 @@
 <html lang="fr" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <!-- AUDIT FIX (2.16): maximum-scale=1.0 + user-scalable=no used to block pinch-to-zoom
+         entirely, which is an accessibility problem for users who need to zoom text/cards.
+         Removed the hard block while keeping a sensible initial scale. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Team Sorare - Optimiseur SO5 & IA Prédictive</title>
     <meta name="description" content="Application Web Progressive d'optimisation de compositions SO5 Sorare avec synchronisation GraphQL, prédictions IA Gemini 3.7 Flash, analyse bookmakers et mode hors-ligne." />
     <meta name="theme-color" content="#020617" />
