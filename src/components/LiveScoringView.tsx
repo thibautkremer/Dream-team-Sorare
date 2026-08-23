@@ -3,6 +3,8 @@ import { RefreshCw, Zap, Clock, Trophy, Crown, CheckCircle2, AlertCircle, Sparkl
 import { SorareCard, Lineup, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, formatKickoffDate, getPlayerWinProbability, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { StorageService } from '../utils/storage';
+import { getCardTotalBonus } from '../utils/sorareSlug';
+import { SorareScoreDetailModal } from './SorareScoreDetailModal';
 
 interface LiveScoringViewProps {
   cards: SorareCard[];
@@ -87,10 +89,15 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     upcoming: boolean;
   }>({
     live: true,
-    finished: true,
-    upcoming: true,
+    finished: false,
+    upcoming: false,
   });
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
+  const [selectedDetailCard, setSelectedDetailCard] = useState<{
+    card: SorareCard;
+    sorareLive: any;
+    isCaptain: boolean;
+  } | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -203,8 +210,11 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     const slugSet = new Set<string>();
     activeCompositions.forEach(comp => {
       Object.values(comp.slots).forEach(card => {
-        if (card && card.slug) {
-          slugSet.add(card.slug);
+        if (card) {
+          const playerSlug = (card as any).playerSlug || (card.slug?.match(/^(.*?)-\d{4}-/) ? card.slug.match(/^(.*?)-\d{4}-/)?.[1] : card.slug);
+          if (playerSlug) {
+            slugSet.add(playerSlug);
+          }
         }
       });
     });
@@ -233,14 +243,18 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     const WINDOW_AFTER_MS = 130 * 60 * 1000; // ...and up to 130min after (covers 90min + stoppage + delay)
     const SAFETY_MAX_SLUGS = 600;
     const extra: string[] = [];
+    
     for (const card of cards) {
       if (extra.length >= SAFETY_MAX_SLUGS) break;
       const kickoff = card.upcomingFixture?.kickoffDate;
-      if (!kickoff || !card.slug) continue;
+      const playerSlug = (card as any).playerSlug || (card.slug?.match(/^(.*?)-\d{4}-/) ? card.slug.match(/^(.*?)-\d{4}-/)?.[1] : card.slug);
+      
+      if (!kickoff || !playerSlug) continue;
+      
       const kickoffMs = new Date(kickoff).getTime();
       if (isNaN(kickoffMs)) continue;
       if (nowMs >= kickoffMs - WINDOW_BEFORE_MS && nowMs <= kickoffMs + WINDOW_AFTER_MS) {
-        extra.push(card.slug);
+        extra.push(playerSlug);
       }
     }
     return extra;
@@ -343,11 +357,12 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       const recentAnalysis = getPlayerRecentMatchAnalysis(card);
       
       const cardCleanId = card.id ? card.id.replace('Card:', '') : '';
+      const extractedPlayerSlug = (card as any).playerSlug || (card.slug?.match(/^(.*?)-\d{4}-/) ? card.slug.match(/^(.*?)-\d{4}-/)?.[1] : card.slug);
       const sorareLive = liveScoresMap[card.id] ||
         liveScoresMap[`Card:${card.id}`] ||
         liveScoresMap[cardCleanId] ||
+        (extractedPlayerSlug ? liveScoresMap[extractedPlayerSlug] : null) ||
         (card.slug ? liveScoresMap[card.slug] : null) ||
-        ((card as any).playerSlug ? liveScoresMap[(card as any).playerSlug] : null) ||
         (card.displayName ? liveScoresMap[card.displayName.toLowerCase().replace(/[^a-z0-9]/g, '-')] : null);
 
       const liveGame = sorareLive?.game;
@@ -366,8 +381,8 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       let matchStatusLabel = 'À venir';
 
       const statusLower = (liveGame?.statusTyped || (fixture as any)?.status || '').toLowerCase();
-      // Real Sorare statuses observed: 'live', 'ht' (half-time), 'in_play' (older naming), 'finished'/'played'/'ft'.
-      const isRealLiveStatus = statusLower === 'live' || statusLower === 'in_play' || statusLower === 'ht';
+      // Real Sorare statuses observed: 'live', 'ht' (half-time), 'playing' (new naming), 'in_play' (older naming), 'finished'/'played'/'ft'.
+      const isRealLiveStatus = statusLower === 'live' || statusLower === 'in_play' || statusLower === 'playing' || statusLower === 'ht';
       const isRealFinishedStatus = statusLower === 'finished' || statusLower === 'played' || statusLower === 'ft';
       // Only trust homeGoals/awayGoals as "real" once the match has actually started — a
       // not-yet-started game legitimately reports 0-0 via the `?? 0` default server-side, which
@@ -420,10 +435,23 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
         hasMatch = false; // Reset if it was too old
       }
 
+      const cardBonus = getCardTotalBonus(card);
+      const isCaptainSomewhere = lineupPresences.some(p => p.isCaptain);
+      const totalBonusPct = Math.round((cardBonus + (isCaptainSomewhere ? 20 : 0)) * 10) / 10;
+      const baseLiveScore = sorareLive?.liveScore != null ? Number(sorareLive.liveScore) : null;
+      const finalLiveScore = baseLiveScore != null 
+        ? Math.round(baseLiveScore * (1 + totalBonusPct / 100) * 10) / 10 
+        : null;
+
       return {
         card,
         lineupPresences,
         isAlignedAny,
+        isCaptainSomewhere,
+        cardBonus,
+        totalBonusPct,
+        baseLiveScore,
+        finalLiveScore,
         breakdown,
         recentAnalysis,
         hasMatch,
@@ -549,8 +577,8 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       }
 
       if (sortBy === 'sorare') {
-        const scoreA = a.sorareLive?.liveScore ?? -999;
-        const scoreB = b.sorareLive?.liveScore ?? -999;
+        const scoreA = a.finalLiveScore ?? a.sorareLive?.liveScore ?? -999;
+        const scoreB = b.finalLiveScore ?? b.sorareLive?.liveScore ?? -999;
         if (scoreB !== scoreA) {
           return scoreB - scoreA;
         }
@@ -558,8 +586,8 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       }
 
       if (sortBy === 'diff') {
-        const scoreA = a.sorareLive?.liveScore ?? 0;
-        const scoreB = b.sorareLive?.liveScore ?? 0;
+        const scoreA = a.finalLiveScore ?? a.sorareLive?.liveScore ?? 0;
+        const scoreB = b.finalLiveScore ?? b.sorareLive?.liveScore ?? 0;
         const diffA = scoreA - a.breakdown.projectedScore;
         const diffB = scoreB - b.breakdown.projectedScore;
         if (diffB !== diffA) {
@@ -915,17 +943,29 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
             </div>
           </div>
         ) : (
-          filteredCards.map(({ card, lineupPresences, isAlignedAny, breakdown, recentAnalysis, hasMatch, fixture, sorareLive, kickoffStr }) => {
+          filteredCards.map(({
+            card,
+            lineupPresences,
+            isAlignedAny,
+            isCaptainSomewhere,
+            cardBonus,
+            totalBonusPct,
+            baseLiveScore,
+            finalLiveScore,
+            breakdown,
+            recentAnalysis,
+            hasMatch,
+            fixture,
+            sorareLive,
+            kickoffStr,
+            matchStatusCategory,
+          }) => {
             const projected = breakdown.projectedScore;
             const l5 = card.scores?.l5 || 0;
             const l15 = card.scores?.l15 || l5;
             const avgAA = card.scores?.avgAllAroundScore || Math.round(l5 * 0.5);
             const isStarter = card.status === 'STARTER';
             const winProb = getPlayerWinProbability(fixture);
-
-            // Check if player is captain in any active composition
-            const captainInTeams = lineupPresences.filter(p => p.isCaptain);
-            const isCaptainSomewhere = captainInTeams.length > 0;
 
             return (
               <div
@@ -986,8 +1026,22 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
 
                         {/* Real Match Opponent */}
                         {hasMatch && (fixture || sorareLive?.game) ? (
-                          <span className="text-xs font-semibold text-slate-300 ml-1">
-                            {card.club?.name || sorareLive?.game?.homeTeam} vs <strong className="text-white">{fixture?.opponent || sorareLive?.game?.awayTeam}</strong>
+                          <span className="text-[11px] sm:text-xs font-semibold text-slate-300 ml-1">
+                            {sorareLive?.game && sorareLive.game.homeTeam && sorareLive.game.awayTeam ? (
+                                <>
+                                  {sorareLive.game.homeTeam}
+                                  {sorareLive.game.statusTyped !== 'scheduled' ? (
+                                    <span className="mx-1 font-bold text-white bg-slate-800 px-1.5 py-0.5 rounded">
+                                      {sorareLive.game.homeGoals ?? 0} - {sorareLive.game.awayGoals ?? 0}
+                                    </span>
+                                  ) : " vs "}
+                                  <strong className="text-white">{sorareLive.game.awayTeam}</strong>
+                                </>
+                            ) : (
+                                <>
+                                  {card.club?.name || 'Club'} vs <strong className="text-white">{fixture?.opponent || 'Opposant'}</strong>
+                                </>
+                            )}
                             {fixture && (
                               <span className="text-[10px] text-slate-400 ml-1">
                                 ({fixture.isHome ? 'Dom.' : 'Ext.'})
@@ -1007,9 +1061,9 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                             logic above). Because 'live'/'ht' were missing here, the score badge
                             silently never appeared during an actual live match — only the
                             clock-guessed minute counter did. Now covers the full real status set. */}
-                        {sorareLive?.game && ['live', 'in_play', 'ht', 'played', 'finished', 'ft'].includes((sorareLive.game.statusTyped || '').toLowerCase()) && (
+                        {sorareLive?.game && ['live', 'in_play', 'playing', 'ht', 'played', 'finished', 'ft'].includes((sorareLive.game.statusTyped || '').toLowerCase()) && (
                           <span className="text-[10px] font-black text-white bg-slate-950 border border-emerald-500/40 px-2 py-0.5 rounded flex items-center gap-1.5 ml-1">
-                            {['live', 'in_play', 'ht'].includes((sorareLive.game.statusTyped || '').toLowerCase()) && (
+                            {['live', 'in_play', 'playing', 'ht'].includes((sorareLive.game.statusTyped || '').toLowerCase()) && (
                               <span className="animate-pulse text-red-500 flex items-center gap-0.5">
                                 <div className="h-1.5 w-1.5 rounded-full bg-red-500"></div>
                                 {(sorareLive.game.statusTyped || '').toLowerCase() === 'ht'
@@ -1150,59 +1204,87 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
 
                     {/* Live Score & Projected Score */}
                     <div className="flex items-center gap-3">
-                      {/* Live Score Card */}
-                      <div className={`text-right px-3 py-1.5 rounded-2xl min-w-[110px] border transition ${
-                        sorareLive?.liveScore != null
-                          ? 'bg-emerald-950/50 border-emerald-500/40'
-                          : 'bg-slate-950/60 border-slate-800'
-                      }`}>
+                      {/* Live Score Card - Interactive Modal Trigger */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedDetailCard({
+                            card,
+                            sorareLive,
+                            isCaptain: isCaptainSomewhere,
+                          });
+                        }}
+                        title="Cliquez pour ouvrir le détail complet des stats & actions SO5"
+                        className={`text-right px-3 py-1.5 rounded-2xl min-w-[115px] border transition cursor-pointer hover:border-emerald-400 hover:scale-[1.02] hover:shadow-lg focus:outline-none ${
+                          baseLiveScore != null
+                            ? 'bg-emerald-950/50 border-emerald-500/40'
+                            : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
                         <div className="flex items-center gap-1.5 justify-end">
                           <span className={`h-2 w-2 rounded-full ${
-                            sorareLive?.liveScore != null ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
+                            baseLiveScore != null ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
                           }`}></span>
-                          <span className={`text-[9px] font-black uppercase ${
-                            sorareLive?.liveScore != null ? 'text-emerald-400' : 'text-slate-400'
+                          <span className={`text-[9px] font-black uppercase flex items-center gap-1 ${
+                            baseLiveScore != null ? 'text-emerald-400' : 'text-slate-400'
                           }`}>
-                            {sorareLive?.liveScore != null ? 'Score en direct' : 'Score Live'}
+                            {baseLiveScore != null ? 'Score Live' : 'Score Live'}
+                            <Activity className="w-2.5 h-2.5 opacity-60" />
                           </span>
                         </div>
                         
                         <div className="flex items-baseline justify-end gap-1 my-0.5">
                           <span className={`text-xl sm:text-2xl font-black ${
-                            sorareLive?.liveScore != null ? 'text-white' : 'text-slate-500'
+                            finalLiveScore != null
+                              ? finalLiveScore >= 60
+                                ? 'text-emerald-400'
+                                : finalLiveScore >= 40
+                                ? 'text-amber-400'
+                                : 'text-rose-400'
+                              : 'text-slate-500'
                           }`}>
-                            {sorareLive?.liveScore != null ? sorareLive.liveScore : '--'}
+                            {finalLiveScore != null ? finalLiveScore : '--'}
                           </span>
                           <span className={`text-xs font-bold ${
-                            sorareLive?.liveScore != null ? 'text-emerald-400' : 'text-slate-600'
+                            finalLiveScore != null ? 'text-slate-400' : 'text-slate-600'
                           }`}>pts</span>
                         </div>
 
-                        {sorareLive?.liveScore != null ? (
+                        {finalLiveScore != null ? (
                           <>
-                            {sorareLive.decisiveScore != null && (
-                              <span className="text-[9px] text-amber-400 font-semibold block text-right">
-                                Décisif: {sorareLive.decisiveScore} pts
-                              </span>
-                            )}
+                            {/* Bonuses and Base Breakdown */}
+                            <div className="flex items-center justify-end gap-1 flex-wrap text-[9px] font-semibold">
+                              {totalBonusPct > 0 && (
+                                <span className="text-cyan-300 bg-cyan-950/60 border border-cyan-500/30 px-1 rounded">
+                                  +{totalBonusPct}% {isCaptainSomewhere ? '👑' : ''}
+                                </span>
+                              )}
+                              {sorareLive?.decisiveScore != null && (
+                                <span className="text-amber-400">
+                                  DS: {sorareLive.decisiveScore}
+                                </span>
+                              )}
+                            </div>
+
                             <div className="flex items-center justify-end gap-1 mt-1">
-                              {Math.round((sorareLive.liveScore - projected) * 10) / 10 >= 0 ? (
+                              {Math.round((finalLiveScore - projected) * 10) / 10 >= 0 ? (
                                 <span className="text-[9px] font-black text-emerald-300 bg-emerald-500/20 border border-emerald-500/30 px-1.5 py-0.2 rounded">
-                                  +{Math.round((sorareLive.liveScore - projected) * 10) / 10} vs proj.
+                                  +{Math.round((finalLiveScore - projected) * 10) / 10} vs proj.
                                 </span>
                               ) : (
                                 <span className="text-[9px] font-black text-rose-300 bg-rose-500/20 border border-rose-500/30 px-1.5 py-0.2 rounded">
-                                  {Math.round((sorareLive.liveScore - projected) * 10) / 10} vs proj.
+                                  {Math.round((finalLiveScore - projected) * 10) / 10} vs proj.
                                 </span>
                               )}
                             </div>
                           </>
                         ) : (
                           <span className="text-[9px] text-slate-500 block text-right font-medium">
-                            Match non démarré
+                            {matchStatusCategory === 'LIVE' ? 'En attente...' : (matchStatusCategory === 'FINISHED' ? 'Données indisponibles' : 'Match non démarré')}
                           </span>
                         )}
-                      </div>
+                      </button>
 
                       {/* Projected Score */}
                       <div className="text-right min-w-[85px]">
@@ -1241,9 +1323,21 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                       <Activity className="h-3 w-3" />
                       <span>{expandedCardId === card.id ? 'Masquer l\'historique SO5' : `Voir l'historique SO5 (${sorareLive.so5ScoresHistory.length} derniers matchs)`}</span>
                     </button>
-                    <span className="text-[10px] text-slate-400 font-medium">
-                      Source : API Officielle Sorare
-                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDetailCard({
+                          card,
+                          sorareLive,
+                          isCaptain: isCaptainSomewhere,
+                        });
+                      }}
+                      className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1"
+                    >
+                      <span>Détails & stats</span>
+                      <span>↗</span>
+                    </button>
                   </div>
                 )}
 
@@ -1281,6 +1375,16 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
           })
         )}
       </div>
+
+      {/* Detailed Stats Modal */}
+      {selectedDetailCard && (
+        <SorareScoreDetailModal
+          card={selectedDetailCard.card}
+          sorareLive={selectedDetailCard.sorareLive}
+          isCaptain={selectedDetailCard.isCaptain}
+          onClose={() => setSelectedDetailCard(null)}
+        />
+      )}
 
     </div>
   );

@@ -925,6 +925,7 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
                     slug
                     playingStatus
                     so5Scores(last: 3) {
+                      id
                       score
                       decisiveScore { totalScore }
                       allAroundStats { totalScore }
@@ -977,6 +978,7 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
                     slug
                     playingStatus
                     so5Scores(last: 1) {
+                      id
                       score
                       game {
                         id
@@ -1043,14 +1045,14 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
       const liveScoresMap: Record<string, any> = {};
 
       allNodes.forEach((node: any) => {
-        const player = node.anyPlayer;
+        const player = node?.anyPlayer;
         if (!player) return;
 
-        const so5Scores = player.so5Scores || [];
+        const so5Scores = Array.isArray(player.so5Scores) ? player.so5Scores.filter(Boolean) : [];
         // Find if any SO5 score corresponds to a game that is live, or pick the first/latest
         const liveSo5 = so5Scores.find((s: any) => {
           const st = (s.game?.statusTyped || '').toLowerCase();
-          return st === 'live' || st === 'in_play' || st === 'ht';
+          return st === 'live' || st === 'in_play' || st === 'playing' || st === 'ht';
         }) || so5Scores[0];
 
         const upcomingGame = player.activeClub?.upcomingGames?.[0];
@@ -1067,9 +1069,9 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
           const statusUp = (upcomingClubGame.statusTyped || '').toLowerCase();
 
           // If either game is currently live, prioritize the live game
-          if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'ht') {
+          if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'playing' || statusSo5 === 'ht') {
             activeGame = latestSo5Game;
-          } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'ht') {
+          } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'playing' || statusUp === 'ht') {
             activeGame = upcomingClubGame;
           } else {
             // Compare time distance to now
@@ -1089,27 +1091,31 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
           activeGame = latestSo5Game || upcomingClubGame;
         }
 
-        const liveScore = (liveSo5?.score != null && liveSo5?.game?.id === activeGame?.id)
+        const isMatchingActiveGame = Boolean(activeGame?.id && liveSo5?.game?.id && liveSo5.game.id === activeGame.id);
+        const liveScore = (isMatchingActiveGame && liveSo5?.score != null)
           ? Math.round(Number(liveSo5.score) * 10) / 10
           : null;
-        const decisiveScore = (liveSo5?.decisiveScore?.totalScore != null && liveSo5?.game?.id === activeGame?.id)
+        const decisiveScore = (isMatchingActiveGame && liveSo5?.decisiveScore?.totalScore != null)
           ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10
           : null;
+        const so5ScoreId = isMatchingActiveGame ? (liveSo5?.id || null) : (liveSo5?.id || null);
 
         const scoreEntry = {
-          cardId: node.id,
-          cardSlug: node.slug,
-          playerSlug: player.slug,
-          displayName: player.displayName,
-          playingStatus: player.playingStatus,
+          cardId: node?.id || node?.slug || '',
+          cardSlug: node?.slug || '',
+          playerSlug: player?.slug || '',
+          displayName: player?.displayName || '',
+          playingStatus: player?.playingStatus || '',
           liveScore,
           decisiveScore,
+          so5ScoreId,
           clubPictureUrl: player.activeClub?.pictureUrl || '',
           so5ScoresHistory: so5Scores.map((s: any) => ({
-            score: s.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
-            decisiveScore: s.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
-            allAroundScore: s.allAroundStats?.totalScore != null ? Math.round(Number(s.allAroundStats.totalScore) * 10) / 10 : null,
-            game: s.game ? {
+            id: s?.id || null,
+            score: s?.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
+            decisiveScore: s?.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
+            allAroundScore: s?.allAroundStats?.totalScore != null ? Math.round(Number(s.allAroundStats.totalScore) * 10) / 10 : null,
+            game: s?.game ? {
               id: s.game.id,
               date: s.game.date,
               statusTyped: s.game.statusTyped,
@@ -1148,14 +1154,16 @@ app.get('/api/sorare/live-scoring', async (req, res) => {
           } : null,
         };
 
-        liveScoresMap[node.id] = scoreEntry;
-        if (node.id.startsWith('Card:')) {
-          liveScoresMap[node.id.replace('Card:', '')] = scoreEntry;
+        if (node?.id) {
+          liveScoresMap[node.id] = scoreEntry;
+          if (typeof node.id === 'string' && node.id.startsWith('Card:')) {
+            liveScoresMap[node.id.replace('Card:', '')] = scoreEntry;
+          }
         }
-        if (node.slug) {
+        if (node?.slug) {
           liveScoresMap[node.slug] = scoreEntry;
         }
-        if (player.slug) {
+        if (player?.slug) {
           liveScoresMap[player.slug] = scoreEntry;
         }
       });
@@ -1263,37 +1271,42 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
       const query = `
         query GetPlayersLiveScores($slugs: [String!]!) {
           players(slugs: $slugs) {
-            id
-            slug
-            displayName
-            playingStatus
-            so5Scores(last: 3) {
-              score
-              decisiveScore { totalScore }
-              allAroundStats { totalScore }
-              game {
+            ... on Player {
+              id
+              slug
+              displayName
+              playingStatus
+              so5Scores(last: 3) {
                 id
-                date
-                statusTyped
-                homeGoals
-                awayGoals
-                homeTeam { name pictureUrl }
-                awayTeam { name pictureUrl }
-                competition { name }
+                score
+                decisiveScore { totalScore }
+                allAroundStats { totalScore }
+                game {
+                  id
+                  date
+                  statusTyped
+                  minute
+                  homeGoals
+                  awayGoals
+                  homeTeam { name pictureUrl }
+                  awayTeam { name pictureUrl }
+                  competition { name }
+                }
               }
-            }
-            activeClub {
-              name
-              pictureUrl
-              upcomingGames(first: 1) {
-                id
-                date
-                statusTyped
-                homeGoals
-                awayGoals
-                homeTeam { name pictureUrl }
-                awayTeam { name pictureUrl }
-                competition { name }
+              activeClub {
+                name
+                pictureUrl
+                upcomingGames(first: 1) {
+                  id
+                  date
+                  statusTyped
+                  minute
+                  homeGoals
+                  awayGoals
+                  homeTeam { name pictureUrl }
+                  awayTeam { name pictureUrl }
+                  competition { name }
+                }
               }
             }
           }
@@ -1313,10 +1326,10 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
           playersData.forEach((player: any) => {
             if (!player) return;
 
-            const so5Scores = player.so5Scores || [];
+            const so5Scores = Array.isArray(player.so5Scores) ? player.so5Scores.filter(Boolean) : [];
             const liveSo5 = so5Scores.find((s: any) => {
               const st = (s.game?.statusTyped || '').toLowerCase();
-              return st === 'live' || st === 'in_play' || st === 'ht';
+              return st === 'live' || st === 'in_play' || st === 'playing' || st === 'ht';
             }) || so5Scores[0];
 
             const upcomingGame = player.activeClub?.upcomingGames?.[0];
@@ -1330,9 +1343,9 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               const statusSo5 = (latestSo5Game.statusTyped || '').toLowerCase();
               const statusUp = (upcomingClubGame.statusTyped || '').toLowerCase();
 
-              if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'ht') {
+              if (statusSo5 === 'live' || statusSo5 === 'in_play' || statusSo5 === 'playing' || statusSo5 === 'ht') {
                 activeGame = latestSo5Game;
-              } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'ht') {
+              } else if (statusUp === 'live' || statusUp === 'in_play' || statusUp === 'playing' || statusUp === 'ht') {
                 activeGame = upcomingClubGame;
               } else {
                 const tSo5 = latestSo5Game.date ? new Date(latestSo5Game.date).getTime() : Infinity;
@@ -1351,39 +1364,36 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               activeGame = latestSo5Game || upcomingClubGame;
             }
 
-            // COHERENCE FIX (audit): `liveSo5` falls back to `so5Scores[0]` (the player's most
-            // recently COMPLETED match, possibly from a past gameweek) whenever none of their
-            // last 3 SO5 scores are tagged as genuinely live/in_play/ht by Sorare — which is
-            // common, since SO5 scores are often only fully populated once a match is over. That
-            // stale score was previously shown as "Score en direct" even when it belonged to a
-            // different, older match than the one actually featured in the match badge
-            // (`activeGame`). We now only trust liveScore/decisiveScore when they genuinely
-            // belong to the same game as `activeGame` — otherwise we honestly show "no live score
-            // yet" (null) rather than a mismatched number from an old match.
-            const liveScore = (liveSo5?.score != null && liveSo5?.game?.id === activeGame?.id)
+            const isMatchingActiveGame = Boolean(activeGame?.id && liveSo5?.game?.id && liveSo5.game.id === activeGame.id);
+            const liveScore = (isMatchingActiveGame && liveSo5?.score != null)
               ? Math.round(Number(liveSo5.score) * 10) / 10
               : null;
-            const decisiveScore = (liveSo5?.decisiveScore?.totalScore != null && liveSo5?.game?.id === activeGame?.id)
+            const decisiveScore = (isMatchingActiveGame && liveSo5?.decisiveScore?.totalScore != null)
               ? Math.round(Number(liveSo5.decisiveScore.totalScore) * 10) / 10
               : null;
 
+            const so5ScoreId = isMatchingActiveGame ? (liveSo5?.id || null) : (liveSo5?.id || null);
+
             const scoreEntry = {
-              cardId: player.id,
-              cardSlug: player.slug,
-              playerSlug: player.slug,
-              displayName: player.displayName,
-              playingStatus: player.playingStatus,
+              cardId: player?.id || player?.slug || '',
+              cardSlug: player?.slug || '',
+              playerSlug: player?.slug || '',
+              displayName: player?.displayName || '',
+              playingStatus: player?.playingStatus || '',
               liveScore,
               decisiveScore,
+              so5ScoreId,
               clubPictureUrl: player.activeClub?.pictureUrl || '',
               so5ScoresHistory: so5Scores.map((s: any) => ({
-                score: s.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
-                decisiveScore: s.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
-                allAroundScore: s.allAroundStats?.totalScore != null ? Math.round(Number(s.allAroundStats.totalScore) * 10) / 10 : null,
-                game: s.game ? {
+                id: s?.id || null,
+                score: s?.score != null ? Math.round(Number(s.score) * 10) / 10 : null,
+                decisiveScore: s?.decisiveScore?.totalScore != null ? Math.round(Number(s.decisiveScore.totalScore) * 10) / 10 : null,
+                allAroundScore: s?.allAroundStats?.totalScore != null ? Math.round(Number(s.allAroundStats.totalScore) * 10) / 10 : null,
+                game: s?.game ? {
                   id: s.game.id,
                   date: s.game.date,
                   statusTyped: s.game.statusTyped,
+                  minute: s.game.minute ?? null,
                   homeGoals: s.game.homeGoals ?? 0,
                   awayGoals: s.game.awayGoals ?? 0,
                   homeTeam: s.game.homeTeam?.name || 'Équipe 1',
@@ -1397,6 +1407,7 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
                 id: activeGame.id,
                 date: activeGame.date,
                 statusTyped: activeGame.statusTyped,
+                minute: activeGame.minute ?? null,
                 homeGoals: activeGame.homeGoals ?? 0,
                 awayGoals: activeGame.awayGoals ?? 0,
                 homeTeam: activeGame.homeTeam?.name || 'Équipe 1',
@@ -1419,10 +1430,14 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               } : null,
             };
 
-            liveScoresMap[player.slug] = scoreEntry;
-            liveScoresMap[player.id] = scoreEntry;
-            if (player.id.startsWith('Card:')) {
-              liveScoresMap[player.id.replace('Card:', '')] = scoreEntry;
+            if (player?.slug) {
+              liveScoresMap[player.slug] = scoreEntry;
+            }
+            if (player?.id) {
+              liveScoresMap[player.id] = scoreEntry;
+              if (typeof player.id === 'string' && player.id.startsWith('Card:')) {
+                liveScoresMap[player.id.replace('Card:', '')] = scoreEntry;
+              }
             }
           });
         }
@@ -1432,7 +1447,10 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
 
       // If live fetching failed or returned empty, fallback to cached cards data
       if (Object.keys(liveScoresMap).length === 0) {
-        const matchedCards = cached?.cards ? cached.cards.filter(c => slugs.includes(c.slug) || slugs.includes(c.id)) : [];
+        const matchedCards = cached?.cards ? cached.cards.filter(c => {
+          const cPlayerSlug = c.playerSlug || (c.slug?.match(/^(.*?)-\d{4}-/) ? c.slug.match(/^(.*?)-\d{4}-/)?.[1] : c.slug);
+          return slugs.includes(cPlayerSlug) || slugs.includes(c.id) || slugs.includes(c.slug);
+        }) : [];
         matchedCards.forEach(c => {
           const latestMatch = c.scores?.recentMatches?.[0];
           if (latestMatch) {
@@ -1612,6 +1630,78 @@ function cleanSlug(input: string): string {
     .replace(/^-+|-+$/g, '') || 'thib-8';
 }
 
+
+// Targeted endpoint to get detailed stats for a single SO5 Score
+app.post('/api/sorare/player-stats', async (req, res) => {
+  const customApiKey = (req.body.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const { so5ScoreId } = req.body;
+  if (!so5ScoreId) {
+    return res.status(400).json({ success: false, error: 'so5ScoreId is required' });
+  }
+
+  const startTime = Date.now();
+  try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'TeamSorare-App/2.0',
+    };
+    if (customApiKey) {
+      headers['APIKEY'] = customApiKey;
+    }
+
+    const query = `
+      query GetSo5Score($id: ID!) {
+        node(id: $id) {
+          ... on So5Score {
+            score
+            decisiveScore { totalScore }
+            allAroundStats { category stat statValue points totalScore }
+            detailedScore { category stat statValue points totalScore }
+          }
+        }
+      }
+    `;
+
+    const responseResult = await fetchGraphQLWithRetry(
+      'https://api.sorare.com/graphql',
+      { query, variables: { id: so5ScoreId } },
+      headers,
+      1
+    );
+
+    const durationMs = Date.now() - startTime;
+    if (responseResult.ok && responseResult.data?.data?.node) {
+      const stats = responseResult.data.data.node;
+      
+      addApiLog({
+        description: `Sorare API: Player Stats (${so5ScoreId})`,
+        service: 'Sorare API',
+        method: 'POST /api/sorare/player-stats',
+        status: 'SUCCESS',
+        statusCode: 200,
+        durationMs,
+        requestSummary: { so5ScoreId },
+        responseSummary: { score: stats.score },
+      });
+      
+      return res.json({ success: true, stats });
+    } else {
+      addApiLog({
+        description: `Sorare API: Player Stats Error (${so5ScoreId})`,
+        service: 'Sorare API',
+        method: 'POST /api/sorare/player-stats',
+        status: 'ERROR',
+        statusCode: 500,
+        durationMs,
+        requestSummary: { so5ScoreId },
+        responseSummary: { error: responseResult.error },
+      });
+      return res.status(500).json({ success: false, error: responseResult.error });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 // Helper for fetching with exponential backoff & rate-limit (429) retry
 async function fetchGraphQLWithRetry(
   url: string,
