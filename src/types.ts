@@ -70,7 +70,9 @@ export interface RealMatchScoreDetail {
   isHome: boolean;
   competitionName?: string;
   matchDate?: string;
+  game?: any;
   minsPlayed?: number;
+  so5ScoreId?: string;
   isStarter?: boolean;
   isSub?: boolean;
   baseScore?: number; // 35 for Starter, 25 for Sub, 0 for DNP
@@ -130,6 +132,7 @@ export interface LiveGameWeekState {
 export interface SorareCard {
   id: string;
   slug: string;
+  playerSlug?: string;
   name?: string;
   displayName: string;
   matchName?: string;
@@ -327,6 +330,7 @@ export interface GameWeekInfo {
 export interface MatchPerformanceDetail {
   matchIndex: number; // 1 to 40 (40 being most recent)
   matchLabel: string; // e.g. "Match 40"
+  game?: any;
   totalScore: number; // 0 to 100
   isDNP: boolean; // Did Not Play (0 min, bench / injured / out)
   isStarter: boolean; // Titulaire (Base 35 pts)
@@ -336,6 +340,7 @@ export interface MatchPerformanceDetail {
   opponent: string;
   isHome: boolean;
   result: string;
+  so5ScoreId?: string;
   
   // Green Decisive Score Part (Vert)
   decisiveScore: number; // Positive decisive level score (60, 70, 80, 90, 100) or 0 if no decisive action
@@ -428,3 +433,152 @@ export interface ChatMessage {
   suggestedActions?: string[];
   referencedPlayerIds?: string[];
 }
+
+export type OfficialLineupStatus = 
+  | 'CONFIRMED_STARTER' 
+  | 'CONFIRMED_BENCH' 
+  | 'CONFIRMED_OUT' 
+  | 'PENDING' 
+  | 'NO_MATCH';
+
+export interface StartingXIPlayerInfo {
+  playerSlug: string;
+  displayName: string;
+  clubName?: string;
+  status: PlayingStatus | string;
+  lineupStatus: OfficialLineupStatus;
+  isStarter: boolean;
+  isLineupAnnounced: boolean;
+  minutesUntilKickoff: number | null;
+  kickoffDate: string | null;
+  matchSummary: string;
+  opponent?: string;
+  gameId?: string;
+  gameStatus?: string;
+}
+
+export interface NonStarterAlert {
+  id: string;
+  lineupId: string;
+  lineupName: string;
+  slot: SlotPosition;
+  slotLabel: string;
+  player: SorareCard;
+  issueType: 'BENCH' | 'OUT' | 'DNP' | 'INJURY' | 'SUSPENSION';
+  statusLabel: string;
+  minutesUntilKickoff: number | null;
+  kickoffDate: string | null;
+  matchSummary: string;
+  message: string;
+  severity: 'CRITICAL' | 'WARNING';
+  detectedAt: string;
+}
+
+export interface AppLogEntry {
+  id: string;
+  timestamp: string;
+  description: string;
+  service: 'Sorare API' | 'Gemini AI' | 'Application Error' | 'Lineup Alert' | 'System & Sync' | 'Odds Engine';
+  method: string;
+  status: 'SUCCESS' | 'ERROR' | 'RATE_LIMITED' | 'INFO' | 'WARNING';
+  severity: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
+  statusCode: number;
+  durationMs: number;
+  requestSummary: any;
+  responseSummary: any;
+  error?: string;
+  component?: string;
+  gameweek?: number;
+}
+
+export interface PlayerEvaluationRecord {
+  cardId: string;
+  playerSlug: string;
+  displayName: string;
+  positionCode: PositionCode;
+  clubName: string;
+  opponent: string;
+  isHome: boolean;
+  gameWeek: number;
+  matchDate?: string;
+  
+  // Forecast values (RAW, NO CARD BONUS)
+  projectedScoreRaw: number;
+  projectedStarter: boolean;
+  starterConfidence: number;
+  projectedTeamWinProb: number;
+  projectedTeamXG: number;
+  projectedCleanSheetProb: number;
+  
+  // Actual values (REAL OUTCOME)
+  actualScoreRaw: number;
+  actualStarted: boolean;
+  actualMinsPlayed: number;
+  actualTeamWon: boolean;
+  actualTeamDraw: boolean;
+  actualTeamGoals: number;
+  actualCleanSheet: boolean;
+  
+  // Evaluation delta
+  scoreDelta: number; // actual - projected
+  absoluteScoreError: number; // |actual - projected|
+  isWithin5Pts: boolean;
+  isWithin3Pts: boolean;
+  isWithin10Pts: boolean;
+  isStarterCorrect: boolean;
+  isWinPredictionCorrect: boolean;
+  isXGPredictionCorrect: boolean; // |xG - actual goals| <= 0.75
+  isCleanSheetCorrect: boolean;
+}
+
+export interface GameWeekAccuracyStats {
+  gameWeek: number;
+  gameWeekLabel: string;
+  totalEvaluations: number;
+  totalMatches: number;
+  
+  // User Requested Key Metrics:
+  // 1. % de bon score projeté (à 5 points près)
+  percentWithin5Pts: number;
+  percentWithin3Pts: number;
+  percentWithin10Pts: number;
+  
+  // 2. % de bonne prédiction de titularisation
+  starterPredictionAccuracy: number;
+  startersCorrectCount: number;
+  startersEvaluatedCount: number;
+  
+  // 3. Différence moyenne entre score projeté et vrai score
+  meanAbsoluteError: number; // MAE (points)
+  meanErrorBias: number; // Bias (+ = overpredicted, - = underpredicted)
+  rmse: number; // Root Mean Square Error
+  
+  // 4. % de bonne prédiction de victoire du match
+  matchWinPredictionAccuracy: number;
+  matchesWonPredictedCorrectly: number;
+  totalTeamMatchesEvaluated: number;
+  
+  // 5. % de bonne prévision de xG dans le match
+  xgPredictionAccuracy: number;
+  meanXGError: number;
+  
+  // Other valuable stats
+  cleanSheetPredictionAccuracy: number;
+  positionBreakdown: {
+    GK: { count: number; mae: number; percentWithin5Pts: number; starterAcc: number; cleanSheetAcc: number };
+    DEF: { count: number; mae: number; percentWithin5Pts: number; starterAcc: number; cleanSheetAcc: number };
+    MID: { count: number; mae: number; percentWithin5Pts: number; starterAcc: number };
+    FWD: { count: number; mae: number; percentWithin5Pts: number; starterAcc: number; decisiveRate: number };
+  };
+  errorDistribution: {
+    exactOrSuperb: number; // 0 - 3 pts
+    within5: number;       // 3.1 - 5 pts
+    close: number;          // 5.1 - 10 pts
+    moderate: number;       // 10.1 - 20 pts
+    highError: number;      // > 20 pts (surprises / cartons / blessures en match)
+  };
+  topReliablePlayers: PlayerEvaluationRecord[];
+  topSurprisesOrOutliers: PlayerEvaluationRecord[];
+  records: PlayerEvaluationRecord[];
+}
+

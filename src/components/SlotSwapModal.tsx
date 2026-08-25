@@ -17,7 +17,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [enforceDateFilter, setEnforceDateFilter] = useState(true);
-  const [hideOpponents, setHideOpponents] = useState(false);
+  const [hideOpponents, setHideOpponents] = useState(true);
   const [prioritizeTeammates, setPrioritizeTeammates] = useState(true);
   const [allowAllPositionsOnSearch, setAllowAllPositionsOnSearch] = useState(false);
   
@@ -32,7 +32,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
   const [minProjectedScore, setMinProjectedScore] = useState(0);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [extraPositionFilter, setExtraPositionFilter] = useState<string>('ALL');
-  const [sortBy, setSortBy] = useState<'PROJ_DESC' | 'PROJ_ASC' | 'AAS_L15_DESC' | 'DS_L15_DESC' | 'L5_DESC' | 'L15_DESC'>('PROJ_DESC');
+  const [sortBy, setSortBy] = useState<'PROJ_DESC' | 'PROJ_ASC' | 'BONUS_DESC' | 'AAS_L15_DESC' | 'DS_L15_DESC' | 'L5_DESC' | 'L15_DESC'>('PROJ_DESC');
 
   if (!slot) return null;
 
@@ -140,23 +140,35 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
   
       return true;
     }).sort((a, b) => {
-      // Si le tri est par score projeté et que la priorité coéquipiers est activée
-      if (prioritizeTeammates && sortBy === 'PROJ_DESC') {
-        const aHasTeammate = a.teammates.length > 0;
-        const bHasTeammate = b.teammates.length > 0;
+      // Si le tri est par score projeté
+      if (sortBy === 'PROJ_DESC') {
         const scoreDiff = Math.abs(b.proj.projectedScore - a.proj.projectedScore);
 
-        // Si les deux joueurs sont proches (diff <= 4 pts), privilégier celui qui a des coéquipiers
-        if (scoreDiff <= 4.0 && (aHasTeammate || bHasTeammate)) {
-          if (aHasTeammate && !bHasTeammate) return -1;
-          if (!aHasTeammate && bHasTeammate) return 1;
-          if (a.teammates.length !== b.teammates.length) return b.teammates.length - a.teammates.length;
+        // Si les deux joueurs sont proches (diff <= 4 pts)
+        if (scoreDiff <= 4.0) {
+          if (prioritizeTeammates) {
+            const aHasTeammate = a.teammates.length > 0;
+            const bHasTeammate = b.teammates.length > 0;
+            
+            if (aHasTeammate || bHasTeammate) {
+              if (aHasTeammate && !bHasTeammate) return -1;
+              if (!aHasTeammate && bHasTeammate) return 1;
+              if (a.teammates.length !== b.teammates.length) return b.teammates.length - a.teammates.length;
+            }
+          }
+          
+          // Si on n'a pas pu les départager par les coéquipiers (ou option désactivée), on utilise le bonus
+          const aBonus = getCardTotalBonus(a.card);
+          const bBonus = getCardTotalBonus(b.card);
+          if (aBonus !== bBonus) {
+             return bBonus - aBonus;
+          }
         }
       }
-
       switch (sortBy) {
         case 'PROJ_DESC': return b.proj.projectedScore - a.proj.projectedScore;
         case 'PROJ_ASC': return a.proj.projectedScore - b.proj.projectedScore;
+        case 'BONUS_DESC': return getCardTotalBonus(b.card) - getCardTotalBonus(a.card);
         case 'AAS_L15_DESC': return getCardAasL15(b.card) - getCardAasL15(a.card);
         case 'DS_L15_DESC': return getCardDsL15(b.card) - getCardDsL15(a.card);
         case 'L5_DESC': return (b.card.scores?.l5 || 0) - (a.card.scores?.l5 || 0);
@@ -372,6 +384,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
               <label className="block text-[10px] font-bold text-slate-400 mb-1">Trier par</label>
               <select value={sortBy} onChange={e => setSortBy(e.target.value as any)} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:border-emerald-500 outline-none">
                 <option value="PROJ_DESC">Score Projeté</option>
+                <option value="BONUS_DESC">Bonus Carte (+%)</option>
                 <option value="AAS_L15_DESC">AAS L15</option>
                 <option value="DS_L15_DESC">DS L15</option>
                 <option value="L5_DESC">Forme L5</option>
@@ -426,7 +439,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
               )}
             </div>
           ) : (
-            searchedCardsInfo.map(({ card, proj, opposingPlayer, teammates }) => {
+            searchedCardsInfo.map(({ card, proj, bonus, opposingPlayer, teammates }) => {
               const posBadge = formatPositionBadge(card.positionCode);
               const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
               const isNotPlaying = card.status === 'NOT_PLAYING' || card.injuryStatus === 'INJURED';
@@ -465,6 +478,16 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
                         </span>
                         <span className="text-xs font-bold text-white">{card.displayName}</span>
                         
+                        {/* Card Bonus & Rarity badge */}
+                        <span className="rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[9px] font-black px-1.5 py-0.5" title={`Bonus intrinsèque : +${bonus}%`}>
+                          +{bonus}% Bonus
+                        </span>
+                        {card.seasonYear && (
+                          <span className="rounded bg-slate-800 text-slate-400 text-[9px] font-bold px-1.5 py-0.5 border border-slate-700">
+                            {card.rarity?.toUpperCase()} {card.seasonYear}
+                          </span>
+                        )}
+
                         {/* Stacking synergy badge */}
                         {isTeammate && (
                           <span className="rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[9px] font-black px-1.5 py-0.5 flex items-center gap-1">

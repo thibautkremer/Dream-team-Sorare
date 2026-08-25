@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download } from 'lucide-react';
-import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters } from '../types';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download, BellRing, Radio } from 'lucide-react';
+import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters, NonStarterAlert, StartingXIPlayerInfo } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
 
@@ -21,6 +21,9 @@ interface PitchViewProps {
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
   onImportSorareLineups?: () => void;
+  alerts?: NonStarterAlert[];
+  playerStatusMap?: Record<string, StartingXIPlayerInfo>;
+  onOpenStartingXIMonitor?: () => void;
 }
 
 export const PitchView: React.FC<PitchViewProps> = ({
@@ -40,6 +43,9 @@ export const PitchView: React.FC<PitchViewProps> = ({
   onExportLineup,
   onToggleLockCompo,
   onImportSorareLineups,
+  alerts = [],
+  playerStatusMap = {},
+  onOpenStartingXIMonitor,
 }) => {
   // Accordion state: filters open by default, can be toggled
   const [isFiltersOpen, setIsFiltersOpen] = useState(true);
@@ -101,8 +107,9 @@ export const PitchView: React.FC<PitchViewProps> = ({
       getProj(slots.extra)
     );
 
-    const captainScore = getProj(playerObj);
-    const captainBonus = Math.round((captainScore * 0.20) * 10) / 10;
+    const getBaseProj = (c: SorareCard | null) => c ? calculatePlayerProjectedScore(c, targetLineup.strategy).baseProjectedScore : 0;
+    const captainBaseScore = getBaseProj(playerObj);
+    const captainBonus = Math.round((captainBaseScore * 0.20) * 10) / 10;
 
     const updatedLineup: Lineup = {
       ...targetLineup,
@@ -142,7 +149,9 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
     const cardBreakdown = calculatePlayerProjectedScore(card, targetLineup.strategy, cards);
     const projected = cardBreakdown.projectedScore;
-    const bonusIfCaptain = isCaptain ? Math.round((projected * 0.20) * 10) / 10 : 0;
+    const bonusIfCaptain = isCaptain ? Math.round((cardBreakdown.baseProjectedScore * 0.20) * 10) / 10 : 0;
+    const totalBonusPct = Math.round((cardBreakdown.cardBonusPercentage + (isCaptain ? 20 : 0)) * 10) / 10;
+    const totalBonusScore = Math.round((cardBreakdown.cardBonusScore + bonusIfCaptain) * 10) / 10;
     const winProb = getPlayerWinProbability(card.upcomingFixture);
     const recentStats = getPlayerRecentMatchAnalysis(card);
     const injuryInfo = formatInjuryBadge(card.injuryStatus);
@@ -173,6 +182,11 @@ export const PitchView: React.FC<PitchViewProps> = ({
             <span className="bg-amber-500/10 text-amber-400 font-extrabold text-[9px] px-1 rounded border border-amber-500/20 shrink-0">
               {getPlayerStars(card)}★
             </span>
+            {cardBreakdown.cardBonusPercentage > 0 && (
+              <span className="bg-amber-500/15 text-amber-300 font-black text-[9px] px-1 rounded border border-amber-500/30 shrink-0" title={`Bonus intrinsèque de la carte : +${cardBreakdown.cardBonusPercentage}%`}>
+                +{cardBreakdown.cardBonusPercentage}%
+              </span>
+            )}
             <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
               {slotKey === 'extra' ? 'EXTRA' : slotLabel}
             </span>
@@ -240,17 +254,34 @@ export const PitchView: React.FC<PitchViewProps> = ({
           <div className="rounded-xl bg-slate-950/80 p-2 border border-slate-800/80">
             <div className="space-y-0.5 text-[10px]">
               <div className="flex items-center justify-between text-slate-400">
-                <span>Base:</span>
+                <span>Base :</span>
                 <span className="font-semibold text-slate-200">{cardBreakdown.baseProjectedScore} ({cardBreakdown.projectedFloor}-{cardBreakdown.projectedCeiling}) pts</span>
               </div>
-              <div className="flex items-center justify-between text-slate-400">
-                <span>Bonus (+{cardBreakdown.cardBonusPercentage}%):</span>
-                <span className="font-bold text-amber-300">+{cardBreakdown.cardBonusScore} pts</span>
-              </div>
+              {isCaptain ? (
+                <>
+                  <div className="flex items-center justify-between text-slate-400 text-[9.5px]">
+                    <span className="text-slate-400">Bonus Carte (+{cardBreakdown.cardBonusPercentage}%) :</span>
+                    <span className="font-semibold text-amber-300">+{cardBreakdown.cardBonusScore} pts</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-400 text-[9.5px]">
+                    <span className="text-emerald-400 font-semibold">Bonus Cap (+20%) :</span>
+                    <span className="font-semibold text-emerald-400">+{bonusIfCaptain} pts</span>
+                  </div>
+                  <div className="flex items-center justify-between font-bold border-t border-slate-800/60 pt-0.5 mt-0.5">
+                    <span className="text-amber-300">Total Bonus (+{totalBonusPct}%) :</span>
+                    <span className="font-bold text-amber-300">+{totalBonusScore} pts</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Bonus Carte (+{cardBreakdown.cardBonusPercentage}%) :</span>
+                  <span className="font-bold text-amber-300">+{cardBreakdown.cardBonusScore} pts</span>
+                </div>
+              )}
               <div className="flex items-center justify-between font-black border-t border-slate-800/80 pt-1 mt-1">
-                <span className="text-slate-300">Total:</span>
-                <span className="text-emerald-400 text-xs">
-                  {isCaptain ? Math.round((projected + bonusIfCaptain) * 10) / 10 : projected} pts
+                <span className="text-slate-300">Total Projeté :</span>
+                <span className="text-emerald-400 text-xs font-black">
+                  {Math.round((cardBreakdown.baseProjectedScore + totalBonusScore) * 10) / 10} pts
                 </span>
               </div>
             </div>
@@ -306,6 +337,62 @@ export const PitchView: React.FC<PitchViewProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Official Starting Lineup Badge (1h before kickoff) */}
+            {(() => {
+              const pSlug = (card.playerSlug || card.slug || card.displayName || '').toLowerCase();
+              const sInfo = playerStatusMap ? Object.values(playerStatusMap).find(
+                i => i.playerSlug.toLowerCase() === pSlug || i.displayName.toLowerCase() === card.displayName.toLowerCase()
+              ) : null;
+
+              if (!sInfo) return null;
+
+              if (sInfo.lineupStatus === 'CONFIRMED_BENCH') {
+                return (
+                  <div className="mt-1 flex items-center justify-between text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300 animate-pulse">
+                    <span className="flex items-center gap-1">
+                      <AlertTriangle className="h-2.5 w-2.5 text-rose-400" />
+                      <span>REMPLAÇANT</span>
+                    </span>
+                    <span className="text-[8px] text-rose-300 uppercase">Compo off.</span>
+                  </div>
+                );
+              }
+              if (sInfo.lineupStatus === 'CONFIRMED_OUT') {
+                return (
+                  <div className="mt-1 flex items-center justify-between text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300">
+                    <span className="flex items-center gap-1">
+                      <AlertCircle className="h-2.5 w-2.5 text-rose-400" />
+                      <span>HORS GROUPE</span>
+                    </span>
+                    <span className="text-[8px] text-rose-300 uppercase">Compo off.</span>
+                  </div>
+                );
+              }
+              if (sInfo.lineupStatus === 'CONFIRMED_STARTER') {
+                return (
+                  <div className="mt-1 flex items-center justify-between text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-500/60 text-emerald-300">
+                    <span className="flex items-center gap-1">
+                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400" />
+                      <span>TITULAIRE</span>
+                    </span>
+                    <span className="text-[8px] text-emerald-400 uppercase">Compo off. 1h</span>
+                  </div>
+                );
+              }
+              if (sInfo.minutesUntilKickoff !== null && sInfo.minutesUntilKickoff > 0) {
+                const minToOfficial = Math.max(0, sInfo.minutesUntilKickoff - 60);
+                return (
+                  <div className="mt-1 flex items-center justify-between text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">
+                    <span>Compo officielle :</span>
+                    <span className="font-bold text-slate-300">
+                      {minToOfficial === 0 ? 'Imminente' : `dans ${minToOfficial} min`}
+                    </span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           {/* Swap Player Action */}
@@ -326,15 +413,38 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
   // Helper to render the full football pitch for a given lineup
   const renderPitchContainer = (targetLineup: Lineup, compoIndex: number) => {
+    // Calcul précis du score brut et de la contribution totale des bonus
+    const slotsArr = (['gk', 'def', 'mid', 'fwd', 'extra'] as const)
+      .map(slotKey => targetLineup.slots[slotKey])
+      .filter((c): c is SorareCard => c !== null);
+
+    const breakdowns = slotsArr.map(c => calculatePlayerProjectedScore(c, targetLineup.strategy, cards));
+    const rawBaseSum = Math.round(breakdowns.reduce((acc, b) => acc + b.baseProjectedScore, 0) * 10) / 10;
+    const cardBonusSum = Math.round(breakdowns.reduce((acc, b) => acc + b.cardBonusScore, 0) * 10) / 10;
+    
+    const captainCard = targetLineup.slots[targetLineup.captainSlot];
+    const captainBreakdown = captainCard ? calculatePlayerProjectedScore(captainCard, targetLineup.strategy, cards) : null;
+    const captainBonusPoints = captainBreakdown ? Math.round((captainBreakdown.baseProjectedScore * 0.20) * 10) / 10 : 0;
+    const totalBonusSum = Math.round((cardBonusSum + captainBonusPoints) * 10) / 10;
+
     return (
       <div className="relative mt-4 rounded-3xl border-2 border-emerald-800/50 bg-gradient-to-b from-emerald-950 via-emerald-900 to-slate-950 p-4 sm:p-8 shadow-2xl overflow-hidden transition-all duration-300">
         {/* Pitch Top Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-emerald-800/40">
           <div className="flex items-center gap-2">
             <span className="flex h-3 w-3 rounded-full bg-emerald-400 animate-pulse"></span>
-            <h4 className="text-sm font-black text-emerald-300 uppercase tracking-wider">
-              Terrain Tactique - {targetLineup.name}
-            </h4>
+            <div>
+              <h4 className="text-sm font-black text-emerald-300 uppercase tracking-wider">
+                Terrain Tactique - {targetLineup.name}
+              </h4>
+              <div className="flex items-center gap-2 text-[11px] text-slate-300 mt-0.5">
+                <span>Base : <strong className="text-slate-200">{rawBaseSum} pts</strong></span>
+                <span>•</span>
+                <span className="text-amber-300 font-bold bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20">
+                  Bonus Cartes & Cap : +{totalBonusSum} pts
+                </span>
+              </div>
+            </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             {/* Mobile View Mode Toggle */}
@@ -346,7 +456,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
               <span>{mobileCompactView ? '⚽ Formation' : '📋 Vue Compacte'}</span>
             </button>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 bg-slate-950/80 px-3 py-1.5 rounded-xl border border-emerald-500/30">
               <span className="text-xs text-slate-300">Total :</span>
               <span className="text-base font-black text-emerald-400">
                 {targetLineup.projectedTotalWithCaptain} pts
@@ -428,16 +538,21 @@ export const PitchView: React.FC<PitchViewProps> = ({
                           <span className="text-xs italic text-slate-500 font-semibold">Slot vide — Aucun joueur</span>
                         )}
                       </div>
-                      {card && (
-                        <div className="text-right pl-2">
-                          <span className="text-xs font-black text-emerald-400 block">
-                            {isCap 
-                              ? Math.round(calculatePlayerProjectedScore(card, targetLineup.strategy).projectedScore * 1.2 * 10) / 10 
-                              : calculatePlayerProjectedScore(card, targetLineup.strategy).projectedScore} pts
-                          </span>
-                          <span className="text-[9px] text-slate-400 block">Projeté</span>
-                        </div>
-                      )}
+                      {card && (() => {
+                        const breakdown = calculatePlayerProjectedScore(card, targetLineup.strategy, cards);
+                        const bonusIfCap = isCap ? Math.round((breakdown.baseProjectedScore * 0.20) * 10) / 10 : 0;
+                        const finalPScore = Math.round((breakdown.projectedScore + bonusIfCap) * 10) / 10;
+                        return (
+                          <div className="text-right pl-2">
+                            <span className="text-xs font-black text-emerald-400 block">
+                              {finalPScore} pts
+                            </span>
+                            <span className="text-[9px] text-slate-400 block">
+                              {isCap ? 'Projeté (avec Cap)' : 'Projeté'}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
@@ -528,6 +643,62 @@ export const PitchView: React.FC<PitchViewProps> = ({
           >
             Fermer
           </button>
+        </div>
+      )}
+
+      {/* Urgent Non-Starter Lineup Alert Banner */}
+      {alerts && alerts.length > 0 && (
+        <div className="rounded-2xl border-2 border-rose-500/80 bg-gradient-to-r from-rose-950/90 via-slate-900/90 to-rose-950/90 p-4 sm:p-5 shadow-2xl shadow-rose-950/50">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-white font-black shadow-lg shadow-rose-500/40">
+                <AlertTriangle className="h-6 w-6 animate-bounce" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-black uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+                    <Radio className="h-3 w-3 animate-ping text-rose-400" />
+                    Alerte Compositions Officielles (1h avant coup d'envoi)
+                  </span>
+                  <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-black text-rose-300 border border-rose-500/40">
+                    {alerts.length} non-titulaire{alerts.length > 1 ? 's' : ''} détecté{alerts.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm text-white font-bold mt-1">
+                  {alerts[0].message}
+                </p>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  Ce joueur est confirmé remplaçant ou absent. Remplacez-le par un titulaire avant le coup d'envoi pour éviter un DNP (0 pt).
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-center shrink-0 flex-wrap">
+              <button
+                onClick={() => {
+                  const firstAlert = alerts[0];
+                  const targetIdx = compositions.findIndex(c => c.id === firstAlert.lineupId || c.name === firstAlert.lineupName);
+                  if (targetIdx >= 0 && targetIdx !== selectedCompoIndex) {
+                    onSelectComposition(targetIdx);
+                  }
+                  const slotKey = firstAlert.slot.toLowerCase() as 'gk' | 'def' | 'mid' | 'fwd' | 'extra';
+                  onSelectSlotToSwap(slotKey);
+                }}
+                className="flex items-center gap-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 px-4 py-2.5 text-xs font-black text-white transition shadow-lg shadow-rose-950/60 cursor-pointer"
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+                <span>Remplacer immédiatement</span>
+              </button>
+              {onOpenStartingXIMonitor && (
+                <button
+                  onClick={onOpenStartingXIMonitor}
+                  className="rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 px-3.5 py-2.5 text-xs font-bold text-slate-200 transition"
+                >
+                  Toutes les compos ({alerts.length})
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -937,13 +1108,15 @@ export const PitchView: React.FC<PitchViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Right Side: 5 Player Thumbnails (Enlarged & Showing Projected Score) */}
+                  {/* Right Side: 5 Player Thumbnails (Enlarged & Showing Projected Score + Card Bonus Badge) */}
                   <div className="flex items-start justify-between sm:justify-end gap-2 sm:gap-3 border-t md:border-t-0 border-slate-800/80 pt-3 md:pt-0">
                     {(['gk', 'def', 'mid', 'fwd', 'extra'] as const).map((slotKey) => {
                       const player = comp.slots[slotKey];
-                      const pScore = player ? calculatePlayerProjectedScore(player, comp.strategy).projectedScore : 0;
+                      const breakdown = player ? calculatePlayerProjectedScore(player, comp.strategy, cards) : null;
                       const isCap = comp.captainSlot === slotKey;
-                      const finalScore = isCap ? Math.round(pScore * 1.2 * 10) / 10 : pScore;
+                      const bonusIfCap = isCap && breakdown ? Math.round((breakdown.baseProjectedScore * 0.20) * 10) / 10 : 0;
+                      const finalScore = breakdown ? Math.round((breakdown.projectedScore + bonusIfCap) * 10) / 10 : 0;
+                      const cardBonus = player ? getCardTotalBonus(player) : 0;
                       const posCode = player?.positionCode || (slotKey === 'extra' ? 'EXTRA' : slotKey.toUpperCase());
                       const posBadge = formatPositionBadge(posCode as any);
 
@@ -974,9 +1147,16 @@ export const PitchView: React.FC<PitchViewProps> = ({
                               {posCode}
                             </span>
 
+                            {/* Card Bonus Pill */}
+                            {player && (
+                              <span className="absolute bottom-0.5 left-0.5 text-[8px] font-black px-1 py-0.2 rounded bg-amber-500/90 text-slate-950 shadow">
+                                +{cardBonus}%
+                              </span>
+                            )}
+
                             {/* Crown if Captain */}
                             {isCap && (
-                              <div className="absolute bottom-0.5 right-0.5 bg-emerald-400 text-slate-950 p-0.5 rounded-full shadow">
+                              <div className="absolute top-0.5 right-0.5 bg-emerald-400 text-slate-950 p-0.5 rounded-full shadow">
                                 <Crown className="h-2.5 w-2.5" />
                               </div>
                             )}

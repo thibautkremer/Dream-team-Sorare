@@ -1491,67 +1491,94 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
 
                 </div>
 
-                {/* Expandable Button for SO5 Match History */}
-                {sorareLive?.so5ScoresHistory && sorareLive.so5ScoresHistory.length > 0 && (
-                  <div className="mt-3 pt-2 border-t border-slate-800/60 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedCardId(expandedCardId === card.id ? null : card.id);
-                      }}
-                      className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 hover:text-emerald-300 bg-slate-950/80 hover:bg-slate-950 border border-emerald-500/30 px-2.5 py-1 rounded-xl transition"
-                    >
-                      <Activity className="h-3 w-3" />
-                      <span>{expandedCardId === card.id ? 'Masquer l\'historique SO5' : `Voir l'historique SO5 (${sorareLive.so5ScoresHistory.length} derniers matchs)`}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedDetailCard({
-                          card,
-                          sorareLive,
-                          isCaptain: isCaptainSomewhere,
-                        });
-                      }}
-                      className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1"
-                    >
-                      <span>Détails & stats</span>
-                      <span>↗</span>
-                    </button>
-                  </div>
-                )}
+                {/* Expandable Button for SO5 Match History (Up to 3 last matches) */}
+                {(() => {
+                  const rawHistory = sorareLive?.so5ScoresHistory && sorareLive.so5ScoresHistory.length > 0 
+                    ? sorareLive.so5ScoresHistory.slice(0, 3)
+                    : (card.scores?.recentMatches && card.scores.recentMatches.length > 0 
+                        ? card.scores.recentMatches.slice(0, 3).map((m: any) => ({
+                            id: m.id || null,
+                            score: m.score != null ? Math.round(Number(m.score) * 10) / 10 : null,
+                            decisiveScore: m.decisiveScore != null ? Math.round(Number(m.decisiveScore) * 10) / 10 : null,
+                            allAroundScore: m.allAroundScore != null ? Math.round(Number(m.allAroundScore) * 10) / 10 : (m.score != null && m.decisiveScore != null ? Math.max(0, m.score - m.decisiveScore) : null),
+                            game: {
+                              date: m.date,
+                              homeTeam: m.homeTeam || card.club?.name || 'Équipe 1',
+                              homeTeamPicture: '',
+                              awayTeam: m.opponent || 'Équipe 2',
+                              awayTeamPicture: '',
+                              homeGoals: m.homeGoals ?? 0,
+                              awayGoals: m.awayGoals ?? 0,
+                              competition: m.competitionName || card.league || 'SO5',
+                            }
+                          }))
+                        : []);
 
-                {/* Expanded SO5 Match History Panel */}
-                {expandedCardId === card.id && sorareLive?.so5ScoresHistory && (
-                  <div onClick={(e) => e.stopPropagation()} className="mt-3 pt-3 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-2.5 animate-fadeIn">
-                    {sorareLive.so5ScoresHistory.map((s: any, idx: number) => (
-                      <div key={idx} className="bg-slate-950/90 border border-slate-800 hover:border-slate-700 rounded-xl p-3 text-xs transition">
-                        <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1.5">
-                          <span className="truncate max-w-[120px] font-bold text-slate-300">{s.game?.competition || 'SO5'}</span>
-                          <span>{s.game?.date ? new Date(s.game.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : ''}</span>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-1 text-[11px] font-bold text-white truncate max-w-[140px]">
-                            {s.game?.homeTeamPicture && <img src={s.game.homeTeamPicture} alt="" className="h-3.5 w-3.5 object-contain flex-shrink-0" />}
-                            <span className="truncate">{s.game?.homeTeam}</span>
-                            <span className="text-emerald-400 font-black px-1 py-0.2 bg-emerald-500/10 rounded">{s.game?.homeGoals}-{s.game?.awayGoals}</span>
-                            <span className="truncate">{s.game?.awayTeam}</span>
-                            {s.game?.awayTeamPicture && <img src={s.game.awayTeamPicture} alt="" className="h-3.5 w-3.5 object-contain flex-shrink-0" />}
-                          </div>
-                          <span className="text-sm sm:text-base font-black text-emerald-400 ml-1 flex-shrink-0">
-                            {s.score ?? 0} <span className="text-[9px] font-normal text-slate-400">pts</span>
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1.5 border-t border-slate-900">
-                          <span>Décisif: <strong className="text-amber-400 font-bold">{s.decisiveScore ?? 0}</strong></span>
-                          <span>All-Around: <strong className="text-blue-400 font-bold">{s.allAroundScore ?? 0}</strong></span>
-                        </div>
+                  if (rawHistory.length === 0) return null;
+
+                  return (
+                    <>
+                      <div className="mt-3 pt-2 border-t border-slate-800/60 flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedCardId(expandedCardId === card.id ? null : card.id);
+                          }}
+                          className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 hover:text-emerald-300 bg-slate-950/80 hover:bg-slate-950 border border-emerald-500/30 px-2.5 py-1 rounded-xl transition"
+                        >
+                          <Activity className="h-3 w-3" />
+                          <span>{expandedCardId === card.id ? 'Masquer l\'historique SO5' : `Voir l'historique SO5 (${rawHistory.length} derniers matchs)`}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDetailCard({
+                              card,
+                              sorareLive,
+                              isCaptain: isCaptainSomewhere,
+                            });
+                          }}
+                          className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1"
+                        >
+                          <span>Détails & stats</span>
+                          <span>↗</span>
+                        </button>
                       </div>
-                    ))}
-                  </div>
-                )}
+
+                      {/* Expanded SO5 Match History Panel (3 last matches) */}
+                      {expandedCardId === card.id && (
+                        <div onClick={(e) => e.stopPropagation()} className="mt-3 pt-3 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-2.5 animate-fadeIn">
+                          {rawHistory.map((s: any, idx: number) => (
+                            <div key={idx} className="bg-slate-950/90 border border-slate-800 hover:border-slate-700 rounded-xl p-3 text-xs transition">
+                              <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1.5">
+                                <span className="truncate max-w-[120px] font-bold text-slate-300">{s.game?.competition || 'SO5'}</span>
+                                <span>{s.game?.date ? new Date(s.game.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : ''}</span>
+                              </div>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-1 text-[11px] font-bold text-white truncate max-w-[140px]">
+                                  {s.game?.homeTeamPicture && <img src={s.game.homeTeamPicture} alt="" className="h-3.5 w-3.5 object-contain flex-shrink-0" />}
+                                  <span className="truncate">{s.game?.homeTeam}</span>
+                                  <span className="text-emerald-400 font-black px-1 py-0.2 bg-emerald-500/10 rounded">{s.game?.homeGoals ?? 0}-{s.game?.awayGoals ?? 0}</span>
+                                  <span className="truncate">{s.game?.awayTeam}</span>
+                                  {s.game?.awayTeamPicture && <img src={s.game.awayTeamPicture} alt="" className="h-3.5 w-3.5 object-contain flex-shrink-0" />}
+                                </div>
+                                <span className="text-sm sm:text-base font-black text-emerald-400 ml-1 flex-shrink-0">
+                                  {s.score ?? 0} <span className="text-[9px] font-normal text-slate-400">pts</span>
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1.5 border-t border-slate-900">
+                                <span>Décisif: <strong className="text-amber-400 font-bold">{s.decisiveScore ?? 0}</strong></span>
+                                <span>All-Around: <strong className="text-blue-400 font-bold">{s.allAroundScore ?? 0}</strong></span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             );
           })

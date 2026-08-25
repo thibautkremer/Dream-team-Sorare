@@ -11,6 +11,8 @@ import { LineupAnalysisDrawer } from './components/LineupAnalysisDrawer';
 import { SlotSwapModal } from './components/SlotSwapModal';
 import { LiveScoringView } from './components/LiveScoringView';
 import { LineupExportModal } from './components/LineupExportModal';
+import { StartingXIMonitorModal } from './components/StartingXIMonitorModal';
+import { useStartingXIMonitor } from './hooks/useStartingXIMonitor';
 import { StorageService } from './utils/storage';
 import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey } from './utils/optimizer';
 
@@ -28,6 +30,7 @@ export default function App() {
   const [exportLineupTarget, setExportLineupTarget] = useState<Lineup | null>(null);
   const [degradedModeInfo, setDegradedModeInfo] = useState<{ isDegraded: boolean; reason?: string } | null>(null);
   const [gameWeek, setGameWeek] = useState(48); // Fallback to 48 initially
+  const [isStartingXIModalOpen, setIsStartingXIModalOpen] = useState(false);
   
   const [filters, setFilters] = useState<LineupOptimizationFilters>({
     rarity: 'ALL',
@@ -53,6 +56,24 @@ export default function App() {
   const [lineup, setLineup] = useState<Lineup>(() => {
     const initialCards = StorageService.getCards();
     return optimizeLineup(initialCards, 'BALANCED', gameWeek, filters);
+  });
+
+  // Starting XI Lineup Real-Time Monitor (1 hour before match & notification alerts)
+  const {
+    playerStatusMap,
+    alerts: startingXIAlerts,
+    isChecking: isCheckingStartingXI,
+    lastChecked: startingXILastChecked,
+    refetch: refetchStartingXI,
+    permission: notifPermission,
+    requestNotificationPermission,
+    notificationsEnabled,
+    toggleNotifications,
+    dismissAlert,
+  } = useStartingXIMonitor({
+    cards,
+    compositions,
+    currentLineup: lineup,
   });
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -836,6 +857,8 @@ export default function App() {
         setStrategy={setStrategy}
         scoringFocus={filters.scoringFocus || 'BALANCED'}
         setScoringFocus={(focus) => setFilters(prev => ({ ...prev, scoringFocus: focus }))}
+        alertsCount={startingXIAlerts.length}
+        onOpenStartingXIMonitor={() => setIsStartingXIModalOpen(true)}
       />
 
       {/* Degraded Mode Warning Banner */}
@@ -918,6 +941,9 @@ export default function App() {
             onExportLineup={(l) => setExportLineupTarget(l)}
             onToggleLockCompo={handleToggleLockCompo}
             onImportSorareLineups={handleImportSorareLineups}
+            alerts={startingXIAlerts}
+            playerStatusMap={playerStatusMap}
+            onOpenStartingXIMonitor={() => setIsStartingXIModalOpen(true)}
           />
         )}
 
@@ -971,7 +997,7 @@ export default function App() {
 
         {/* Tab 6: Admin & Console */}
         {currentTab === 'admin' && (
-          <AdminPage />
+          <AdminPage cards={cards} gameWeek={gameWeek} />
         )}
       </main>
 
@@ -1023,6 +1049,27 @@ export default function App() {
           onClose={() => setSlotToSwap(null)}
         />
       )}
+
+      {/* Starting XI Lineup Live Monitor Modal (1h before matches & alerts) */}
+      <StartingXIMonitorModal
+        isOpen={isStartingXIModalOpen}
+        onClose={() => setIsStartingXIModalOpen(false)}
+        alerts={startingXIAlerts}
+        playerStatusMap={playerStatusMap}
+        compositions={compositions}
+        isChecking={isCheckingStartingXI}
+        lastChecked={startingXILastChecked}
+        onRefresh={refetchStartingXI}
+        permission={notifPermission}
+        onRequestPermission={requestNotificationPermission}
+        notificationsEnabled={notificationsEnabled}
+        onToggleNotifications={toggleNotifications}
+        onSelectSlotToSwap={(compoIdx, slot) => {
+          setSelectedCompoIndex(compoIdx);
+          setSlotToSwap(slot);
+        }}
+        onDismissAlert={dismissAlert}
+      />
 
     </div>
   );

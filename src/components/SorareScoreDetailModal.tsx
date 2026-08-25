@@ -120,7 +120,10 @@ export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
   const totalBonusPct = Math.round((cardBonus + captainBonus) * 10) / 10;
 
   const baseLiveScore = sorareLive?.liveScore ?? null;
-  const decisiveScore = sorareLive?.decisiveScore ?? (baseLiveScore != null && baseLiveScore >= 35 ? (baseLiveScore >= 60 ? 60 : 35) : 35);
+  const rawDecisive = sorareLive?.decisiveScore;
+  const decisiveScore = typeof rawDecisive === 'object' && rawDecisive !== null 
+    ? (rawDecisive.totalScore ?? 0)
+    : (typeof rawDecisive === 'number' ? rawDecisive : (baseLiveScore != null && baseLiveScore >= 35 ? (baseLiveScore >= 60 ? 60 : 35) : 35));
   const currentBaseScore = baseLiveScore != null ? baseLiveScore : decisiveScore;
   const clampedScorePct = Math.max(0, Math.min(100, currentBaseScore != null ? currentBaseScore : 0));
   

@@ -117,81 +117,17 @@ export interface CardBonusBreakdown {
   hasInSeasonBonus: boolean;   // Vrai si saison courante (2025/2026)
 }
 
-export function getCardBonusBreakdown(card: SorareCard): CardBonusBreakdown {
-  const total = getCardTotalBonus(card);
-  const powerStr = (1 + total / 100).toFixed(3);
-  const isInSeason = card.seasonYear === 2026 || card.seasonYear === 2025;
+export function getCardTotalBonus(card: SorareCard): number {
+  if (!card) return 0;
 
-  let rarityBonus = 0;
   const rarity = (card.rarity || '').toUpperCase();
+  let rarityBonus = 0;
   if (rarity === 'RARE') rarityBonus = 10;
   else if (rarity === 'SUPER_RARE') rarityBonus = 20;
   else if (rarity === 'UNIQUE') rarityBonus = 40;
 
-  if (card.powerBreakdown) {
-    const pb = card.powerBreakdown;
-    const editionBonus = Math.round(((pb.seasonBasisPoints || 0) + (pb.specialEditionCardsBasisPoints || 0)) / 10) / 10;
-    const collectionBonus = Math.round((pb.collectionBasisPoints || 0) / 10) / 10;
-    const xpGradeBonus = Math.round((pb.xpBasisPoints || 0) / 10) / 10;
-    const otherBonus = Math.round((pb.otherBonusBasisPoints || 0) / 10) / 10;
-
-    return {
-      editionBonus,
-      collectionBonus: Math.max(0, Math.round((collectionBonus + otherBonus) * 10) / 10),
-      xpGradeBonus,
-      rarityBonus,
-      totalBonusPercentage: total,
-      powerString: powerStr,
-      hasInSeasonBonus: editionBonus > 0,
-    };
-  }
-
-  let xpGradeBonus = 0;
-  if (typeof card.grade === 'number' && card.grade > 0) {
-    xpGradeBonus = card.grade * 0.5;
-  } else if (typeof card.xp === 'number' && card.xp > 0) {
-    xpGradeBonus = Math.min(card.xp / 100, 5);
-  }
-
-  // Détermination du bonus d'édition par soustraction / type (y compris pour les cartes communes d'édition spéciale)
-  let editionBonus = 0;
-  if (rarity === 'COMMON') {
-    if (total >= 20) {
-      editionBonus = 20; // Édition Spéciale Premium (+20%)
-    } else if (total >= 15) {
-      editionBonus = 15; // Édition Spéciale Shiny (+15%)
-    } else if (total >= 10) {
-      editionBonus = 10; // Édition Spéciale Standard (+10%)
-    } else if (total >= 5) {
-      editionBonus = 5;  // Édition Spéciale Basique (+5%)
-    }
-  } else {
-    if (total >= 20) {
-      editionBonus = 20; // Édition Spéciale (+20%)
-    } else if (total >= 5 && isInSeason) {
-      editionBonus = 5;  // In-Season Standard (+5%)
-    }
-  }
-
-  // Le solde provient de la collection club
-  let collectionBonus = Math.max(0, Math.round((total - editionBonus - xpGradeBonus - rarityBonus) * 10) / 10);
-
-  return {
-    editionBonus,
-    collectionBonus,
-    xpGradeBonus: Math.round(xpGradeBonus * 10) / 10,
-    rarityBonus,
-    totalBonusPercentage: total,
-    powerString: powerStr,
-    hasInSeasonBonus: editionBonus > 0,
-  };
-}
-
-export function getCardTotalBonus(card: SorareCard): number {
-  if (typeof card.bonusPercentage === 'number') {
-    return card.bonusPercentage;
-  }
-
+  // 1. Exact power breakdown from Sorare API (Source de vérité)
+  let apiBonusFromBreakdown = -1;
   if (card.powerBreakdown) {
     const pb = card.powerBreakdown;
     const sumBps = (pb.collectionBasisPoints || 0) +
@@ -199,17 +135,130 @@ export function getCardTotalBonus(card: SorareCard): number {
                    (pb.specialEditionCardsBasisPoints || 0) +
                    (pb.xpBasisPoints || 0) +
                    (pb.otherBonusBasisPoints || 0);
-    return Math.round((sumBps / 100) * 10) / 10;
+
+    apiBonusFromBreakdown = sumBps / 100;
   }
 
+  // 2. Exact power string from Sorare API e.g. "1.040" -> 4.0%, "1.050" -> 5.0%, "1.000" -> 0.0%
+  let apiBonusFromPower = -1;
   if (card.power) {
     const p = parseFloat(card.power);
     if (!isNaN(p) && p >= 1.0) {
-      return Math.round((p - 1.0) * 100 * 10) / 10;
+      apiBonusFromPower = (p - 1.0) * 100;
     }
   }
 
-  return 0;
+  // 3. Fallback only if no API power data is available
+  let fallback = 0;
+  if (typeof card.grade === 'number' && card.grade > 0) {
+    fallback += card.grade * 0.5;
+  } else if (typeof card.xp === 'number' && card.xp > 0) {
+    fallback += Math.min(card.xp / 100, 5);
+  }
+
+  if (card.specialEdition) {
+    const se = card.specialEdition.toLowerCase();
+    if (se.includes('chroma')) fallback += 20;
+    else if (se.includes('flame')) fallback += 15;
+    else if (se.includes('holo')) fallback += 10;
+    else if (se.includes('shiny')) fallback += 5;
+  }
+
+  // Extract the maximum possible bonus out of the parsed values
+  const maxApiBonus = Math.max(
+    apiBonusFromBreakdown,
+    apiBonusFromPower,
+    fallback,
+    0
+  );
+  
+  let calculatedBonus = Math.round((rarityBonus + maxApiBonus) * 10) / 10;
+
+  // Compare with the explicitly passed bonusPercentage to ensure we don't lose pre-calculated values
+  if (typeof card.bonusPercentage === 'number' && card.bonusPercentage > 0) {
+    calculatedBonus = Math.max(calculatedBonus, Math.round(card.bonusPercentage * 10) / 10);
+  }
+
+  return calculatedBonus;
+}
+
+export function getCardBonusBreakdown(card: SorareCard): CardBonusBreakdown {
+  if (!card) {
+    return {
+      editionBonus: 0,
+      collectionBonus: 0,
+      xpGradeBonus: 0,
+      rarityBonus: 0,
+      totalBonusPercentage: 0,
+      powerString: '1.000',
+      hasInSeasonBonus: false,
+    };
+  }
+
+  const rarity = (card.rarity || '').toUpperCase();
+  let rarityBonus = 0;
+  if (rarity === 'RARE') rarityBonus = 10;
+  else if (rarity === 'SUPER_RARE') rarityBonus = 20;
+  else if (rarity === 'UNIQUE') rarityBonus = 40;
+
+  const total = getCardTotalBonus(card);
+  const powerStr = (1 + total / 100).toFixed(3);
+  
+  const isCurrentSeason = typeof card.seasonYear === 'number' && card.seasonYear >= 2026;
+  const manualInSeasonBonus = isCurrentSeason ? 5 : 0;
+
+  if (card.powerBreakdown) {
+    const pb = card.powerBreakdown;
+    let seasonBonus = Math.round((pb.seasonBasisPoints || 0) / 10) / 10;
+    if (seasonBonus === 0 && manualInSeasonBonus > 0) {
+       seasonBonus = manualInSeasonBonus;
+    }
+    
+    const specialEditionBonus = Math.round((pb.specialEditionCardsBasisPoints || 0) / 10) / 10;
+    const editionBonus = Math.round((seasonBonus + specialEditionBonus) * 10) / 10;
+    const xpGradeBonus = Math.round((pb.xpBasisPoints || 0) / 10) / 10;
+    const rawCollection = Math.round((pb.collectionBasisPoints || 0) / 10) / 10;
+    const otherBonus = Math.round((pb.otherBonusBasisPoints || 0) / 10) / 10;
+    const collectionBonus = Math.max(0, Math.round((rawCollection + otherBonus) * 10) / 10);
+
+    return {
+      editionBonus,
+      collectionBonus,
+      xpGradeBonus,
+      rarityBonus,
+      totalBonusPercentage: total,
+      powerString: powerStr,
+      hasInSeasonBonus: seasonBonus > 0,
+    };
+  }
+
+  let xpGradeBonus = 0;
+  if (typeof card.grade === 'number' && card.grade > 0) {
+    xpGradeBonus = Math.round(card.grade * 0.5 * 10) / 10;
+  } else if (typeof card.xp === 'number' && card.xp > 0) {
+    xpGradeBonus = Math.round(Math.min(card.xp / 100, 5) * 10) / 10;
+  }
+
+  let editionBonus = manualInSeasonBonus;
+  if (card.specialEdition) {
+    const se = card.specialEdition.toLowerCase();
+    if (se.includes('chroma')) editionBonus += 20;
+    else if (se.includes('flame')) editionBonus += 15;
+    else if (se.includes('holo')) editionBonus += 10;
+    else if (se.includes('shiny')) editionBonus += 5;
+  }
+
+  const collectionBonus = Math.max(0, Math.round((total - editionBonus - xpGradeBonus - rarityBonus) * 10) / 10);
+
+  return {
+    editionBonus,
+    collectionBonus,
+    xpGradeBonus,
+    rarityBonus,
+    totalBonusPercentage: total,
+    powerString: powerStr,
+    hasInSeasonBonus: manualInSeasonBonus > 0,
+  };
 }
 
 export function normalizePlayerSlug(str: string): string {

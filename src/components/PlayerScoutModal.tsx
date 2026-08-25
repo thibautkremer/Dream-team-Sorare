@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { X, Sparkles, Shield, Trophy, Activity, Target, AlertTriangle, CheckCircle2, TrendingUp, Calendar, Zap, ChevronDown, BarChart3, Percent, HelpCircle, ShieldAlert, Award, UserX, CheckCircle, UserCheck, Clock, CornerDownRight, Send, ShieldCheck, Eye, Users, Star, Cpu } from 'lucide-react';
 import { SorareCard, MatchPerformanceDetail, AiScoutReport } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, compute40MatchPerformances } from '../utils/optimizer';
+import { SorareScoreDetailModal } from './SorareScoreDetailModal';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars } from '../utils/sorareSlug';
 import { ProjectionBreakdownModal } from './ProjectionBreakdownModal';
 
@@ -17,6 +18,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
   const [isLoadingAI, setIsLoadingAI] = useState(false);
   const [liveCard, setLiveCard] = useState<SorareCard | null>(null);
   const [selectedMatchIndex, setSelectedMatchIndex] = useState<number>(0);
+  const [showDetailModalForMatch, setShowDetailModalForMatch] = useState<MatchPerformanceDetail | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<5 | 10 | 15 | 40>(40);
   const [statMode, setStatMode] = useState<'total' | 'per90'>('total');
   const [showProjectionBreakdown, setShowProjectionBreakdown] = useState(false);
@@ -48,46 +50,164 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
     }
   };
 
-  const card: SorareCard | null = useMemo(() => {
+  // Find original card from allCards gallery if initialCard was missing full metadata
+  const enrichedInitialCard = useMemo(() => {
     if (!initialCard) return null;
-    if (!liveCard) return initialCard;
+    if (!allCards || allCards.length === 0) return initialCard;
+
+    const targetNorm = (initialCard.slug || initialCard.id || initialCard.displayName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const match = allCards.find(c => {
+      if (!c) return false;
+      if (c.id === initialCard.id || (c.slug && initialCard.slug && c.slug === initialCard.slug)) return true;
+      const s1 = (c.slug || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const s2 = (c.playerSlug || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const s3 = (c.displayName || c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const s4 = (c.matchName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (s1 === targetNorm || s2 === targetNorm || s3 === targetNorm || s4 === targetNorm) return true;
+      if (targetNorm.length > 4 && (s1.includes(targetNorm) || s2.includes(targetNorm) || targetNorm.includes(s2) || s3.includes(targetNorm) || targetNorm.includes(s3))) return true;
+      return false;
+    });
+
+    if (!match) return initialCard;
+
+    const powerBreakdown = match.powerBreakdown || initialCard.powerBreakdown;
+    const power = match.power || initialCard.power || null;
+
+    const rarity = match.rarity || initialCard.rarity || 'limited';
+    const r = (rarity || '').toUpperCase();
+    let rBonus = 0;
+    if (r === 'RARE') rBonus = 10;
+    else if (r === 'SUPER_RARE') rBonus = 20;
+    else if (r === 'UNIQUE') rBonus = 40;
+
+    let bonusPercentage = 0;
+    if (powerBreakdown) {
+      const sumBps = (powerBreakdown.collectionBasisPoints || 0) +
+                     (powerBreakdown.seasonBasisPoints || 0) +
+                     (powerBreakdown.specialEditionCardsBasisPoints || 0) +
+                     (powerBreakdown.xpBasisPoints || 0) +
+                     (powerBreakdown.otherBonusBasisPoints || 0);
+      bonusPercentage = Math.round((rBonus + (sumBps / 100)) * 10) / 10;
+    }
+    if (bonusPercentage === 0 && power) {
+      const p = parseFloat(power);
+      if (!isNaN(p) && p >= 1.0) bonusPercentage = Math.round((rBonus + (p - 1.0) * 100) * 10) / 10;
+    }
+    if (bonusPercentage === 0) {
+      bonusPercentage = (typeof match.bonusPercentage === 'number' && match.bonusPercentage > 0)
+        ? match.bonusPercentage
+        : (initialCard.bonusPercentage || 0);
+    }
+
     return {
       ...initialCard,
-      ...liveCard,
-      id: initialCard.id || liveCard.id,
-      slug: initialCard.slug || liveCard.slug,
-      displayName: initialCard.displayName || liveCard.displayName,
-      pictureUrl: initialCard.pictureUrl || liveCard.pictureUrl,
-      position: initialCard.position || liveCard.position,
-      positionCode: initialCard.positionCode || liveCard.positionCode || 'MID',
-      rarity: initialCard.rarity || liveCard.rarity || 'limited',
-      club: {
-        ...(initialCard.club || {}),
-        ...(liveCard.club || {}),
-        name: liveCard.club?.name || initialCard.club?.name || 'Club'
-      },
-      league: initialCard.league || liveCard.league,
-      country: initialCard.country || liveCard.country,
-      age: initialCard.age || liveCard.age,
-      status: liveCard.status || initialCard.status || 'STARTER',
-      starterConfidence: liveCard.starterConfidence || initialCard.starterConfidence || 80,
-      injuryStatus: liveCard.injuryStatus || initialCard.injuryStatus,
-      upcomingFixture: initialCard.upcomingFixture || liveCard.upcomingFixture,
-      tacticalNotes: liveCard.tacticalNotes || initialCard.tacticalNotes,
+      ...match,
+      id: match.id || initialCard.id,
+      slug: match.slug || initialCard.slug,
+      displayName: match.displayName || initialCard.displayName,
+      power,
+      powerBreakdown,
+      bonusPercentage,
       scores: {
-        ...initialCard.scores,
+        ...(match.scores || {}),
+        ...(initialCard.scores || {}),
+        l5: initialCard.scores?.l5 ?? match.scores?.l5 ?? 50,
+        l15: initialCard.scores?.l15 ?? match.scores?.l15 ?? 50,
+        l40: initialCard.scores?.l40 ?? match.scores?.l40 ?? 50,
+        last5Scores: initialCard.scores?.last5Scores || match.scores?.last5Scores || [50, 50, 50, 50, 50],
+      }
+    } as SorareCard;
+  }, [initialCard, allCards]);
+
+  const card: SorareCard | null = useMemo(() => {
+    const base = enrichedInitialCard;
+    if (!base) return null;
+    if (!liveCard) return base;
+
+    const powerBreakdown = liveCard.powerBreakdown || base.powerBreakdown;
+    const power = liveCard.power || base.power;
+    const specialEdition = liveCard.specialEdition || base.specialEdition;
+    const grade = liveCard.grade ?? base.grade;
+    const xp = liveCard.xp ?? base.xp;
+    const seasonYear = liveCard.seasonYear || base.seasonYear;
+    const rarity = base.rarity || liveCard.rarity || 'limited';
+
+    // Compute accurate bonus percentage from powerBreakdown, power, or liveCard/base bonusPercentage
+    const r = (rarity || '').toUpperCase();
+    let rBonus = 0;
+    if (r === 'RARE') rBonus = 10;
+    else if (r === 'SUPER_RARE') rBonus = 20;
+    else if (r === 'UNIQUE') rBonus = 40;
+
+    let bonusPercentage = 0;
+    if (powerBreakdown) {
+      const sumBps = (powerBreakdown.collectionBasisPoints || 0) +
+                     (powerBreakdown.seasonBasisPoints || 0) +
+                     (powerBreakdown.specialEditionCardsBasisPoints || 0) +
+                     (powerBreakdown.xpBasisPoints || 0) +
+                     (powerBreakdown.otherBonusBasisPoints || 0);
+      bonusPercentage = Math.round((rBonus + (sumBps / 100)) * 10) / 10;
+    }
+    if (bonusPercentage === 0 && power) {
+      const p = parseFloat(power);
+      if (!isNaN(p) && p >= 1.0) {
+        bonusPercentage = Math.round((rBonus + (p - 1.0) * 100) * 10) / 10;
+      }
+    }
+    if (bonusPercentage === 0) {
+      if (typeof liveCard.bonusPercentage === 'number' && liveCard.bonusPercentage > 0) {
+        bonusPercentage = liveCard.bonusPercentage;
+      } else if (typeof base.bonusPercentage === 'number' && base.bonusPercentage > 0) {
+        bonusPercentage = base.bonusPercentage;
+      } else {
+        bonusPercentage = rBonus + 5;
+      }
+    }
+
+    return {
+      ...base,
+      ...liveCard,
+      id: base.id || liveCard.id,
+      slug: base.slug || liveCard.slug,
+      displayName: base.displayName || liveCard.displayName,
+      pictureUrl: base.pictureUrl || liveCard.pictureUrl,
+      position: base.position || liveCard.position,
+      positionCode: base.positionCode || liveCard.positionCode || 'MID',
+      rarity,
+      seasonYear,
+      grade,
+      xp,
+      specialEdition,
+      power,
+      powerBreakdown,
+      bonusPercentage,
+      club: {
+        ...(base.club || {}),
+        ...(liveCard.club || {}),
+        name: liveCard.club?.name || base.club?.name || 'Club'
+      },
+      league: base.league || liveCard.league,
+      country: base.country || liveCard.country,
+      age: base.age || liveCard.age,
+      status: liveCard.status || base.status || 'STARTER',
+      starterConfidence: liveCard.starterConfidence || base.starterConfidence || 80,
+      injuryStatus: liveCard.injuryStatus || base.injuryStatus,
+      upcomingFixture: base.upcomingFixture || liveCard.upcomingFixture,
+      tacticalNotes: liveCard.tacticalNotes || base.tacticalNotes,
+      scores: {
+        ...base.scores,
         ...(liveCard.scores || {}),
-        l5: liveCard.scores?.l5 ?? initialCard.scores?.l5 ?? 50,
-        l15: liveCard.scores?.l15 ?? initialCard.scores?.l15 ?? 50,
-        l40: liveCard.scores?.l40 ?? initialCard.scores?.l40 ?? 50,
-        recentMatches: liveCard.scores?.recentMatches?.length ? liveCard.scores.recentMatches : initialCard.scores?.recentMatches,
-        last40Scores: liveCard.scores?.last40Scores?.length ? liveCard.scores.last40Scores : initialCard.scores?.last40Scores,
-        last15Scores: liveCard.scores?.last15Scores?.length ? liveCard.scores.last15Scores : initialCard.scores?.last15Scores,
-        last10Scores: liveCard.scores?.last10Scores?.length ? liveCard.scores.last10Scores : initialCard.scores?.last10Scores,
-        last5Scores: liveCard.scores?.last5Scores?.length ? liveCard.scores.last5Scores : initialCard.scores?.last5Scores,
+        l5: liveCard.scores?.l5 ?? base.scores?.l5 ?? 50,
+        l15: liveCard.scores?.l15 ?? base.scores?.l15 ?? 50,
+        l40: liveCard.scores?.l40 ?? base.scores?.l40 ?? 50,
+        recentMatches: liveCard.scores?.recentMatches?.length ? liveCard.scores.recentMatches : base.scores?.recentMatches,
+        last40Scores: liveCard.scores?.last40Scores?.length ? liveCard.scores.last40Scores : base.scores?.last40Scores,
+        last15Scores: liveCard.scores?.last15Scores?.length ? liveCard.scores.last15Scores : base.scores?.last15Scores,
+        last10Scores: liveCard.scores?.last10Scores?.length ? liveCard.scores.last10Scores : base.scores?.last10Scores,
+        last5Scores: liveCard.scores?.last5Scores?.length ? liveCard.scores.last5Scores : base.scores?.last5Scores,
       }
     };
-  }, [initialCard, liveCard]);
+  }, [enrichedInitialCard, liveCard]);
 
   const fetchScoutReport = async (playerCard: SorareCard) => {
     setIsLoadingAI(true);
@@ -756,9 +876,14 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                   <button
                     key={globalIndex}
                     type="button"
-                    onClick={() => setSelectedMatchIndex(globalIndex)}
+                    onClick={() => {
+                      setSelectedMatchIndex(globalIndex);
+                      if (!match.isDNP) {
+                        setShowDetailModalForMatch(match);
+                      }
+                    }}
                     onMouseEnter={() => setSelectedMatchIndex(globalIndex)}
-                    className={`flex flex-col items-center gap-1 flex-1 group cursor-pointer transition-all duration-150 rounded-lg p-1 ${
+                    className={`flex flex-col items-center gap-1 flex-1 basis-0 min-w-0 group cursor-pointer transition-all duration-150 rounded-lg p-1 ${
                       isSelected 
                         ? 'bg-slate-800/80 ring-1 ring-emerald-400/80' 
                         : 'hover:bg-slate-900/60'
@@ -839,7 +964,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                           : 'text-slate-500'
                       }`}
                     >
-                      {globalIndex === 0 ? (match.isLive ? 'M1 (Live 🔴)' : 'M1 (Dernier)') : `M${match.matchIndex}`}
+                      {globalIndex === 0 ? (match.isLive ? 'M1 (Live 🔴)' : 'M1') : `M${match.matchIndex}`}
                     </span>
                   </button>
                 );
@@ -1522,6 +1647,19 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
           card={card}
           allGalleryCards={allCards}
           onClose={() => setShowProjectionBreakdown(false)}
+        />
+      )}
+
+      {showDetailModalForMatch && (
+        <SorareScoreDetailModal
+          card={card}
+          sorareLive={{
+            so5ScoreId: showDetailModalForMatch.so5ScoreId,
+            liveScore: showDetailModalForMatch.totalScore,
+            decisiveScore: showDetailModalForMatch.decisiveScore,
+            game: showDetailModalForMatch.game || { statusTyped: showDetailModalForMatch.isLive ? 'live' : 'played' }
+          }}
+          onClose={() => setShowDetailModalForMatch(null)}
         />
       )}
     </div>

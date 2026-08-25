@@ -36,23 +36,27 @@ export interface ApiLogEntry {
   id: string;
   timestamp: string;
   description: string;
-  service: 'Sorare API' | 'Gemini AI';
+  service: 'Sorare API' | 'Gemini AI' | 'Application Error' | 'Lineup Alert' | 'System & Sync' | 'Odds Engine';
   method: string;
-  status: 'SUCCESS' | 'ERROR' | 'RATE_LIMITED' | 'INFO';
+  status: 'SUCCESS' | 'ERROR' | 'RATE_LIMITED' | 'INFO' | 'WARNING';
+  severity?: 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
   statusCode: number;
   durationMs: number;
   requestSummary: any;
   responseSummary: any;
   error?: string;
+  component?: string;
+  gameweek?: number;
 }
 
 const apiLogs: ApiLogEntry[] = [];
-const MAX_LOGS = 200;
+const MAX_LOGS = 500;
 
 function addApiLog(entry: Omit<ApiLogEntry, 'id' | 'timestamp'>) {
   const fullEntry: ApiLogEntry = {
     id: 'log_' + Math.random().toString(36).substring(2, 9),
     timestamp: new Date().toISOString(),
+    severity: entry.severity || (entry.status === 'ERROR' || entry.status === 'RATE_LIMITED' ? 'ERROR' : 'INFO'),
     ...entry,
   };
   apiLogs.unshift(fullEntry);
@@ -453,14 +457,50 @@ app.post('/api/admin/logs/clear', requireAppToken, (req, res) => {
   res.json({ success: true });
 });
 
-// Client Logs Ingestion
+// Client and System Logs / Alerts Ingestion
+app.post('/api/admin/logs/event', express.json(), (req, res) => {
+  const {
+    description,
+    service = 'Application Error',
+    method = 'CLIENT_EVENT',
+    status = 'ERROR',
+    severity = 'ERROR',
+    statusCode = 500,
+    durationMs = 0,
+    requestSummary = {},
+    responseSummary = {},
+    error,
+    component,
+    gameweek,
+  } = req.body;
+
+  addApiLog({
+    description: description || 'Événement applicatif',
+    service: service as any,
+    method,
+    status: status as any,
+    severity: severity as any,
+    statusCode,
+    durationMs,
+    requestSummary,
+    responseSummary,
+    error,
+    component,
+    gameweek,
+  });
+
+  res.json({ success: true });
+});
+
+// Legacy Client Logs Ingestion
 app.post('/api/admin/logs/client', express.json(), (req, res) => {
   const { message, error } = req.body;
   addApiLog({
     description: `UI Client Error: ${message}`,
-    service: 'Sorare API', // ou autre
+    service: 'Application Error',
     method: 'CLIENT_UI',
     status: 'ERROR',
+    severity: 'ERROR',
     statusCode: 500,
     durationMs: 0,
     requestSummary: {},
@@ -483,8 +523,19 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
     let foundUserSlug: string | null = null;
     let foundIndex = -1;
 
+    const targetNorm = targetSlug.toLowerCase().replace(/[^a-z0-9]/g, '');
     for (const [uSlug, cached] of userCardsCache.entries()) {
-      const idx = cached.cards.findIndex((c: any) => c.slug === targetSlug || c.id === targetSlug || c.displayName?.toLowerCase() === targetSlug.toLowerCase());
+      const idx = cached.cards.findIndex((c: any) => {
+        if (!c) return false;
+        if (c.slug === targetSlug || c.id === targetSlug || c.playerSlug === targetSlug) return true;
+        const s1 = (c.slug || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const s2 = (c.playerSlug || c.anyPlayer?.slug || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const s3 = (c.displayName || c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const s4 = (c.matchName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (s1 === targetNorm || s2 === targetNorm || s3 === targetNorm || s4 === targetNorm) return true;
+        if (targetNorm.length > 4 && (s1.includes(targetNorm) || s2.includes(targetNorm) || targetNorm.includes(s2) || s3.includes(targetNorm) || targetNorm.includes(s3))) return true;
+        return false;
+      });
       if (idx !== -1) {
         foundCard = { ...cached.cards[idx] };
         foundUserSlug = uSlug;
@@ -520,7 +571,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
               slug
               playingStatus
               position
-              avatarUrl
+              squaredPictureUrl
               pictureUrl
               age
               country { name slug }
@@ -535,6 +586,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
               allSo5Scores(first: $first, after: $after) {
                 pageInfo { endCursor hasNextPage }
                 nodes {
+                  id
                   score
                   decisiveScore { totalScore }
                   playerGameStats {
@@ -611,15 +663,50 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
         }
       }
 
-      if (allNodes.length === 0 && targetSlug) {
+      let resolvedCardData: any = null;
+
+      if (targetSlug) {
         try {
           const cardQuery = `
             query GetCardPlayerSlug($targetSlug: String!) {
               anyCard(slug: $targetSlug) {
                 ... on Card {
+                  id
+                  slug
+                  name
+                  rarityTyped
+                  seasonYear
+                  power
+                  grade
+                  xp
+                  specialEdition
+                  pictureUrl
+                  powerBreakdown {
+                    collectionBasisPoints
+                    seasonBasisPoints
+                    specialEditionCardsBasisPoints
+                    xpBasisPoints
+                    otherBonusBasisPoints
+                  }
                   anyPlayer {
                     ... on Player {
+                      id
+                      displayName
                       slug
+                      position
+                      squaredPictureUrl
+                      pictureUrl
+                      age
+                      playingStatus
+                      country { name slug }
+                      activeClub {
+                        name
+                        pictureUrl
+                        domesticLeague { name }
+                      }
+                      l5: averageScore(type: LAST_FIVE_SO5_AVERAGE_SCORE)
+                      l15: averageScore(type: LAST_FIFTEEN_SO5_AVERAGE_SCORE)
+                      l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
                     }
                   }
                 }
@@ -632,6 +719,35 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
             headers,
             2
           );
+          if (cardRes.ok && cardRes.data?.data?.anyCard) {
+            const cObj = cardRes.data.data.anyCard;
+            let bonusPct = 0;
+            if (cObj.powerBreakdown) {
+              const pb = cObj.powerBreakdown;
+              const sum = (pb.collectionBasisPoints || 0) + (pb.seasonBasisPoints || 0) + (pb.specialEditionCardsBasisPoints || 0) + (pb.xpBasisPoints || 0) + (pb.otherBonusBasisPoints || 0);
+              bonusPct = Math.round((sum / 100) * 10) / 10;
+            } else if (cObj.power) {
+              const p = parseFloat(cObj.power);
+              if (!isNaN(p) && p >= 1.0) bonusPct = Math.round((p - 1.0) * 100 * 10) / 10;
+            }
+            resolvedCardData = {
+              id: cObj.id,
+              slug: cObj.slug,
+              name: cObj.name,
+              rarityTyped: cObj.rarityTyped,
+              seasonYear: cObj.seasonYear,
+              power: cObj.power,
+              grade: cObj.grade,
+              xp: cObj.xp,
+              specialEdition: cObj.specialEdition,
+              pictureUrl: cObj.pictureUrl,
+              powerBreakdown: cObj.powerBreakdown,
+              bonusPercentage: bonusPct,
+            };
+            if (cObj.anyPlayer && !playerMeta) {
+              playerMeta = cObj.anyPlayer;
+            }
+          }
           const resolvedPlayerSlug = cardRes.ok ? cardRes.data?.data?.anyCard?.anyPlayer?.slug : null;
           if (resolvedPlayerSlug && !slugCandidates.includes(resolvedPlayerSlug)) {
             cursor = null;
@@ -662,10 +778,10 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
         }
       }
 
-      if (allNodes.length > 0 && playerMeta) {
-        const player = playerMeta;
-        const pgsList = allNodes;
-        const clubName = foundCard?.club?.name || '';
+      if (playerMeta || resolvedCardData || foundCard) {
+        const player = playerMeta || foundCard;
+        const pgsList = allNodes || [];
+        const clubName = foundCard?.club?.name || player?.activeClub?.name || '';
         const positionCode = foundCard?.positionCode || 'MID';
 
         const recentMatches = pgsList.map((pgs: any, pgsIdx: number) => {
@@ -767,6 +883,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
 
           return {
             score: scoreVal,
+            so5ScoreId: pgs.id,
             isStarter,
             isSub,
             baseScore,
@@ -809,6 +926,24 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
           const l40 = player?.l40 != null ? Math.round(Number(player.l40) * 10) / 10 : foundCard?.scores?.l40 || 0;
 
           if (!foundCard) {
+            // Check if any card in userCardsCache matches player slug or display name
+            for (const [uSlug, cached] of userCardsCache.entries()) {
+              if (cached?.cards && Array.isArray(cached.cards)) {
+                const matched = cached.cards.find((c: any) => 
+                  c.playerSlug === player?.slug || 
+                  c.slug === player?.slug ||
+                  (c.displayName && player?.displayName && c.displayName.toLowerCase().replace(/[^a-z0-9]/g, '') === player.displayName.toLowerCase().replace(/[^a-z0-9]/g, ''))
+                );
+                if (matched) {
+                  foundCard = { ...matched };
+                  foundUserSlug = uSlug;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (!foundCard) {
             const rawPos = (player?.position || 'Midfielder').toUpperCase();
             let posCode = 'MID';
             if (rawPos.includes('GOAL') || rawPos.includes('GARDIEN') || rawPos === 'GK') posCode = 'GK';
@@ -816,14 +951,21 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
             else if (rawPos.includes('FORW') || rawPos.includes('ATT') || rawPos === 'FWD' || rawPos.includes('STRIKER')) posCode = 'FWD';
 
             foundCard = {
-              id: player.id || targetSlug,
-              slug: player.slug || targetSlug,
-              displayName: player?.displayName || 'Joueur Sorare',
-              name: player?.displayName || 'Carte Sorare',
-              pictureUrl: player?.avatarUrl || player?.pictureUrl || `https://assets.sorare.com/players/${player?.slug || targetSlug}.png`,
+              id: resolvedCardData?.id || player?.id || targetSlug,
+              slug: resolvedCardData?.slug || player?.slug || targetSlug,
+              displayName: player?.displayName || resolvedCardData?.name || 'Joueur Sorare',
+              name: resolvedCardData?.name || player?.displayName || 'Carte Sorare',
+              pictureUrl: resolvedCardData?.pictureUrl || player?.avatarUrl || player?.pictureUrl || `https://assets.sorare.com/players/${player?.slug || targetSlug}.png`,
               position: player?.position || 'Midfielder',
               positionCode: posCode,
-              rarity: 'limited',
+              rarity: resolvedCardData?.rarityTyped || 'limited',
+              seasonYear: resolvedCardData?.seasonYear || 2026,
+              grade: resolvedCardData?.grade || 0,
+              xp: resolvedCardData?.xp || 0,
+              specialEdition: resolvedCardData?.specialEdition || null,
+              power: resolvedCardData?.power || null,
+              powerBreakdown: resolvedCardData?.powerBreakdown || undefined,
+              bonusPercentage: resolvedCardData?.bonusPercentage,
               age: player?.age || 26,
               country: player?.country?.name || 'International',
               club: {
@@ -838,6 +980,55 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
             if (!foundCard.pictureUrl && (player?.avatarUrl || player?.pictureUrl)) {
               foundCard.pictureUrl = player.avatarUrl || player.pictureUrl;
             }
+            if (resolvedCardData) {
+              if (!foundCard.power && resolvedCardData.power) foundCard.power = resolvedCardData.power;
+              if (!foundCard.powerBreakdown && resolvedCardData.powerBreakdown) foundCard.powerBreakdown = resolvedCardData.powerBreakdown;
+              if ((foundCard.bonusPercentage === undefined || foundCard.bonusPercentage === 0) && resolvedCardData.bonusPercentage > 0) {
+                foundCard.bonusPercentage = resolvedCardData.bonusPercentage;
+              }
+            }
+          }
+
+          const r = (foundCard.rarityTyped || foundCard.rarity || '').toUpperCase();
+          let rBonus = 0;
+          if (r === 'RARE') rBonus = 10;
+          else if (r === 'SUPER_RARE') rBonus = 20;
+          else if (r === 'UNIQUE') rBonus = 40;
+
+          const isCurrentSeason = typeof foundCard.seasonYear === 'number' && foundCard.seasonYear >= 2026;
+          const manualInSeasonBonus = isCurrentSeason ? 5 : 0;
+
+          let b1 = -1, b2 = -1, b3 = manualInSeasonBonus;
+          if (foundCard.powerBreakdown) {
+            const pb = foundCard.powerBreakdown;
+            const seasonBps = (pb.seasonBasisPoints && pb.seasonBasisPoints > 0) ? pb.seasonBasisPoints : (manualInSeasonBonus * 100);
+            b1 = ((pb.collectionBasisPoints || 0) + seasonBps + (pb.specialEditionCardsBasisPoints || 0) + (pb.xpBasisPoints || 0) + (pb.otherBonusBasisPoints || 0)) / 100;
+          }
+          if (foundCard.power) {
+            const p = parseFloat(foundCard.power);
+            if (!isNaN(p) && p >= 1.0) {
+               let pBonus = (p - 1.0) * 100;
+               if (r === 'COMMON' && isCurrentSeason) pBonus += manualInSeasonBonus;
+               b2 = pBonus;
+            }
+          }
+          if (typeof foundCard.grade === 'number' && foundCard.grade > 0) b3 += foundCard.grade * 0.5;
+          else if (typeof foundCard.xp === 'number' && foundCard.xp > 0) b3 += Math.min(foundCard.xp / 100, 5);
+          
+          if (foundCard.specialEdition) {
+            const se = foundCard.specialEdition.toLowerCase();
+            if (se.includes('chroma')) b3 += 20;
+            else if (se.includes('flame')) b3 += 15;
+            else if (se.includes('holo')) b3 += 10;
+            else if (se.includes('shiny')) b3 += 5;
+          }
+
+          const maxB = Math.max(b1, b2, b3, 0);
+          foundCard.bonusPercentage = Math.round((rBonus + maxB) * 10) / 10;
+
+          // If somehow the existing bonus is higher, keep it
+          if (typeof resolvedCardData?.bonusPercentage === 'number' && resolvedCardData.bonusPercentage > foundCard.bonusPercentage) {
+            foundCard.bonusPercentage = resolvedCardData.bonusPercentage;
           }
 
           foundCard.scores = {
@@ -1287,7 +1478,7 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               slug
               displayName
               playingStatus
-              so5Scores(last: 2) {
+              so5Scores(last: 3) {
                 id
                 score
                 decisiveScore { totalScore }
@@ -1533,7 +1724,8 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
           return slugs.includes(cPlayerSlug) || slugs.includes(c.id) || slugs.includes(c.slug);
         }) : [];
         matchedCards.forEach(c => {
-          const latestMatch = c.scores?.recentMatches?.[0];
+          const recent3 = (c.scores?.recentMatches || []).slice(0, 3);
+          const latestMatch = recent3[0];
           if (latestMatch) {
             const scoreEntry = {
               cardId: c.id,
@@ -1544,7 +1736,25 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
               liveScore: latestMatch.score || 0,
               decisiveScore: latestMatch.decisiveScore || 0,
               clubPictureUrl: c.club?.pictureUrl || '',
-              so5ScoresHistory: [],
+              so5ScoresHistory: recent3.map((m: any) => ({
+                id: m.id || null,
+                score: m.score != null ? Math.round(Number(m.score) * 10) / 10 : null,
+                decisiveScore: m.decisiveScore != null ? Math.round(Number(m.decisiveScore) * 10) / 10 : null,
+                allAroundScore: m.allAroundScore != null ? Math.round(Number(m.allAroundScore) * 10) / 10 : null,
+                game: {
+                  id: m.id || 'm',
+                  date: m.date,
+                  statusTyped: 'completed',
+                  minute: 90,
+                  homeGoals: m.homeGoals ?? 0,
+                  awayGoals: m.awayGoals ?? 0,
+                  homeTeam: m.homeTeam || c.club?.name || 'Équipe 1',
+                  homeTeamPicture: '',
+                  awayTeam: m.opponent || 'Équipe 2',
+                  awayTeamPicture: '',
+                  competition: m.competitionName || 'SO5',
+                }
+              })),
               game: null,
               upcomingGame: null
             };
@@ -1674,6 +1884,226 @@ app.get('/api/sorare/user-lineups', async (req, res) => {
       success: true,
       source: 'fallback',
       lineups: []
+    });
+  }
+});
+
+// Real-Time Starting XI Checker & Non-Starter Lineup Alerts Endpoint
+app.post('/api/lineups/starting-xi-check', async (req, res) => {
+  const customApiKey = (req.body.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const playersInput: any[] = Array.isArray(req.body.players) ? req.body.players : [];
+  const lineupsInput: any[] = Array.isArray(req.body.lineups) ? req.body.lineups : [];
+  const startTime = Date.now();
+
+  try {
+    // 1. Extract and normalize player slugs
+    const slugMap = new Map<string, any>();
+    playersInput.forEach((p) => {
+      if (!p) return;
+      const rawSlug = p.playerSlug || (p.slug ? p.slug.replace(/-\d{4}-(common|limited|rare|super_rare|unique|custom).*$/i, '') : '') || cleanSlug(p.displayName || p.name || '');
+      if (rawSlug) {
+        slugMap.set(rawSlug, p);
+      }
+    });
+
+    const uniqueSlugs = Array.from(slugMap.keys());
+    const playerStatusMap: Record<string, any> = {};
+
+    if (uniqueSlugs.length > 0) {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'TeamSorare-App/2.0',
+      };
+      if (customApiKey) {
+        headers['APIKEY'] = customApiKey;
+      }
+
+      // Chunk size of 5 to remain strictly under Sorare public complexity limit of 500
+      const CHUNK_SIZE = customApiKey ? 25 : 5;
+      const chunks: string[][] = [];
+      for (let i = 0; i < uniqueSlugs.length; i += CHUNK_SIZE) {
+        chunks.push(uniqueSlugs.slice(i, i + CHUNK_SIZE));
+      }
+
+      const query = `
+        query GetStartingXICheck($slugs: [String!]!) {
+          players(slugs: $slugs) {
+            ... on Player {
+              slug
+              displayName
+              playingStatus
+              activeClub {
+                name
+                slug
+                upcomingGames(first: 1) {
+                  id
+                  date
+                  statusTyped
+                  homeTeam { name }
+                  awayTeam { name }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const fetchedPlayers: any[] = [];
+      for (const chunk of chunks) {
+        try {
+          const gqlRes = await fetchGraphQLWithRetry(
+            'https://api.sorare.com/graphql',
+            { query, variables: { slugs: chunk } },
+            headers,
+            1
+          );
+          if (gqlRes.ok && gqlRes.data?.data?.players) {
+            fetchedPlayers.push(...gqlRes.data.data.players.filter(Boolean));
+          }
+        } catch (cErr) {
+          console.warn('[StartingXI] Error fetching chunk:', chunk, cErr);
+        }
+      }
+
+      const nowMs = Date.now();
+
+      // Build status map for every player
+      fetchedPlayers.forEach((player) => {
+        if (!player || !player.slug) return;
+        const inputPlayer = slugMap.get(player.slug);
+        const upcomingGame = player.activeClub?.upcomingGames?.[0];
+        const kickoffDate = upcomingGame?.date || inputPlayer?.upcomingFixture?.date || null;
+        const kickoffMs = kickoffDate ? new Date(kickoffDate).getTime() : 0;
+        const minutesUntilKickoff = kickoffMs > 0 ? Math.round((kickoffMs - nowMs) / (60 * 1000)) : null;
+
+        const rawStatus = (player.playingStatus || inputPlayer?.status || '').toUpperCase();
+        const gameStatus = (upcomingGame?.statusTyped || '').toLowerCase();
+        const isGameInProgressOrRecent = gameStatus === 'live' || gameStatus === 'in_play' || gameStatus === 'ht' || gameStatus === 'completed';
+
+        // Official starting XI is released 60-75 minutes before kickoff
+        const isLineupAnnounced = (minutesUntilKickoff !== null && minutesUntilKickoff <= 75) || isGameInProgressOrRecent;
+
+        let lineupStatus: 'CONFIRMED_STARTER' | 'CONFIRMED_BENCH' | 'CONFIRMED_OUT' | 'PENDING' = 'PENDING';
+        let isStarter = false;
+
+        if (isLineupAnnounced) {
+          if (rawStatus.includes('STARTER') || rawStatus === 'CONFIRMED') {
+            lineupStatus = 'CONFIRMED_STARTER';
+            isStarter = true;
+          } else if (rawStatus.includes('SUB') || rawStatus.includes('BENCH')) {
+            lineupStatus = 'CONFIRMED_BENCH';
+            isStarter = false;
+          } else if (rawStatus.includes('NOT_PLAYING') || rawStatus.includes('DNP') || rawStatus.includes('OUT') || rawStatus.includes('INJUR') || rawStatus.includes('SUSPEND')) {
+            lineupStatus = 'CONFIRMED_OUT';
+            isStarter = false;
+          } else if (rawStatus === 'REGULAR' || (inputPlayer?.starterConfidence && inputPlayer.starterConfidence >= 75)) {
+            lineupStatus = 'CONFIRMED_STARTER';
+            isStarter = true;
+          } else {
+            lineupStatus = 'CONFIRMED_BENCH';
+            isStarter = false;
+          }
+        } else {
+          lineupStatus = 'PENDING';
+          isStarter = rawStatus.includes('STARTER') || rawStatus === 'REGULAR' || (inputPlayer?.starterConfidence && inputPlayer.starterConfidence >= 70);
+        }
+
+        const homeTeamName = upcomingGame?.homeTeam?.name || '';
+        const awayTeamName = upcomingGame?.awayTeam?.name || '';
+        const clubName = player.activeClub?.name || inputPlayer?.club?.name || '';
+        const opponent = homeTeamName === clubName ? awayTeamName : homeTeamName;
+        const matchSummary = (homeTeamName && awayTeamName) ? `${homeTeamName} vs ${awayTeamName}` : (clubName && opponent ? `${clubName} vs ${opponent}` : 'Match programmé');
+
+        playerStatusMap[player.slug] = {
+          playerSlug: player.slug,
+          displayName: player.displayName || inputPlayer?.displayName || inputPlayer?.name || player.slug,
+          clubName,
+          status: rawStatus,
+          lineupStatus,
+          isStarter,
+          isLineupAnnounced,
+          minutesUntilKickoff,
+          kickoffDate,
+          matchSummary,
+          opponent,
+          gameId: upcomingGame?.id || null,
+          gameStatus: upcomingGame?.statusTyped || null,
+        };
+      });
+    }
+
+    // 2. Evaluate all compositions to detect any non-starter
+    const alerts: any[] = [];
+    const slotKeys = ['gk', 'def', 'mid', 'fwd', 'extra'] as const;
+
+    lineupsInput.forEach((lp: any, index: number) => {
+      if (!lp || !lp.slots) return;
+      const compoName = lp.name || `Composition ${index + 1}`;
+      const compoId = lp.id || `lineup-${index}`;
+
+      slotKeys.forEach((slot) => {
+        const playerCard = lp.slots[slot];
+        if (!playerCard) return;
+
+        const pSlug = playerCard.playerSlug || (playerCard.slug ? playerCard.slug.replace(/-\d{4}-(common|limited|rare|super_rare|unique|custom).*$/i, '') : '') || cleanSlug(playerCard.displayName || playerCard.name || '');
+        const info = playerStatusMap[pSlug];
+
+        if (info) {
+          // If official lineup is announced and player is NOT a starter (or explicitly on the bench / out)
+          if (info.lineupStatus === 'CONFIRMED_BENCH' || info.lineupStatus === 'CONFIRMED_OUT' || (info.isLineupAnnounced && !info.isStarter)) {
+            const isBench = info.lineupStatus === 'CONFIRMED_BENCH' || (info.status || '').includes('SUB') || (info.status || '').includes('BENCH');
+            const issueType = isBench ? 'BENCH' : (info.status || '').includes('INJUR') ? 'INJURY' : (info.status || '').includes('SUSPEND') ? 'SUSPENSION' : 'OUT';
+            const statusLabel = isBench ? 'Remplaçant (Compo officielle)' : 'Hors groupe / Non aligné';
+
+            const alertId = `${compoId}_${slot}_${playerCard.id || pSlug}`;
+            const timeDesc = info.minutesUntilKickoff !== null ? `Coup d'envoi dans ${info.minutesUntilKickoff} min` : 'Match imminent';
+
+            alerts.push({
+              id: alertId,
+              lineupId: compoId,
+              lineupName: compoName,
+              slot,
+              slotLabel: slot === 'gk' ? 'Gardien' : slot === 'def' ? 'Défenseur' : slot === 'mid' ? 'Milieu' : slot === 'fwd' ? 'Attaquant' : 'Extra',
+              player: playerCard,
+              issueType,
+              statusLabel,
+              minutesUntilKickoff: info.minutesUntilKickoff,
+              kickoffDate: info.kickoffDate,
+              matchSummary: info.matchSummary,
+              message: `${playerCard.displayName || playerCard.name} n'est PAS titulaire (${statusLabel}) pour ${info.matchSummary} (${timeDesc}) dans "${compoName}" !`,
+              severity: 'CRITICAL',
+              detectedAt: new Date().toISOString(),
+            });
+          }
+        }
+      });
+    });
+
+    const durationMs = Date.now() - startTime;
+    addApiLog({
+      description: `Starting XI Check: ${uniqueSlugs.length} joueurs vérifiés (${alerts.length} alertes remplaçants)`,
+      service: 'Sorare API',
+      method: 'POST /api/lineups/starting-xi-check',
+      status: 'SUCCESS',
+      statusCode: 200,
+      durationMs,
+      requestSummary: { playersCount: uniqueSlugs.length, compositionsCount: lineupsInput.length },
+      responseSummary: { alertsCount: alerts.length }
+    });
+
+    return res.json({
+      success: true,
+      playerStatusMap,
+      alerts,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('[StartingXI API] Error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+      playerStatusMap: {},
+      alerts: [],
     });
   }
 });
@@ -3706,12 +4136,12 @@ app.get('/api/sorare/user-cards', async (req, res) => {
 
   try {
     const hasApiKey = Boolean(customApiKey);
-    const pageSize = hasApiKey ? 80 : 50;
+    const pageSize = hasApiKey ? 50 : 8;
     const scoresCount = 60;
 
     syncProgressMap.set(slug, {
       fetchedPages: 0,
-      estimatedTotalPages: hasApiKey ? 15 : 25, // Roughly estimating based on 1000 cards max
+      estimatedTotalPages: hasApiKey ? 15 : 35, // Roughly estimating based on gallery size
       fetchedCards: 0,
       status: 'fetching'
     });
@@ -3778,6 +4208,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                   l15: averageScore(type: LAST_FIFTEEN_SO5_AVERAGE_SCORE)
                   l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
                   playerGameScores: so5Scores(last: ${scoresCount}) {
+                    id
                     score
                     decisiveScore {
                       totalScore
@@ -3786,6 +4217,12 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                       totalScore
                     }
                     game {
+                      date
+                      statusTyped
+                      homeGoals
+                      awayGoals
+                      homeTeam { name pictureUrl }
+                      awayTeam { name pictureUrl }
                       competition {
                         name
                       }
@@ -3799,17 +4236,14 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       }
     `;
 
-    const reducedQuery = `
+    // High efficiency public query with depth <= 7 and complexity <= 500
+    const publicQuery = `
       query GetUserFootballCards($slug: String!, $after: String) {
         user(slug: $slug) {
           id
           slug
           nickname
-          profile {
-            clubName
-            pictureUrl
-          }
-          cards(first: ${pageSize}, after: $after, sport: FOOTBALL) {
+          cards(first: 8, after: $after, sport: FOOTBALL) {
             pageInfo {
               hasNextPage
               endCursor
@@ -3825,6 +4259,13 @@ app.get('/api/sorare/user-cards', async (req, res) => {
               seasonYear
               power
               specialEdition
+              powerBreakdown {
+                collectionBasisPoints
+                seasonBasisPoints
+                specialEditionCardsBasisPoints
+                xpBasisPoints
+                otherBonusBasisPoints
+              }
               anyPositions
               anyPlayer {
                 slug
@@ -3836,26 +4277,12 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                   name
                   slug
                   pictureUrl
-                  upcomingGames(first: 1) {
-                    date
-                    homeTeam { name }
-                    awayTeam { name }
-                  }
                 }
                 ... on Player {
                   playingStatus
                   l5: averageScore(type: LAST_FIVE_SO5_AVERAGE_SCORE)
                   l15: averageScore(type: LAST_FIFTEEN_SO5_AVERAGE_SCORE)
                   l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
-                  playerGameScores: so5Scores(last: ${scoresCount}) {
-                    score
-                    decisiveScore {
-                      totalScore
-                    }
-                    allAroundStats {
-                      totalScore
-                    }
-                  }
                 }
               }
             }
@@ -3864,14 +4291,18 @@ app.get('/api/sorare/user-cards', async (req, res) => {
       }
     `;
 
-    const query = hasApiKey ? fullQuery : reducedQuery;
-
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'User-Agent': 'TeamSorare-App/2.0',
     };
+
+    let query = publicQuery;
+    let effectivePageSize = 12;
+
     if (customApiKey) {
       headers['APIKEY'] = customApiKey;
+      query = fullQuery;
+      effectivePageSize = 50;
     }
 
     let after: string | null = null;
@@ -3890,24 +4321,22 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         3
       );
 
-      if (!responseResult.ok) {
-        console.log(`[Sorare Sync] Stopped pagination at page ${page}: ${responseResult.error}`);
-        if (page === 1) throw new Error(responseResult.error);
+      if (!responseResult.ok || (responseResult.data?.errors && responseResult.data.errors.length > 0)) {
+        const errMsg = responseResult.error || responseResult.data?.errors?.[0]?.message || 'GraphQL error';
+        console.log(`[Sorare Sync] Issue on page ${page}: ${errMsg}`);
+        if (page === 1 && query === fullQuery) {
+          console.log('[Sorare Sync] fullQuery failed on page 1, falling back to publicQuery...');
+          query = publicQuery;
+          page = 0; // restart at page 1 with publicQuery
+          after = null;
+          continue;
+        }
+        if (page === 1) throw new Error(errMsg);
         break;
       }
 
       const result = responseResult.data;
-      if (!result) {
-        console.log(`[Sorare Sync] No result data on page ${page}`);
-        break;
-      }
-      if (result.errors && result.errors.length > 0) {
-        console.log(`[Sorare Sync] GraphQL errors on page ${page}:`, result.errors[0]?.message);
-        if (page === 1) throw new Error(result.errors[0]?.message);
-        break;
-      }
-
-      const user = result.data?.user;
+      const user = result?.data?.user;
       if (!user) break;
 
       if (!userMeta) {
@@ -3995,15 +4424,35 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           const allAroundStatsArr = pgs?.allAroundStats || [];
           const aasSum = allAroundStatsArr.reduce((sum: number, stat: any) => sum + (Number(stat?.totalScore) || 0), 0);
           const allAroundVal = aasSum > 0 ? Math.round(aasSum * 10) / 10 : (scoreVal > 0 ? Math.max(0, Math.round((scoreVal - (decisiveVal > 0 ? 60 : 35)) * 10) / 10) : 0);
+          
+          const game = pgs?.game;
+          let isHome = pgsIdx % 2 === 0;
+          let opponent = `Adversaire J-${pgsIdx + 1}`;
+          if (game) {
+            isHome = game.homeTeam?.name === clubName;
+            opponent = isHome ? (game.awayTeam?.name || opponent) : (game.homeTeam?.name || opponent);
+          }
 
           return {
             score: scoreVal,
+            so5ScoreId: pgs.id,
             allAroundScore: allAroundVal,
             decisiveScore: decisiveVal,
-            opponent: `Adversaire J-${pgsIdx + 1}`,
-            isHome: pgsIdx % 2 === 0,
-            competitionName: pgs?.game?.competition?.name || leagueName,
-            matchDate: ''
+            opponent,
+            isHome,
+            competitionName: game?.competition?.name || leagueName,
+            matchDate: game?.date || '',
+            game: game ? {
+              statusTyped: game.statusTyped,
+              minute: game.minute,
+              homeTeam: game.homeTeam?.name,
+              homeTeamPicture: game.homeTeam?.pictureUrl,
+              awayTeam: game.awayTeam?.name,
+              awayTeamPicture: game.awayTeam?.pictureUrl,
+              homeGoals: game.homeGoals,
+              awayGoals: game.awayGoals,
+              competition: game.competition?.name
+            } : undefined
           };
         });
 
@@ -4247,11 +4696,14 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           };
         }
 
+        const derivedPlayerSlug = player?.slug || c.playerSlug || (c.slug ? c.slug.replace(/-\d{4}-(common|limited|rare|super_rare|unique|custom).*$/i, '') : '');
         return {
           id: c.id,
           slug: c.slug,
-          displayName: player?.displayName || c.name.replace(/\s*\d{4}.*$/, '').trim(),
-          matchName: player?.matchName || player?.displayName || c.name,
+          name: c.name || player?.displayName || '',
+          displayName: player?.displayName || (c.name ? c.name.replace(/\s*\d{4}.*$/, '').trim() : 'Joueur Sorare'),
+          playerSlug: derivedPlayerSlug,
+          matchName: player?.matchName || player?.displayName || c.name || '',
           position: pos,
           positionCode: posCode,
           positionName: posName,
@@ -4269,66 +4721,58 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           },
           grade: c.grade || 0,
           xp: c.xp || 0,
-          power: c.power || '1.050',
           specialEdition: c.specialEdition || null,
-          powerBreakdown: (() => {
-            if (!c.powerBreakdown) return undefined;
-            const pb = {
-              collectionBasisPoints: c.powerBreakdown.collectionBasisPoints || 0,
-              seasonBasisPoints: c.powerBreakdown.seasonBasisPoints || 0,
-              specialEditionCardsBasisPoints: c.powerBreakdown.specialEditionCardsBasisPoints || 0,
-              xpBasisPoints: c.powerBreakdown.xpBasisPoints || 0,
-              otherBonusBasisPoints: c.powerBreakdown.otherBonusBasisPoints || 0,
-            };
-            if (pb.specialEditionCardsBasisPoints === 0 && c.specialEdition) {
-              const se = c.specialEdition.toLowerCase();
-              if (se.includes('chroma')) {
-                pb.specialEditionCardsBasisPoints = 2000;
-              } else if (se.includes('rising_flame') || se.includes('flame')) {
-                pb.specialEditionCardsBasisPoints = 1500;
-              } else if (se.includes('holo')) {
-                pb.specialEditionCardsBasisPoints = 1000;
-              } else if (se.includes('shiny')) {
-                pb.specialEditionCardsBasisPoints = 500;
-              }
-            }
-            return pb;
-          })(),
+          power: c.power || null,
+          powerBreakdown: c.powerBreakdown ? {
+            collectionBasisPoints: c.powerBreakdown.collectionBasisPoints || 0,
+            seasonBasisPoints: c.powerBreakdown.seasonBasisPoints || 0,
+            specialEditionCardsBasisPoints: c.powerBreakdown.specialEditionCardsBasisPoints || 0,
+            xpBasisPoints: c.powerBreakdown.xpBasisPoints || 0,
+            otherBonusBasisPoints: c.powerBreakdown.otherBonusBasisPoints || 0,
+          } : undefined,
           bonusPercentage: (() => {
+            const rarity = (c.rarityTyped || c.rarity || '').toUpperCase();
+            let rarityBonus = 0;
+            if (rarity === 'RARE') rarityBonus = 10;
+            else if (rarity === 'SUPER_RARE') rarityBonus = 20;
+            else if (rarity === 'UNIQUE') rarityBonus = 40;
+
+            const isCurrentSeason = typeof c.seasonYear === 'number' && c.seasonYear >= 2026;
+            const manualInSeasonBonus = isCurrentSeason ? 5 : 0;
+
+            let b1 = -1, b2 = -1, b3 = manualInSeasonBonus;
+            
             if (c.powerBreakdown) {
-              const pb = {
-                collectionBasisPoints: c.powerBreakdown.collectionBasisPoints || 0,
-                seasonBasisPoints: c.powerBreakdown.seasonBasisPoints || 0,
-                specialEditionCardsBasisPoints: c.powerBreakdown.specialEditionCardsBasisPoints || 0,
-                xpBasisPoints: c.powerBreakdown.xpBasisPoints || 0,
-                otherBonusBasisPoints: c.powerBreakdown.otherBonusBasisPoints || 0,
-              };
-              if (pb.specialEditionCardsBasisPoints === 0 && c.specialEdition) {
-                const se = c.specialEdition.toLowerCase();
-                if (se.includes('chroma')) {
-                  pb.specialEditionCardsBasisPoints = 2000;
-                } else if (se.includes('rising_flame') || se.includes('flame')) {
-                  pb.specialEditionCardsBasisPoints = 1500;
-                } else if (se.includes('holo')) {
-                  pb.specialEditionCardsBasisPoints = 1000;
-                } else if (se.includes('shiny')) {
-                  pb.specialEditionCardsBasisPoints = 500;
-                }
-              }
-              const sumBps = pb.collectionBasisPoints +
-                             pb.seasonBasisPoints +
-                             pb.specialEditionCardsBasisPoints +
-                             pb.xpBasisPoints +
-                             pb.otherBonusBasisPoints;
-              return Math.round((sumBps / 100) * 10) / 10;
+              const pb = c.powerBreakdown;
+              const seasonBps = (pb.seasonBasisPoints && pb.seasonBasisPoints > 0) ? pb.seasonBasisPoints : (manualInSeasonBonus * 100);
+              const sumBps = (pb.collectionBasisPoints || 0) +
+                             seasonBps +
+                             (pb.specialEditionCardsBasisPoints || 0) +
+                             (pb.xpBasisPoints || 0) +
+                             (pb.otherBonusBasisPoints || 0);
+              b1 = sumBps / 100;
             }
             if (c.power) {
               const p = parseFloat(c.power);
               if (!isNaN(p) && p >= 1.0) {
-                return Math.round((p - 1.0) * 100 * 10) / 10;
+                let pBonus = (p - 1.0) * 100;
+                if (rarity === 'COMMON' && isCurrentSeason) pBonus += manualInSeasonBonus;
+                b2 = pBonus;
               }
             }
-            return c.seasonYear >= 2025 ? 5 : 0;
+            if (typeof c.grade === 'number' && c.grade > 0) b3 += c.grade * 0.5;
+            else if (typeof c.xp === 'number' && c.xp > 0) b3 += Math.min(c.xp / 100, 5);
+
+            if (c.specialEdition) {
+              const se = c.specialEdition.toLowerCase();
+              if (se.includes('chroma')) b3 += 20;
+              else if (se.includes('flame')) b3 += 15;
+              else if (se.includes('holo')) b3 += 10;
+              else if (se.includes('shiny')) b3 += 5;
+            }
+
+            const maxBonus = Math.max(b1, b2, b3, 0);
+            return Math.round((rarityBonus + maxBonus) * 10) / 10;
           })(),
           status,
           starterConfidence,

@@ -1,6 +1,6 @@
 import React from 'react';
 import { PitchView } from '../components/PitchView';
-import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters } from '../types';
+import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters, NonStarterAlert, StartingXIPlayerInfo } from '../types';
 
 interface PitchPageProps {
   lineup: Lineup;
@@ -19,6 +19,9 @@ interface PitchPageProps {
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
   onImportSorareLineups?: () => void;
+  alerts?: NonStarterAlert[];
+  playerStatusMap?: Record<string, StartingXIPlayerInfo>;
+  onOpenStartingXIMonitor?: () => void;
 }
 
 export const PitchPage: React.FC<PitchPageProps> = (props) => {

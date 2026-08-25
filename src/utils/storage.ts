@@ -159,15 +159,27 @@ export class StorageService {
       // We only keep essential properties for initial UI render
       const lightCards = cards.map(c => ({
         id: c.id,
+        slug: c.slug,
+        playerSlug: (c as any).playerSlug || '',
         name: c.displayName || c.name || '',
         displayName: c.displayName || c.name || '',
+        matchName: c.matchName || c.displayName || c.name || '',
         rarity: c.rarity,
+        seasonYear: c.seasonYear || 2025,
+        power: c.power,
+        powerBreakdown: c.powerBreakdown,
+        bonusPercentage: c.bonusPercentage,
+        grade: c.grade,
+        xp: c.xp,
+        specialEdition: c.specialEdition,
         scores: c.scores,
         starterConfidence: c.starterConfidence,
         status: c.status,
+        injuryStatus: c.injuryStatus,
         club: c.club,
         positionCode: c.positionCode,
-        pictureUrl: c.pictureUrl
+        pictureUrl: c.pictureUrl,
+        upcomingFixture: c.upcomingFixture
       })).slice(0, 300); // Limit to top 300 cards to stay well within localStorage limits
       
       localStorage.setItem(STORAGE_KEYS.CARDS, JSON.stringify(lightCards));

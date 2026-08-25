@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal, Radio, Scale, Zap } from 'lucide-react';
+import { Shield, RefreshCw, Sparkles, Trophy, Users, BarChart3, Clock, Wifi, WifiOff, CheckCircle2, Link2, ExternalLink, Key, Check, Info, Terminal, Radio, Scale, Zap, BellRing, Bell } from 'lucide-react';
 import { GameWeekInfo, StrategyType, ScoringFocus } from '../types';
 import { StorageService, SorareUserMeta } from '../utils/storage';
 
@@ -18,6 +18,8 @@ interface NavbarProps {
   setStrategy: (strategy: StrategyType) => void;
   scoringFocus: ScoringFocus;
   setScoringFocus: (focus: ScoringFocus) => void;
+  alertsCount?: number;
+  onOpenStartingXIMonitor?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -35,6 +37,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   setStrategy,
   scoringFocus,
   setScoringFocus,
+  alertsCount = 0,
+  onOpenStartingXIMonitor,
 }) => {
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [tempUsername, setTempUsername] = useState(username);
@@ -142,6 +146,32 @@ export const Navbar: React.FC<NavbarProps> = ({
               <option value="DS" className="bg-slate-900 text-slate-100">⚡ Profil : Focus DS (Scores Décisifs / Plafond)</option>
             </select>
           </div>
+
+          {/* Starting XI Monitor & Live Lineup Alerts Button */}
+          {onOpenStartingXIMonitor && (
+            <button
+              onClick={onOpenStartingXIMonitor}
+              title="Monitoring des compositions d'équipes officielles 1h avant match & alertes remplaçants"
+              className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition shadow-sm ${
+                alertsCount > 0
+                  ? 'border-rose-500/80 bg-rose-950/80 text-rose-200 hover:bg-rose-900 animate-pulse ring-2 ring-rose-500/40'
+                  : 'border-emerald-500/40 bg-slate-900/90 text-slate-200 hover:border-emerald-400 hover:text-emerald-300'
+              }`}
+            >
+              {alertsCount > 0 ? (
+                <>
+                  <BellRing className="h-3.5 w-3.5 text-rose-400 animate-bounce" />
+                  <span className="text-rose-300 font-extrabold">🚨 {alertsCount} Non-titulaire{alertsCount > 1 ? 's' : ''}</span>
+                </>
+              ) : (
+                <>
+                  <Bell className="h-3.5 w-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline text-emerald-300">Compos 1h</span>
+                  <span className="sm:hidden">Compos</span>
+                </>
+              )}
+            </button>
+          )}
 
           {/* Sync Button */}
           <button
