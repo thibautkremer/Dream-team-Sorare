@@ -75,6 +75,8 @@ export interface RealMatchScoreDetail {
   so5ScoreId?: string;
   isStarter?: boolean;
   isSub?: boolean;
+  dnp?: boolean;
+  statusTyped?: string;
   baseScore?: number; // 35 for Starter, 25 for Sub, 0 for DNP
   goals?: number;
   goalAssist?: number;

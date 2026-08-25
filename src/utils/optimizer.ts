@@ -536,6 +536,23 @@ export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: Sorar
 }
 
 /**
+ * Détecte si le joueur est tireur de coups de pied arrêtés (Penaltys, Corners, Coups Francs)
+ */
+export function detectSetPieceRole(card: SorareCard): {
+  isPenaltyTaker: boolean;
+  isCornerTaker: boolean;
+  isFreeKickTaker: boolean;
+} {
+  const text = `${card.tacticalNotes || ''} ${card.displayName || ''} ${card.name || ''} ${(card as any).description || ''}`.toLowerCase();
+  
+  const isPenaltyTaker = /\b(penalty|penaltys|penalties|tireur de penalty|tireur de penaltys|pk taker|penalty taker)\b/i.test(text);
+  const isCornerTaker = /\b(corner|corners|tireur de corner|tireur de corners|corner taker|set.?piece|set.?pieces)\b/i.test(text);
+  const isFreeKickTaker = /\b(coup.?franc|coups.?francs|tireur de coup.?franc|free.?kick|fk specialist|free.?kick taker)\b/i.test(text);
+
+  return { isPenaltyTaker, isCornerTaker, isFreeKickTaker };
+}
+
+/**
  * Calcule le score projeté SO5 pour une carte selon la stratégie
  */
 export function calculatePlayerProjectedScore(
@@ -564,7 +581,7 @@ export function calculatePlayerProjectedScore(
   let recentStats = getPlayerRecentMatchAnalysis(card);
   let filterLabel = '';
 
-  // 2. Dissociation des matchs Équipe Nationale et Club
+  // 2. Dissociation des matchs Équipe Nationale et Club + Filtrage des sorties sur blessure précoce (< 20 mins)
   if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
     // On ne conserve que les matchs cohérents avec le type d'échéance à venir
     const filteredMatches = card.scores.recentMatches.filter(m => {
@@ -577,15 +594,25 @@ export function calculatePlayerProjectedScore(
     });
 
     if (filteredMatches.length > 0) {
-      const filteredScores = filteredMatches.map(m => m.score);
-      // Calcul officiel Sorare (uniquement matchs joués > 0) avec lissage Bayesien si échantillon réduit
+      // Filtrage des anomalies : si un match a minsPlayed < 20 et score < 15 (blessure précoce), on l'exclut du calcul de forme pure
+      const validFormMatches = filteredMatches.filter(m => {
+        if (m.minsPlayed != null && m.minsPlayed > 0 && m.minsPlayed < 20 && (m.score || 0) < 15) {
+          return false; // Sortie sur blessure précoce
+        }
+        return true;
+      });
+
+      const targetMatches = validFormMatches.length > 0 ? validFormMatches : filteredMatches;
+      const filteredScores = targetMatches.map(m => m.score);
+
+      // Calcul officiel Sorare avec lissage Bayesien si échantillon réduit
       const baselineScore = (card.scores?.l40 && card.scores.l40 > 0) ? card.scores.l40 : (card.scores?.l15 || 48);
       const calcAverage = (scores: number[], count: number, fallback: number = baselineScore) => {
         const playedScores = scores.filter(s => s != null && s > 0);
         const slice = playedScores.slice(0, count);
         if (slice.length === 0) return fallback;
         const rawAvg = slice.reduce((a, b) => a + b, 0) / slice.length;
-        // Garde-fou Trêve Internationale / Faible échantillon : si < 2 matchs joués pour L5 ou < 4 pour L15
+        // Garde-fou Trêve / Faible échantillon
         const minReq = count === 5 ? 2 : Math.min(count, 4);
         if (slice.length < minReq) {
           const weight = slice.length / minReq;
@@ -612,18 +639,10 @@ export function calculatePlayerProjectedScore(
         filterLabel = `Forme sélection nationale uniquement`;
       }
     } else {
-      // Aucun match de ce type trouvé (ex: trêve nationale ayant effacé l'historique club de l'API)
+      // Aucun match de ce type trouvé
       if (!upcomingIsNational) {
-        // Échéance CLUB mais pas de match club trouvé dans l'historique récent
         if (l15 > 45 || l40 > 45 || card.status === 'STARTER' || card.status === 'REGULAR') {
-          // On restaure ses moyennes historiques réelles de club en ignorant l'absence récente en sélection
           l5 = l15 > 0 ? l15 : l40;
-          // COHERENCE FIX (audit): this used to fabricate `playedCountL5: 5` and
-          // `recentPlayingFactor: 1.0` — i.e. full certainty, as if the player had actually
-          // started all 5 recent club matches — even though there is ZERO real recent club match
-          // data here (we're falling back to L15/L40 historical averages precisely because none
-          // exists). That overstated confidence flatters the projection. Softened to reflect
-          // genuine uncertainty while still trusting the card's own STARTER/REGULAR status.
           recentStats = {
             playedLastMatch: true,
             lastMatchScore: l5,
@@ -635,7 +654,6 @@ export function calculatePlayerProjectedScore(
           filterLabel = 'Données club rétrospectives (trêve nationale exclue, confiance réduite)';
         }
       } else {
-        // Échéance NATIONALE mais pas de match de sélection dans l'historique récent
         l5 = 0;
         recentStats = {
           playedLastMatch: false,
@@ -703,7 +721,7 @@ export function calculatePlayerProjectedScore(
     if (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2) {
       playerStatus = 'STARTER';
     } else if (recentStats.playedLastMatch) {
-      playerStatus = 'STARTER'; // Titulaire au dernier match de sélection = probable titulaire
+      playerStatus = 'STARTER';
     } else if (recentStats.playedCountL5 >= 1) {
       playerStatus = 'SUBSTITUTE';
     } else {
@@ -719,24 +737,74 @@ export function calculatePlayerProjectedScore(
     }
   }
 
-  // 1. Élimination d'office des joueurs blessés, suspendus ou hors groupe
+  // Élimination des joueurs indisponibles
   if (card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED' || playerStatus === 'NOT_PLAYING') {
     return emptyBreakdown;
   }
 
-  // Si le joueur n'a disputé aucun match sur les 5 derniers, le risque DNP est maximal (score 0)
+  // Règle stricte Gardien de But (GK) :
+  // Si un gardien n'est pas le titulaire établi ou si un autre gardien du club est titulaire,
+  // le gardien remplaçant ne jouera pas -> Score projeté = 0.0 pt.
+  if (card.positionCode === 'GK') {
+    if (playerStatus !== 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence < 50) || recentStats.playedCountL5 < 2) {
+      return {
+        ...emptyBreakdown,
+        starterFactor: 0,
+        starterImpactLabel: 'Gardien remplaçant : ne jouera pas (0 pt)',
+      };
+    }
+
+    // Vérification de concurrence au sein du même club dans la galerie
+    if (allGalleryCards && allGalleryCards.length > 0 && card.club?.name) {
+      const currentSlug = card.playerSlug || card.slug;
+      const otherClubGks = allGalleryCards.filter(c => 
+        c.positionCode === 'GK' && 
+        c.club?.name === card.club?.name && 
+        (c.playerSlug || c.slug) !== currentSlug
+      );
+
+      const hasPrimaryStarterGk = otherClubGks.some(otherGk => {
+        const otherPlayed = otherGk.scores?.l5Played ?? 0;
+        const currentPlayed = card.scores?.l5Played ?? recentStats.playedCountL5;
+        const otherIsConfirmedStarter = otherGk.status === 'STARTER' && (otherGk.starterConfidence ?? 80) >= 80;
+        return (otherIsConfirmedStarter && card.status !== 'STARTER') || (otherPlayed > currentPlayed && otherPlayed >= 3);
+      });
+
+      if (hasPrimaryStarterGk) {
+        return {
+          ...emptyBreakdown,
+          starterFactor: 0,
+          starterImpactLabel: 'Gardien remplaçant n°2 (Titulaire club identifié : 0 pt)',
+        };
+      }
+    }
+  }
+
   if (recentStats.playedCountL5 === 0 && playerStatus !== 'STARTER') {
     return emptyBreakdown;
   }
 
-  // Exclure les remplaçants confirmés (SUBSTITUTE / BENCH) ou joueurs écartés selon les dernières compos
   if (playerStatus === 'SUBSTITUTE' || playerStatus === 'SUPER_SUBSTITUTE' || playerStatus === 'BENCH' || recentStats.consecutiveDnpCount >= 2 || recentStats.recentPlayingFactor < 0.30) {
     return emptyBreakdown;
   }
 
-  let baseForm = 0;
-  let strategyWeights = { l5: 0.50, l15: 0.35, l40: 0.15 };
+  const isRegularStarter = playerStatus === 'STARTER' || playerStatus === 'REGULAR';
 
+  // --- PROPOSITION 5: Bayesian Shrinkage sur L5 vs L40 (amortissement des anomalies) ---
+  let regressionPenalty = 0;
+  let l5Adjusted = l5;
+  if (l40 > 0 && l5 > l40 + 10) {
+    // Si L5 est très au-dessus de L40 (+10 pts), amortissement bayésien vers le niveau structurel
+    const excess = l5 - (l40 + 10);
+    l5Adjusted = l40 + 10 + (excess * 0.45);
+    regressionPenalty = l5 - l5Adjusted;
+  } else if (l40 > 0 && isRegularStarter && card.injuryStatus === 'FIT' && l5 < l40 - 15) {
+    // Si L5 a chuté brutalement suite à 2 matchs malchanceux chez un titulaire sain, amortissement haussier
+    const deficit = (l40 - 15) - l5;
+    l5Adjusted = l5 + (deficit * 0.35);
+  }
+
+  let strategyWeights = { l5: 0.50, l15: 0.35, l40: 0.15 };
   if (strategy === 'PURE_FORM') {
     strategyWeights = { l5: 0.75, l15: 0.20, l40: 0.05 };
   } else if (strategy === 'SAFE_TITULAR') {
@@ -745,14 +813,7 @@ export function calculatePlayerProjectedScore(
     strategyWeights = { l5: 0.60, l15: 0.30, l40: 0.10 };
   }
 
-  baseForm = (l5 * strategyWeights.l5) + (l15 * strategyWeights.l15) + (l40 * strategyWeights.l40);
-
-  // --- NEW: Regression to the Mean & Ponderation DS ---
-  let regressionPenalty = 0;
-  if (l40 > 0 && l5 > l40 + 5) {
-     regressionPenalty = (l5 - l40) / 5.0; // "multiplicateur ajusté à 5.0"
-     baseForm -= regressionPenalty;
-  }
+  let baseForm = (l5Adjusted * strategyWeights.l5) + (l15 * strategyWeights.l15) + (l40 * strategyWeights.l40);
 
   // 3. Facteur statut titulaire & pénalité derniers matchs
   let starterFactor = 1.0;
@@ -780,7 +841,6 @@ export function calculatePlayerProjectedScore(
     starterImpactLabel += ' • Incertain (-20%)';
   }
 
-  // Application de la pénalité liée au dernier match et aux DNP récents
   starterFactor *= recentStats.recentPlayingFactor;
 
   const recentMatchDetail = card.scores?.recentMatches?.[0];
@@ -789,9 +849,6 @@ export function calculatePlayerProjectedScore(
     : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
 
   if (recentStats.playedLastMatch && wasSubInLastMatch) {
-    // BUGFIX (coherence audit): this label used to claim a -5% penalty but starterFactor was
-    // never actually multiplied by 0.95 — the score was flattered relative to what the system's
-    // own explanation told the user. Now genuinely applied.
     starterFactor *= 0.95;
     starterImpactLabel += ' • Entré en jeu / Remplaçant (-5%)';
   }
@@ -799,7 +856,7 @@ export function calculatePlayerProjectedScore(
   // Pénalité d'adaptation pour transfert / nouveau club
   const hasChangedClub = isPlayerNewTransfer(card);
   if (hasChangedClub) {
-    const adaptationPenaltyPct = 15; // -15% sur la probabilité de titularisation de base
+    const adaptationPenaltyPct = 15;
     starterFactor *= (1 - (adaptationPenaltyPct / 100));
     starterImpactLabel += ` • Adaptation nouveau club (-${adaptationPenaltyPct}%)`;
   }
@@ -813,9 +870,9 @@ export function calculatePlayerProjectedScore(
   let allAroundFactor = 1.0;
   let teamXG = 1.4;
   let oppXG = 1.4;
+  const winProb = fixture ? getPlayerWinProbability(fixture) : 50;
 
   if (fixture) {
-    const winProb = getPlayerWinProbability(fixture);
     if (winProb >= 60) {
       difficultyRating = 1;
     } else if (winProb >= 48) {
@@ -832,11 +889,7 @@ export function calculatePlayerProjectedScore(
       case 1:
         matchupFactor = 1.12;
         matchupImpactLabel = 'Très Favorable (FDR 1 : +12%)';
-        // Halved vs the original +5%/+3%: matchupFactor already captures this same
-        // difficultyRating-derived favorability, so applying the full boost again here would
-        // double-count the same signal for MID (same fix pattern already applied to
-        // cleanSheetFactor below, for consistency).
-        allAroundFactor = (card.positionCode === 'MID') ? 1.025 : 1.0; // Boost possession pour MID
+        allAroundFactor = (card.positionCode === 'MID') ? 1.025 : 1.0;
         break;
       case 2:
         matchupFactor = 1.05;
@@ -857,7 +910,6 @@ export function calculatePlayerProjectedScore(
         break;
     }
 
-    // --- HOME / AWAY FACTOR & EXPECTED GOALS (xG) POSITION-BASED SCALING ---
     teamXG = fixture?.bookmaker?.goalExpectancy || (difficultyRating === 1 ? 2.1 : difficultyRating === 2 ? 1.7 : difficultyRating === 3 ? 1.4 : difficultyRating === 4 ? 1.1 : 0.8);
     oppXG = fixture?.bookmaker?.opponentGoalExpectancy || (difficultyRating === 1 ? 0.8 : difficultyRating === 2 ? 1.1 : difficultyRating === 3 ? 1.4 : difficultyRating === 4 ? 1.7 : 2.1);
 
@@ -871,68 +923,64 @@ export function calculatePlayerProjectedScore(
       matchupImpactLabel += ' • Extérieur (xG ajusté)';
     }
 
-    // --- NEW: Opponent Style Proxies ---
     if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && oppXG > 1.8) {
-      // Si l'adversaire a un volume offensif important, opportunités accrues de duels, sauvetages et tacles (+5% AAS)
       allAroundFactor *= 1.05;
     }
+  }
 
-    // Calculate clean sheet factor based on cleanSheetProb if available, or dynamically derived from oppXG
-    if (card.positionCode === 'GK' || card.positionCode === 'DEF') {
-      const derivedCSProb = fixture?.bookmaker?.cleanSheetProb || Math.max(5, Math.min(85, Math.exp(-oppXG) * 100));
-      cleanSheetFactor = (derivedCSProb / 100) * 8;
+  // --- PROPOSITION 2: Multiplicateur dynamique Clean Sheet & Victoire pour GK et DEF ---
+  if (card.positionCode === 'GK' || card.positionCode === 'DEF') {
+    const cleanSheetProb = fixture?.bookmaker?.cleanSheetProb || Math.max(5, Math.min(85, Math.round(Math.exp(-oppXG) * 100)));
+    const baselineCS = 28; // % moyen de clean sheet en ligue professionnelle
+    const csDelta = cleanSheetProb - baselineCS;
+
+    if (card.positionCode === 'GK') {
+      // Pour les gardiens, le Clean Sheet conditionne directement le passage au palier 60 pts
+      cleanSheetFactor = csDelta >= 0 ? Math.min(8.0, csDelta * 0.16) : Math.max(-4.5, csDelta * 0.14);
+      // Impact domicile & victoire pour GK
+      if (fixture?.isHome) cleanSheetFactor += 1.5;
+      if (winProb >= 55) cleanSheetFactor += 1.5;
+      else if (winProb < 30) cleanSheetFactor -= 1.5;
+    } else {
+      // Pour les défenseurs (+10 pts clean sheet + bonus all-around)
+      cleanSheetFactor = csDelta >= 0 ? Math.min(5.5, csDelta * 0.10) : Math.max(-3.0, csDelta * 0.08);
+      if (fixture?.isHome) cleanSheetFactor += 1.2;
     }
   }
 
-  let profileBonus = 0;
-  // --- Game State (O/U Proxy) ---
-  // COHERENCE FIX (audit): both the threshold bonus below and the xG-delta adjustment are
-  // derived from teamXG/oppXG, which are themselves either taken directly from bookmaker data
-  // OR (when unavailable) derived FROM the very same difficultyRating that already drives
-  // matchupFactor a few lines above. That means a big favorite could get rewarded for the same
-  // underlying "easy/high-scoring fixture" fact three times over: once multiplicatively via
-  // matchupFactor (+12% for FDR1), once via this threshold bonus, and once via the xG-delta term
-  // — compounding into unrealistically inflated projections for star players in good fixtures
-  // (traced example: a 66.8-pt weighted form could reach ~82.7 projected, +24%, largely from this
-  // redundancy). Halved here, consistent with the same "avoid double-counting" correction already
-  // applied to cleanSheetFactor and allAroundFactor elsewhere in this function.
-  let gameStateBonus = 0;
-  if (fixture) {
-    const totalMatchXG = teamXG + oppXG;
-    let thresholdLow = 2.3;
-    let thresholdHigh = 2.8;
-
-    if (totalMatchXG < thresholdLow) {
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus += 0.5;
-      if (card.positionCode === 'FWD') gameStateBonus -= 0.5;
-    } else if (totalMatchXG > thresholdHigh) {
-      if (card.positionCode === 'GK' || card.positionCode === 'DEF') gameStateBonus -= 0.25;
-      if (card.positionCode === 'FWD') gameStateBonus += 0.75;
-    }
-
-    if (card.positionCode === 'FWD' || card.positionCode === 'MID') {
-      const xGAdjustment = (teamXG - 1.4) * 0.5;
-      gameStateBonus += xGAdjustment;
+  // --- PROPOSITION 3: Ajustement dynamique du Temps de Jeu Estimé (Mins Projetées) ---
+  let baseExpectedMins = card.positionCode === 'GK' ? 90 : card.positionCode === 'DEF' ? 88 : card.positionCode === 'MID' ? 82 : 74;
+  
+  // Utilisation de la moyenne des minutes jouées lors des derniers matchs démarrés
+  if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
+    const startedMins = card.scores.recentMatches
+      .filter(m => (m.minsPlayed != null && m.minsPlayed >= 45) || m.isStarter)
+      .map(m => m.minsPlayed || 85);
+    if (startedMins.length > 0) {
+      const avgMins = startedMins.reduce((a, b) => a + b, 0) / startedMins.length;
+      baseExpectedMins = Math.round((baseExpectedMins * 0.4) + (avgMins * 0.6));
     }
   }
 
-  // --- Contextual Absents ---
-  // BUGFIX: the previous condition `card.status === 'STARTER' && !isRegularStarter` could never
-  // be true, since isRegularStarter is defined as (status === 'REGULAR' || status === 'STARTER'),
-  // so status === 'STARTER' already guarantees isRegularStarter === true. This branch was dead
-  // code and the "Remplace un titulaire absent" bonus never fired.
-  // Fix: use `starterConfidence` (derived from actual recent playing time, see server.ts) as the
-  // real signal for "listed as a starter for this fixture, but hasn't consistently started
-  // recently" — i.e. likely stepping in for an injured/rotated regular.
-  const isRegularStarter = card.status === 'REGULAR' || card.status === 'STARTER';
-  let contextualBonus = 0;
-  let contextualImpactLabel = '';
-  if (card.status === 'STARTER' && (card.starterConfidence ?? 100) < 60) {
-    contextualBonus += 2.0;
-    contextualImpactLabel = 'Remplace un titulaire absent (+2pts)';
-  } else if (isRegularStarter && card.scores && card.scores.l5 < 35 && card.scores.l15 > 50) {
-    contextualBonus += 3.0;
-    contextualImpactLabel = 'Retour en forme attendu (+3pts)';
+  // Modération des minutes en cas de doute physique ou premier match de reprise
+  if (card.injuryStatus === 'DOUBTFUL' || card.injuryStatus === 'QUESTIONABLE' || (recentStats.consecutiveDnpCount === 1 && !recentStats.playedLastMatch)) {
+    baseExpectedMins = Math.round(baseExpectedMins * 0.85);
+  }
+
+  // Le temps de jeu module principalement l'accumulation All-Around (passes, tacles, duels)
+  const minutesFactor = Math.max(0.40, Math.min(1.0, 0.35 + 0.65 * (baseExpectedMins / 90)));
+
+  // --- PROPOSITION 4: Détection des tireurs de coups de pied arrêtés (Set-Pieces) ---
+  const setPieceRole = detectSetPieceRole(card);
+  let setPieceBonus = 0;
+  if (setPieceRole.isPenaltyTaker) {
+    setPieceBonus += 3.5; // +3.5 pts d'espérance de but sur penalty
+  }
+  if (setPieceRole.isCornerTaker) {
+    setPieceBonus += 2.0; // +2.0 pts en passes décisives attendues et centres
+  }
+  if (setPieceRole.isFreeKickTaker) {
+    setPieceBonus += 1.2; // +1.2 pts en tirs cadrés et occasions créées
   }
 
   // Weather check
@@ -957,34 +1005,62 @@ export function calculatePlayerProjectedScore(
     }
   }
 
-  // Adjust cleanSheetFactor down since matchupFactor already boosts good matchups
-  if (cleanSheetFactor > 0) {
-    cleanSheetFactor = cleanSheetFactor * 0.5; 
-  }
-
-  let projected = (baseForm * starterFactor * matchupFactor * allAroundFactor) + cleanSheetFactor + profileBonus + gameStateBonus + contextualBonus + weatherBonus;
-
-  // 5. Bonus additionnels Buteur/Passeur (Bookmakers & xG/xA avancés)
+  // Bonus Bookmakers Buteur / Passeur
   let bookmakerActionBonus = 0;
   if (fixture?.bookmaker) {
     const bm = fixture.bookmaker;
     if (bm.anytimeScorerOdds && bm.anytimeScorerOdds < 4.5) {
-      bookmakerActionBonus += Math.max(0, (5.0 - bm.anytimeScorerOdds) * 0.2); // Reduced impact
+      bookmakerActionBonus += Math.max(0, (5.0 - bm.anytimeScorerOdds) * 0.25);
     }
     if (bm.anytimeAssistOdds && bm.anytimeAssistOdds < 5.5) {
-      bookmakerActionBonus += Math.max(0, (6.0 - bm.anytimeAssistOdds) * 0.15); // Reduced impact
+      bookmakerActionBonus += Math.max(0, (6.0 - bm.anytimeAssistOdds) * 0.20);
     }
   }
 
   let advancedStatsBonus = 0;
   if (card.scores?.xG && card.scores.xG > 0) {
-    advancedStatsBonus += Math.min(1.5, card.scores.xG * 1.0);
+    advancedStatsBonus += Math.min(1.8, card.scores.xG * 1.1);
   }
   if (card.scores?.xA && card.scores.xA > 0) {
-    advancedStatsBonus += Math.min(1.5, card.scores.xA * 1.0);
+    advancedStatsBonus += Math.min(1.8, card.scores.xA * 1.1);
   }
 
-  projected += (bookmakerActionBonus + advancedStatsBonus);
+  // Contextual Absents
+  let contextualBonus = 0;
+  let contextualImpactLabel = '';
+  if (card.status === 'STARTER' && (card.starterConfidence ?? 100) < 60) {
+    contextualBonus += 2.0;
+    contextualImpactLabel = 'Remplace un titulaire absent (+2pts)';
+  } else if (isRegularStarter && card.scores && card.scores.l5 < 35 && card.scores.l15 > 50) {
+    contextualBonus += 2.5;
+    contextualImpactLabel = 'Retour en forme attendu (+2.5pts)';
+  }
+
+  // --- PROPOSITION 1: Décomposition E(Score) = E(All-Around) + E(Décisif) ---
+  const aaPct = card.scores?.allAroundContributionPct 
+    || card.scores?.aasPercentage 
+    || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'GK' ? 20 : card.positionCode === 'MID' ? 60 : 38);
+  const aaRatio = Math.max(0.15, Math.min(0.85, aaPct / 100));
+  const decRatio = 1.0 - aaRatio;
+
+  // Composante All-Around (Plancher modulé par le volume, minutes et conditions de jeu)
+  const rawAAS = baseForm * aaRatio;
+  const projectedAAS = (rawAAS * allAroundFactor * minutesFactor) + (setPieceRole.isCornerTaker ? 2.0 : 0) + (setPieceRole.isFreeKickTaker ? 1.2 : 0) + weatherBonus;
+
+  // Composante Décisive (Probabilité de franchir le palier de 60 pts)
+  const rawDec = baseForm * decRatio;
+  let baseDecRate = (card.scores?.decisiveRateL15 ?? card.scores?.decisivePercentage ?? (decRatio * 50)) / 100;
+  const xGFactor = Math.min(1.4, Math.max(0.7, teamXG / 1.4));
+  let pDecisive = Math.max(0.05, Math.min(0.85, baseDecRate * xGFactor));
+  if (setPieceRole.isPenaltyTaker) {
+    pDecisive = Math.min(0.90, pDecisive + 0.12);
+  }
+
+  // Modélisation du palier décisif SO5 (base 35 pts -> saut à 60 pts = +25 pts d'espérance lors d'un décisif)
+  const expectedDecisiveScore = Math.max(rawDec * 0.85, 18 + (pDecisive * 24)) + (setPieceRole.isPenaltyTaker ? 3.5 : 0) + bookmakerActionBonus + advancedStatsBonus;
+
+  // Recombinaison globale
+  let projected = ((projectedAAS + expectedDecisiveScore) * starterFactor * matchupFactor) + cleanSheetFactor + contextualBonus;
 
   // 6. Orientation Stratégique AAS vs DS vs Équilibré
   const aasRate = card.scores?.aasPercentage ?? 50;
@@ -1005,7 +1081,6 @@ export function calculatePlayerProjectedScore(
   }
   projected += scoringFocusBonus;
 
-
   if (strategy === 'HIGH_CEILING' && card.positionCode === 'FWD' && fixture?.bookmaker?.anytimeScorerOdds && fixture.bookmaker.anytimeScorerOdds < 2.2) {
     projected += 4;
   }
@@ -1014,17 +1089,13 @@ export function calculatePlayerProjectedScore(
   const cardBonusScore = Math.round((baseProjected * (bonusPct / 100)) * 10) / 10;
   const totalProjectedScore = Math.round((baseProjected + cardBonusScore) * 10) / 10;
 
-  // --- NEW: Volatility & Range Logic ---
-  const aaPct = card.scores?.allAroundContributionPct || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'GK' ? 30 : 50);
+  // Volatilité et Fourchette
   const decPct = card.scores?.decisiveContributionPct || (card.positionCode === 'FWD' ? 60 : card.positionCode === 'MID' ? 40 : 50);
   const reliantType = aaPct > 58 ? 'AA_RELIANT' : decPct > 50 ? 'DECISIVE_RELIANT' : 'BALANCED';
 
-  // Amplitude de la fourchette (Range)
-  let rangeAmplitude = 8; // +/- 8 pts par défaut
-  if (reliantType === 'AA_RELIANT') rangeAmplitude = 5; // Stable
-  if (reliantType === 'DECISIVE_RELIANT') rangeAmplitude = 12; // Volatil
-
-  // Pour les attaquants, on réduit un peu comme demandé si c'est trop large
+  let rangeAmplitude = 8;
+  if (reliantType === 'AA_RELIANT') rangeAmplitude = 5;
+  if (reliantType === 'DECISIVE_RELIANT') rangeAmplitude = 11;
   if (card.positionCode === 'FWD' && rangeAmplitude > 10) rangeAmplitude = 10;
 
   const projectedFloor = Math.max(15, Math.round((totalProjectedScore - rangeAmplitude) * 10) / 10);
@@ -1077,7 +1148,7 @@ export function calculatePlayerProjectedScore(
     difficultyRating,
     matchupImpactLabel,
     isHome: fixture?.isHome ?? true,
-    profileBonus: Math.round(profileBonus * 10) / 10,
+    profileBonus: Math.round(setPieceBonus * 10) / 10,
     bookmakerActionBonus: Math.round(bookmakerActionBonus * 10) / 10,
     weatherBonus: Math.round(weatherBonus * 10) / 10,
     weatherImpactLabel: weatherImpactLabel || undefined,

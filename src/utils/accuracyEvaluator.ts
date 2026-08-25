@@ -31,9 +31,11 @@ function resolveMatchGameWeek(matchIndex: number, matchDateStr?: string, current
 
 /**
  * Checks if a player/card is eligible for statistical accuracy evaluation:
- * - Excludes players with no scores object or no valid scores
- * - Excludes players with L40 == 0 (or <= 0 / missing)
- * - Excludes players with L5 == 0 AND L15 == 0
+ * Excludes players who have:
+ * - L40 == 0 (or missing/invalid)
+ * - L5 == 0 AND L15 == 0
+ * - No valid positive scores (no match history)
+ * - Zero chance of playing (long-term inactive / NOT_PLAYING with 0 played matches)
  */
 export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
   if (!card || !card.scores) return false;
@@ -42,10 +44,13 @@ export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
   const l15 = typeof card.scores.l15 === 'number' ? card.scores.l15 : 0;
   const l40 = typeof card.scores.l40 === 'number' ? card.scores.l40 : 0;
 
-  // 1. Exclure les joueurs qui n'ont même pas de score
-  const hasValidMatchScores = Array.isArray(card.scores.recentMatches) && card.scores.recentMatches.some(m => typeof m?.score === 'number' && m.score > 0);
-  const hasValidLast5 = Array.isArray(card.scores.last5Scores) && card.scores.last5Scores.some(s => typeof s === 'number' && s > 0);
-  
+  // 1. Exclure les joueurs qui n'ont aucun score valide
+  const recentMatches = card.scores.recentMatches || [];
+  const last5 = card.scores.last5Scores || [];
+
+  const hasValidMatchScores = recentMatches.some(m => typeof m?.score === 'number' && m.score > 0);
+  const hasValidLast5 = last5.some(s => typeof s === 'number' && s > 0);
+
   if (l5 <= 0 && l15 <= 0 && l40 <= 0 && !hasValidMatchScores && !hasValidLast5) {
     return false;
   }
@@ -57,6 +62,12 @@ export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
 
   // 3. Exclure les joueurs qui ont L5 = 0 ET L15 = 0
   if (l5 <= 0 && l15 <= 0) {
+    return false;
+  }
+
+  // 4. Exclure les joueurs qui n'ont aucune chance de jouer (status NOT_PLAYING sans aucun match joué)
+  const l5Played = card.scores.l5Played ?? (last5.filter(s => typeof s === 'number' && s > 0).length);
+  if (card.status === 'NOT_PLAYING' && l5Played === 0 && l5 <= 0) {
     return false;
   }
 
@@ -110,35 +121,38 @@ export function evaluateAccuracyByGameWeek(
     const last5 = card.scores?.last5Scores || [];
     const clubName = normalizeClubName(card.club?.name || 'Club');
 
+    // Projection officielle calculée via le moteur optimizer complet (sans bonus de carte)
+    const breakdown = calculatePlayerProjectedScore(card, 'BALANCED', eligibleCards);
+    const rawProjScore = breakdown.baseProjectedScore;
+    const projectedStarter = breakdown.starterSafety >= 60;
+    const starterConfidence = breakdown.starterSafety;
+    const isHomeProj = card.upcomingFixture?.isHome ?? true;
+    const projectedTeamWinProb = isHomeProj ? 54 : 38;
+    const projectedTeamXG = isHomeProj ? 1.85 : 1.25;
+    const projectedCleanSheetProb = card.positionCode === 'GK' || card.positionCode === 'DEF' ? (isHomeProj ? 38 : 22) : 25;
+
     // If we have detailed recent matches with SO5 scores
     if (recentMatches.length > 0) {
       recentMatches.forEach((match, idx) => {
-        if (typeof match.score !== 'number' || match.opponent === 'Match Futur/Passé') return;
+        if (match.opponent === 'Match Futur/Passé') return;
 
         const gwNum = resolveMatchGameWeek(idx, match.matchDate, currentGW);
-        const actualScoreRaw = Math.round(match.score * 10) / 10;
-        const mins = match.minsPlayed ?? (match.isStarter ? 90 : match.isSub ? 25 : actualScoreRaw > 0 ? 70 : 0);
-        const actualStarted = match.isStarter === true || mins >= 45;
-
-        // Raw Projected score computed without card bonus (0% bonus)
-        // Simulate pre-match projected score based on player's average and matchup
-        const l5Prior = card.scores?.l5 ?? 50;
-        const l15Prior = card.scores?.l15 ?? card.scores?.l40 ?? 50;
-        const l40Prior = card.scores?.l40 ?? 50;
-        const starterFactor = card.status === 'STARTER' ? 1.0 : card.status === 'REGULAR' ? 0.88 : 0.40;
         
-        // Base projected calculation (formula strictly without bonus)
-        const baseForm = (l5Prior * 0.50) + (l15Prior * 0.35) + (l40Prior * 0.15);
-        const fdr = match.isHome ? 2.5 : 3.5;
-        const matchupMult = match.isHome ? 1.05 : 0.95;
-        const rawProjScore = Math.max(0, Math.min(100, Math.round(baseForm * starterFactor * matchupMult * 10) / 10));
+        // Détection propre du DNP (Did Not Play)
+        const isDnp = match.dnp === true || 
+          match.statusTyped === 'did_not_play' || 
+          (match.minsPlayed === 0 && match.isStarter === false && match.isSub === false) ||
+          match.score === null;
 
-        // Team & Match projections
-        const projectedStarter = card.status === 'STARTER' || (card.starterConfidence || 80) >= 70;
-        const starterConfidence = card.starterConfidence || (projectedStarter ? 85 : 35);
-        const projectedTeamWinProb = match.isHome ? 54 : 38;
-        const projectedTeamXG = match.isHome ? 1.85 : 1.25;
-        const projectedCleanSheetProb = match.isHome ? 38 : 22;
+        let actualScoreRaw = isDnp ? 0 : (typeof match.score === 'number' ? Math.max(0, Math.min(100, Math.round(match.score * 10) / 10)) : 0);
+
+        // Correction de l'anomalie : un joueur avec 0 minute de jeu ou DNP ne peut pas avoir 100 pts
+        if (actualScoreRaw === 100 && (match.minsPlayed === 0 || isDnp)) {
+          actualScoreRaw = 0;
+        }
+
+        const mins = isDnp ? 0 : (match.minsPlayed ?? (match.isStarter ? 90 : match.isSub ? 25 : actualScoreRaw > 0 ? 70 : 0));
+        const actualStarted = !isDnp && (match.isStarter === true || mins >= 45);
 
         // Actual outcomes
         const actualGoals = match.goals || 0;
@@ -200,13 +214,12 @@ export function evaluateAccuracyByGameWeek(
     } else if (last5.length > 0) {
       // Fallback on last5Scores array if detailed recent matches are not loaded
       last5.forEach((scoreVal, idx) => {
-        if (typeof scoreVal !== 'number') return;
         const gwNum = resolveMatchGameWeek(idx, undefined, currentGW);
-        const actualScoreRaw = Math.round(scoreVal * 10) / 10;
-        const actualStarted = actualScoreRaw > 30;
+        const isDnp = scoreVal === null || scoreVal === undefined || scoreVal === 0;
+        const actualScoreRaw = isDnp ? 0 : Math.max(0, Math.min(100, Math.round(Number(scoreVal) * 10) / 10));
+        const actualStarted = !isDnp && actualScoreRaw > 30;
+        const mins = actualStarted ? 90 : (actualScoreRaw > 0 ? 25 : 0);
 
-        const baseScore = card.scores?.l5 || 50;
-        const rawProjScore = Math.max(0, Math.min(100, Math.round(baseScore * 10) / 10));
         const scoreDelta = Math.round((actualScoreRaw - rawProjScore) * 10) / 10;
         const absoluteScoreError = Math.round(Math.abs(scoreDelta) * 10) / 10;
 
@@ -220,14 +233,14 @@ export function evaluateAccuracyByGameWeek(
           isHome: true,
           gameWeek: gwNum,
           projectedScoreRaw: rawProjScore,
-          projectedStarter: true,
-          starterConfidence: 80,
+          projectedStarter,
+          starterConfidence,
           projectedTeamWinProb: 50,
           projectedTeamXG: 1.5,
           projectedCleanSheetProb: 30,
           actualScoreRaw,
           actualStarted,
-          actualMinsPlayed: actualStarted ? 90 : 0,
+          actualMinsPlayed: mins,
           actualTeamWon: actualScoreRaw >= 55,
           actualTeamDraw: actualScoreRaw >= 45 && actualScoreRaw < 55,
           actualTeamGoals: actualScoreRaw >= 65 ? 1 : 0,
@@ -237,7 +250,7 @@ export function evaluateAccuracyByGameWeek(
           isWithin5Pts: absoluteScoreError <= 5.0,
           isWithin3Pts: absoluteScoreError <= 3.0,
           isWithin10Pts: absoluteScoreError <= 10.0,
-          isStarterCorrect: actualStarted,
+          isStarterCorrect: actualStarted === projectedStarter,
           isWinPredictionCorrect: true,
           isXGPredictionCorrect: true,
           isCleanSheetCorrect: true,
