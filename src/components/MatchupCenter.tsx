@@ -580,8 +580,8 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         )}
 
         {/* Quick league chips */}
-        <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-slate-800/80 pt-4">
-          <span className="text-[11px] font-bold text-slate-400 mr-1 flex items-center gap-1">
+        <div className="mt-4 flex items-center gap-1.5 border-t border-slate-800/80 pt-4 overflow-x-auto pb-1.5 sm:flex-wrap sm:overflow-x-visible touch-scroll-x">
+          <span className="text-[11px] font-bold text-slate-400 mr-1 flex items-center gap-1 shrink-0">
             <Filter className="h-3 w-3 text-emerald-400" />
             <span>Ligue :</span>
           </span>
@@ -589,9 +589,9 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
             <button
               key={comp}
               onClick={() => setSelectedCompetition(comp)}
-              className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition border ${
+              className={`rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition border whitespace-nowrap shrink-0 ${
                 selectedCompetition === comp
-                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm'
+                  ? 'bg-emerald-500/25 border-emerald-500/60 text-emerald-300 shadow-sm'
                   : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
               }`}
             >
@@ -820,12 +820,12 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                   </div>
 
                   {/* 4 KPI Cards */}
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-3">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-3 w-full lg:w-auto">
                     
                     {/* 1. Probas 1N2 */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[105px]">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">PROBAS 1N2</span>
-                      <div className="text-sm font-mono flex items-center justify-center gap-1">
+                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[105px]">
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">PROBAS 1N2</span>
+                      <div className="text-xs sm:text-sm font-mono flex items-center justify-center gap-0.5 sm:gap-1 my-0.5">
                         <span className="text-emerald-400 font-black" title={`Probabilité de victoire pour ${fixture.club}`}>
                           {fixture.winProb}%
                         </span>
@@ -838,7 +838,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                           {fixture.lossProb}%
                         </span>
                       </div>
-                      <span className="block text-[9px]">
+                      <span className="block text-[8px] sm:text-[9px]">
                         <strong className="text-emerald-400 font-bold">V ({fixture.isHome ? '1' : '2'})</strong>
                         <span className="text-slate-500"> / </span>
                         <span className="text-slate-400">N</span>
@@ -848,27 +848,27 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                     </div>
 
                     {/* 2. Clean Sheet */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[90px]">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">CLEAN SHEET %</span>
-                      <span className="text-sm font-black text-emerald-400 font-mono">
+                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[90px]">
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">CLEAN SHEET</span>
+                      <span className="text-xs sm:text-sm font-black text-emerald-400 font-mono block my-0.5">
                         {fixture.cleanSheetProb}%
                       </span>
-                      <span className="block text-[9px] text-slate-400">Pour GK / DEF</span>
+                      <span className="block text-[8px] sm:text-[9px] text-slate-400">Pour GK / DEF</span>
                     </div>
 
                     {/* 3. Goal Expectancy (xG) */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[90px]">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">ESPÉRANCE BUTS</span>
-                      <span className="text-sm font-black text-purple-300 font-mono">
+                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[90px]">
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">ESPÉRANCE BUTS</span>
+                      <span className="text-xs sm:text-sm font-black text-purple-300 font-mono block my-0.5">
                         {typeof fixture.goalExpectancy === 'number' ? fixture.goalExpectancy.toFixed(1) : fixture.goalExpectancy} xG
                       </span>
-                      <span className="block text-[9px] text-slate-400">Attaque équipe</span>
+                      <span className="block text-[8px] sm:text-[9px] text-slate-400">Attaque équipe</span>
                     </div>
 
                     {/* 4. 1 / N / 2 Market Odds */}
-                    <div className="rounded-xl bg-slate-950 p-2.5 border border-slate-800/80 text-center min-w-[105px]">
-                      <span className="block text-[10px] font-bold text-slate-400 uppercase">1 / N / 2</span>
-                      <div className="text-xs font-mono flex items-center justify-center gap-1">
+                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[105px]">
+                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">COTES 1 / N / 2</span>
+                      <div className="text-[11px] sm:text-xs font-mono flex items-center justify-center gap-0.5 sm:gap-1 my-0.5">
                         {fixture.isHome ? (
                           <>
                             <span className="text-emerald-400 font-black bg-emerald-950/70 border border-emerald-500/40 px-1 py-0.2 rounded" title={`Cote Victoire Domicile (${fixture.club})`}>
@@ -899,7 +899,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                           </>
                         )}
                       </div>
-                      <span className="block text-[9px]">
+                      <span className="block text-[8px] sm:text-[9px]">
                         {fixture.isHome ? (
                           <>
                             <strong className="text-emerald-400 font-bold">1 (Club)</strong>
@@ -943,14 +943,14 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                         <button
                           key={p.id}
                           onClick={() => onOpenScout(p)}
-                          className="flex items-center justify-between gap-2 rounded-xl bg-slate-950 px-3.5 py-2 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group text-left cursor-pointer"
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl bg-slate-950 p-3 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group text-left cursor-pointer w-full"
                         >
-                          <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0 flex-wrap">
                             <span className={`rounded px-1.5 py-0.5 text-[9px] font-black border shrink-0 ${pStyle}`}>
                               {p.positionCode}
                             </span>
                             
-                            <span className="font-bold text-white group-hover:text-emerald-300 transition truncate max-w-[120px] sm:max-w-[140px]">
+                            <span className="font-bold text-white group-hover:text-emerald-300 transition truncate max-w-[130px] sm:max-w-[150px]">
                               {p.displayName}
                             </span>
 
@@ -962,13 +962,13 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex flex-wrap items-center gap-2 shrink-0 justify-between sm:justify-end w-full sm:w-auto border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-800/60">
                             {/* Score Projeté Badge avec détail Base + Bonus */}
-                            <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[11px] shadow-sm">
+                            <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[10px] sm:text-[11px] shadow-sm">
                               <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
                               <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
                               <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}%`}>+{breakdown.cardBonusPercentage}%</span>
-                              <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} ({breakdown.projectedFloor}-{breakdown.projectedCeiling}) pts</span>
+                              <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} pts</span>
                             </div>
 
                             {/* L5 Score */}

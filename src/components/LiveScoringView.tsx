@@ -839,8 +839,70 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     return null;
   }, [activeView, compositionTotals]);
 
+  // Real-time live status count summary for mobile sticky bar
+  const liveSquadSummary = useMemo(() => {
+    let playingCount = 0;
+    let finishedCount = 0;
+    let upcomingCount = 0;
+    let totalLiveScore = 0;
+
+    processedCards.forEach(({ card, sorareLive, isCaptainSomewhere, finalLiveScore, matchStatusCategory }) => {
+      const sScore = finalLiveScore ?? sorareLive?.liveScore ?? 0;
+      const bPct = getCardTotalBonus(card) + (isCaptainSomewhere ? 20 : 0);
+      totalLiveScore += sScore * (1 + bPct / 100);
+
+      if (matchStatusCategory === 'LIVE') {
+        playingCount++;
+      } else if (matchStatusCategory === 'FINISHED') {
+        finishedCount++;
+      } else {
+        upcomingCount++;
+      }
+    });
+
+    return {
+      playingCount,
+      finishedCount,
+      upcomingCount,
+      totalLiveScore: Math.round(totalLiveScore * 10) / 10,
+    };
+  }, [processedCards]);
+
+  const activeCompoIndex = activeView.startsWith('team_') ? parseInt(activeView.replace('team_', ''), 10) : 0;
+
   return (
     <div className="space-y-5">
+      {/* Sticky Mobile Live Bar (visible on mobile, pinned at top during scroll) */}
+      <div className="sticky top-0 z-30 md:hidden bg-slate-950/95 backdrop-blur-md border-b border-emerald-500/30 px-3.5 py-2.5 -mx-2 -mt-2 mb-3 rounded-b-2xl shadow-xl flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+          </span>
+          <div>
+            <span className="text-[10px] font-bold uppercase text-slate-400 block leading-tight">
+              {activeView === 'all' ? 'Toutes les Compos' : activeCompositions[activeCompoIndex]?.name || `Compo ${activeCompoIndex + 1}`}
+            </span>
+            <div className="flex items-center gap-1 text-xs font-black text-emerald-400">
+              <span>{liveSquadSummary.totalLiveScore} pts</span>
+              <span className="text-[9px] font-normal text-slate-400">réel</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 text-[10px] font-bold">
+          <span className="flex items-center gap-1 bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded-lg">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            {liveSquadSummary.playingCount} en jeu
+          </span>
+          <span className="bg-slate-900 border border-slate-800 text-slate-300 px-1.5 py-0.5 rounded-lg">
+            🏁 {liveSquadSummary.finishedCount}
+          </span>
+          <span className="bg-slate-900 border border-slate-800 text-slate-400 px-1.5 py-0.5 rounded-lg">
+            ⏳ {liveSquadSummary.upcomingCount}
+          </span>
+        </div>
+      </div>
       
       {/* Top Banner: GameWeek & Team Navigation Overview */}
       <div className="rounded-3xl border border-emerald-500/40 bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-950 p-5 sm:p-6 shadow-2xl relative overflow-hidden">
@@ -1223,6 +1285,19 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                           <Crown className="h-3 w-3" />
                         </div>
                       )}
+                      {/* Live Radar Status Dot */}
+                      {(matchInfo.isLive || (sorareLive?.playingStatus || '').toUpperCase() === 'PLAYING') ? (
+                        <span className="absolute -bottom-1 -left-1 flex h-4 w-4" title="En direct / Sur le terrain">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500 border-2 border-slate-950 items-center justify-center text-[7px] font-black text-slate-950">
+                            ●
+                          </span>
+                        </span>
+                      ) : matchInfo.isFinished ? (
+                        <span className="absolute -bottom-1 -left-1 flex h-4 w-4 rounded-full bg-slate-800 border-2 border-slate-950 items-center justify-center text-[8px] text-slate-300 font-bold" title="Match terminé">
+                          ✓
+                        </span>
+                      ) : null}
                     </div>
 
                     <div>

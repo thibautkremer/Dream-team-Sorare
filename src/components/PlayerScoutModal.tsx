@@ -494,9 +494,42 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
   const winProb = getPlayerWinProbability(card.upcomingFixture);
   const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
 
+  // Swipe down to dismiss on mobile
+  const touchStartY = React.useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartY.current = e.touches[0].clientY;
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartY.current === null || e.changedTouches.length === 0) return;
+    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+    touchStartY.current = null;
+    // If pulled down by more than 80px, close modal
+    if (deltaY > 80) {
+      onClose();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/90 p-2 sm:p-4 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-2xl rounded-2xl sm:rounded-3xl border border-slate-700/80 bg-[#0B0F17] p-4 sm:p-6 shadow-2xl my-2 sm:my-6 text-slate-100 font-sans max-h-none">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/90 p-2 sm:p-4 backdrop-blur-md overflow-y-auto"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        className="relative w-full max-w-2xl rounded-2xl sm:rounded-3xl border border-slate-700/80 bg-[#0B0F17] p-4 sm:p-6 shadow-2xl my-2 sm:my-6 text-slate-100 font-sans max-h-none"
+      >
+        {/* Mobile Pull Down Handle */}
+        <div
+          onClick={onClose}
+          className="w-12 h-1.5 bg-slate-700 hover:bg-slate-500 rounded-full mx-auto mb-3 md:hidden cursor-pointer transition-colors"
+          title="Faire glisser vers le bas pour fermer"
+        />
         
         {/* Top Header Bar: Close Button */}
         <div className="flex items-center justify-between mb-4">

@@ -71,28 +71,116 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md">
-      <div className="w-full flex items-center justify-between px-4 sm:px-6 lg:px-8 py-3">
+      
+      {/* Mobile Top Header (Single-line, ultra-compact, no wrapping) */}
+      <div className="flex md:hidden items-center justify-between px-3 py-2">
+        {/* Mobile Brand */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-600 via-emerald-400 to-lime-400 p-0.5 shadow-md shadow-emerald-500/20 shrink-0">
+            <div className="flex h-full w-full items-center justify-center rounded-[10px] bg-slate-950">
+              <Trophy className="h-4 w-4 text-emerald-400" />
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-black tracking-tight text-white">TEAM SORARE</span>
+            <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1 py-0.2 text-[8px] font-bold text-emerald-400 uppercase">
+              SO5
+            </span>
+          </div>
+        </div>
+
+        {/* Mobile Actions: Strategy Pill, Alerts, Sync, Account */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Strategy Pill (compact) */}
+          <div className="flex items-center gap-1 rounded-xl border border-emerald-500/40 bg-slate-900 px-2 py-1 text-[11px] font-bold text-emerald-300">
+            <Sparkles className="h-3 w-3 text-emerald-400 shrink-0" />
+            <select
+              value={strategy}
+              onChange={(e) => setStrategy(e.target.value as StrategyType)}
+              className="bg-transparent font-bold text-emerald-300 focus:outline-none cursor-pointer text-[11px] max-w-[82px] truncate"
+            >
+              <option value="BALANCED" className="bg-slate-900 text-slate-100">🎯 Équilibrée</option>
+              <option value="SAFE_TITULAR" className="bg-slate-900 text-slate-100">🛡️ Titulaires</option>
+              <option value="HIGH_CEILING" className="bg-slate-900 text-slate-100">🚀 Plafond</option>
+              <option value="PURE_FORM" className="bg-slate-900 text-slate-100">🔥 Forme</option>
+            </select>
+          </div>
+
+          {/* 1h Alert Button (compact) */}
+          {onOpenStartingXIMonitor && (
+            <button
+              onClick={onOpenStartingXIMonitor}
+              title="Compos officielles 1h avant match"
+              className={`flex h-8 w-8 items-center justify-center rounded-xl border transition shrink-0 ${
+                alertsCount > 0
+                  ? 'border-rose-500/80 bg-rose-950 text-rose-200 animate-pulse ring-2 ring-rose-500/40'
+                  : 'border-slate-800 bg-slate-900 text-slate-300 hover:text-emerald-300'
+              }`}
+            >
+              {alertsCount > 0 ? (
+                <div className="relative flex items-center justify-center">
+                  <BellRing className="h-3.5 w-3.5 text-rose-400 animate-bounce" />
+                  <span className="absolute -top-1.5 -right-2 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-rose-500 px-1 text-[8px] font-black text-white">
+                    {alertsCount}
+                  </span>
+                </div>
+              ) : (
+                <Bell className="h-3.5 w-3.5 text-emerald-400" />
+              )}
+            </button>
+          )}
+
+          {/* Sync Button (compact) */}
+          <button
+            onClick={() => onSync()}
+            disabled={isSyncing}
+            title="Synchroniser avec Sorare GraphQL"
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-800 bg-slate-900 text-slate-300 transition hover:border-emerald-400 hover:text-white disabled:opacity-60 shrink-0"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
+          </button>
+
+          {/* Account Button (compact with status ping) */}
+          <button
+            onClick={() => {
+              setTempUsername(username);
+              setIsAccountModalOpen(true);
+            }}
+            title={`Compte Sorare lié : ${username}`}
+            className="relative flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/30 bg-emerald-950/40 text-emerald-400 transition hover:border-emerald-500 hover:bg-emerald-950/60 shrink-0"
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Desktop Main Header (md: and above) */}
+      <div className="hidden md:flex w-full items-center justify-between px-4 sm:px-6 lg:px-8 py-3">
         
         {/* Logo & Brand */}
-        <div className="flex items-center gap-3">
-          <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-600 via-emerald-400 to-lime-400 p-0.5 shadow-lg shadow-emerald-500/20">
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          <div className="relative flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-600 via-emerald-400 to-lime-400 p-0.5 shadow-lg shadow-emerald-500/20 shrink-0">
             <div className="flex h-full w-full items-center justify-center rounded-[10px] bg-slate-950">
-              <Trophy className="h-5 w-5 text-emerald-400" />
+              <Trophy className="h-4 w-4 sm:h-5 sm:w-5 text-emerald-400" />
             </div>
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-black tracking-tight text-white">TEAM SORARE</span>
-              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-400 uppercase">
-                SO5 Free Tier
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <span className="text-base sm:text-lg font-black tracking-tight text-white">TEAM SORARE</span>
+              <span className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-bold tracking-wide text-emerald-400 uppercase">
+                SO5 Free
               </span>
             </div>
-            <p className="text-xs text-slate-400">Optimiseur & IA Prédictive</p>
+            <p className="text-[10px] sm:text-xs text-slate-400 hidden xs:block">Optimiseur & IA Prédictive</p>
           </div>
         </div>
 
         {/* User Account & Sync Control */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2 lg:gap-3 flex-wrap justify-end">
           
           {/* Sorare Official Linked Badge */}
           <button
@@ -101,37 +189,38 @@ export const Navbar: React.FC<NavbarProps> = ({
               setIsAccountModalOpen(true);
             }}
             title="Gérer le compte Sorare lié"
-            className="group flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-950/30 px-3 py-1.5 text-xs text-slate-200 transition-all hover:border-emerald-500/60 hover:bg-emerald-950/50 shadow-sm"
+            className="group flex items-center gap-1.5 sm:gap-2 rounded-xl border border-emerald-500/30 bg-emerald-950/30 px-2 sm:px-3 py-1.5 text-xs text-slate-200 transition-all hover:border-emerald-500/60 hover:bg-emerald-950/50 shadow-sm"
           >
-            <div className="relative flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400 font-black text-xs border border-emerald-500/40">
-              <Link2 className="h-3.5 w-3.5" />
+            <div className="relative flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400 font-black text-xs border border-emerald-500/40 shrink-0">
+              <Link2 className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
               <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
             </div>
-            <div className="text-left hidden xs:block">
+            <div className="text-left hidden sm:block">
               <div className="flex items-center gap-1">
                 <span className="font-bold text-white group-hover:text-emerald-300">{username}</span>
                 <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-1 rounded">Lié</span>
               </div>
               <span className="text-[10px] text-slate-400">{userMeta.clubName || 'Thib 8 FC'} • {totalCardsCount} cartes</span>
             </div>
+            <span className="sm:hidden text-[11px] font-bold text-emerald-300">{username}</span>
           </button>
 
           {/* Strategy Selector Dropdown */}
-          <div className="flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-slate-900/90 px-2.5 py-1.5 text-xs font-semibold text-slate-200 shadow-sm transition-all hover:border-emerald-400">
-            <Sparkles className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+          <div className="flex items-center gap-1 sm:gap-1.5 rounded-xl border border-emerald-500/40 bg-slate-900/90 px-2 sm:px-2.5 py-1.5 text-xs font-semibold text-slate-200 shadow-sm transition-all hover:border-emerald-400">
+            <Sparkles className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-emerald-400 shrink-0" />
             <select
               value={strategy}
               onChange={(e) => setStrategy(e.target.value as StrategyType)}
               title="Stratégie temporelle de calcul des scores projetés (répartition L5 / L15 / L40)"
-              className="bg-transparent font-bold text-emerald-300 focus:outline-none cursor-pointer text-xs"
+              className="bg-transparent font-bold text-emerald-300 focus:outline-none cursor-pointer text-xs max-w-[110px] sm:max-w-none"
             >
-              <option value="BALANCED" className="bg-slate-900 text-slate-100">🎯 Stratégie : Équilibrée (L5: 50% | L15: 35% | L40: 15%)</option>
-              <option value="SAFE_TITULAR" className="bg-slate-900 text-slate-100">🛡️ Stratégie : Titulaires Sûrs (L5: 35% | L15: 40% | L40: 25%)</option>
-              <option value="HIGH_CEILING" className="bg-slate-900 text-slate-100">🚀 Stratégie : Haut Plafond (L5: 60% | L15: 30% | L40: 10%)</option>
-              <option value="PURE_FORM" className="bg-slate-900 text-slate-100">🔥 Stratégie : Forme Pure (L5: 75% | L15: 20% | L40: 5%)</option>
+              <option value="BALANCED" className="bg-slate-900 text-slate-100">🎯 Équilibrée (L5: 50% | L15: 35% | L40: 15%)</option>
+              <option value="SAFE_TITULAR" className="bg-slate-900 text-slate-100">🛡️ Titulaires Sûrs (L5: 35% | L15: 40% | L40: 25%)</option>
+              <option value="HIGH_CEILING" className="bg-slate-900 text-slate-100">🚀 Haut Plafond (L5: 60% | L15: 30% | L40: 10%)</option>
+              <option value="PURE_FORM" className="bg-slate-900 text-slate-100">🔥 Forme Pure (L5: 75% | L15: 20% | L40: 5%)</option>
             </select>
           </div>
 
@@ -155,7 +244,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               onClick={onOpenStartingXIMonitor}
               title="Monitoring des compositions d'équipes officielles 1h avant match & alertes remplaçants"
-              className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition shadow-sm ${
+              className={`flex items-center gap-1 sm:gap-1.5 rounded-xl border px-2 sm:px-3 py-1.5 text-xs font-bold transition shadow-sm ${
                 alertsCount > 0
                   ? 'border-rose-500/80 bg-rose-950/80 text-rose-200 hover:bg-rose-900 animate-pulse ring-2 ring-rose-500/40'
                   : 'border-emerald-500/40 bg-slate-900/90 text-slate-200 hover:border-emerald-400 hover:text-emerald-300'
@@ -164,13 +253,13 @@ export const Navbar: React.FC<NavbarProps> = ({
               {alertsCount > 0 ? (
                 <>
                   <BellRing className="h-3.5 w-3.5 text-rose-400 animate-bounce" />
-                  <span className="text-rose-300 font-extrabold">🚨 {alertsCount} Non-titulaire{alertsCount > 1 ? 's' : ''}</span>
+                  <span className="text-rose-300 font-extrabold">{alertsCount}</span>
                 </>
               ) : (
                 <>
                   <Bell className="h-3.5 w-3.5 text-emerald-400" />
                   <span className="hidden sm:inline text-emerald-300">Compos 1h</span>
-                  <span className="sm:hidden">Compos</span>
+                  <span className="sm:hidden text-emerald-300">1h</span>
                 </>
               )}
             </button>
@@ -180,7 +269,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => onSync()}
             disabled={isSyncing}
-            className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-emerald-400 hover:bg-slate-800 hover:text-white disabled:opacity-60 shadow-sm"
+            className="flex items-center gap-1 sm:gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-2 sm:px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-emerald-400 hover:bg-slate-800 hover:text-white disabled:opacity-60 shadow-sm"
             title="Synchroniser avec Sorare GraphQL"
           >
             <RefreshCw className={`h-3.5 w-3.5 text-emerald-400 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -188,7 +277,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           {/* Network indicator */}
-          <div className="flex items-center gap-1.5 rounded-xl border border-slate-800/80 bg-slate-900/60 px-2.5 py-1.5 text-xs text-slate-400">
+          <div className="hidden xs:flex items-center gap-1.5 rounded-xl border border-slate-800/80 bg-slate-900/60 px-2 sm:px-2.5 py-1.5 text-xs text-slate-400">
             {isOnline ? (
               <span className="flex items-center gap-1.5 text-[11px] text-emerald-400" title="Connecté à l'API">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -204,8 +293,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      {/* Navigation Sub-bar */}
-      <div className="border-t border-slate-800/60 bg-slate-950/60 px-4 sm:px-6 lg:px-8">
+      {/* Navigation Sub-bar (Desktop only: hidden on mobile) */}
+      <div className="hidden md:block border-t border-slate-800/60 bg-slate-950/60 px-4 sm:px-6 lg:px-8">
         <div className="w-full flex items-center justify-between overflow-x-auto py-1 scrollbar-none">
           <nav className="flex space-x-1 sm:space-x-2">
             

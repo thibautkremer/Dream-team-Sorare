@@ -56,6 +56,37 @@ export const PitchView: React.FC<PitchViewProps> = ({
   // Mobile layout state: compact list mode vs vertical formation mode
   const [mobileCompactView, setMobileCompactView] = useState(false);
 
+  // Touch swipe support for switching compositions on mobile
+  const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.changedTouches.length === 0) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+
+    // Detect horizontal swipe (horizontal movement > 50px and more prominent than vertical)
+    if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      if (deltaX < 0) {
+        // Swipe Left -> Next composition
+        const nextIdx = (selectedCompoIndex + 1) % compositions.length;
+        onSelectComposition(nextIdx);
+        setExpandedPitchIndex(nextIdx);
+      } else {
+        // Swipe Right -> Previous composition
+        const prevIdx = (selectedCompoIndex - 1 + compositions.length) % compositions.length;
+        onSelectComposition(prevIdx);
+        setExpandedPitchIndex(prevIdx);
+      }
+    }
+  };
+
   // Track removed sold/missing cards count for desynchronization alert
   const [removedCardsCount, setRemovedCardsCount] = useState<number>(0);
 
@@ -136,7 +167,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
       return (
         <div
           onClick={() => onSelectSlotToSwap(slotKey)}
-          className="group relative flex h-52 w-36 sm:h-60 sm:w-44 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700/80 bg-slate-900/70 p-3 text-center shadow-lg backdrop-blur transition hover:border-emerald-400 hover:bg-slate-800/80"
+          className="group relative flex h-52 w-full max-w-[150px] xs:max-w-[160px] sm:h-60 sm:w-44 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700/80 bg-slate-900/70 p-3 text-center shadow-lg backdrop-blur transition hover:border-emerald-400 hover:bg-slate-800/80"
         >
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-800 text-slate-400 group-hover:bg-emerald-400 group-hover:text-slate-950 transition">
             <span className="text-sm font-black">{expectedPosition}</span>
@@ -166,7 +197,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
     return (
       <div
         onClick={() => onOpenScout(card)}
-        className={`relative flex h-auto min-h-[275px] sm:min-h-[335px] w-36 xs:w-40 sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
+        className={`relative flex h-auto min-h-[275px] sm:min-h-[335px] w-full max-w-[150px] xs:max-w-[160px] sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
           isCaptain
             ? 'border-emerald-400 ring-2 ring-emerald-400/40 bg-gradient-to-b from-emerald-950/50 via-slate-900/90 to-slate-950 shadow-emerald-500/10'
             : 'border-slate-700/70 bg-slate-900/90 hover:border-slate-500'
@@ -428,7 +459,54 @@ export const PitchView: React.FC<PitchViewProps> = ({
     const totalBonusSum = Math.round((cardBonusSum + captainBonusPoints) * 10) / 10;
 
     return (
-      <div className="relative mt-4 rounded-3xl border-2 border-emerald-800/50 bg-gradient-to-b from-emerald-950 via-emerald-900 to-slate-950 p-4 sm:p-8 shadow-2xl overflow-hidden transition-all duration-300">
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        className="relative mt-4 rounded-3xl border-2 border-emerald-800/50 bg-gradient-to-b from-emerald-950 via-emerald-900 to-slate-950 p-4 sm:p-8 shadow-2xl overflow-hidden transition-all duration-300 touch-pan-y select-none"
+      >
+        {/* Mobile Swipe Navigation Helper Bar */}
+        <div className="md:hidden flex items-center justify-between bg-slate-950/80 border border-emerald-500/30 rounded-xl px-3 py-1.5 mb-3 text-[11px] text-emerald-300 font-bold">
+          <button
+            type="button"
+            onClick={() => {
+              const prevIdx = (compoIndex - 1 + compositions.length) % compositions.length;
+              onSelectComposition(prevIdx);
+              setExpandedPitchIndex(prevIdx);
+            }}
+            className="flex items-center gap-1 text-slate-300 hover:text-white active:scale-95"
+          >
+            <span>‹</span>
+            <span>Compo {((compoIndex - 1 + compositions.length) % compositions.length) + 1}</span>
+          </button>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-400 font-normal">Balayer ◄ ►</span>
+            <div className="flex items-center gap-1">
+              {compositions.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === compoIndex ? 'w-4 bg-emerald-400' : 'w-1.5 bg-slate-700'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const nextIdx = (compoIndex + 1) % compositions.length;
+              onSelectComposition(nextIdx);
+              setExpandedPitchIndex(nextIdx);
+            }}
+            className="flex items-center gap-1 text-slate-300 hover:text-white active:scale-95"
+          >
+            <span>Compo {((compoIndex + 1) % compositions.length) + 1}</span>
+            <span>›</span>
+          </button>
+        </div>
+
         {/* Pitch Top Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-emerald-800/40">
           <div className="flex items-center gap-2">
@@ -561,32 +639,32 @@ export const PitchView: React.FC<PitchViewProps> = ({
               /* Smartphone Vertical Tactical Flow (football formation layout) */
               <>
                 {/* Attack: FWD & EXTRA side by side */}
-                <div className="flex justify-center gap-4 w-full">
-                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                <div className="flex justify-center items-center gap-2 sm:gap-4 w-full px-1">
+                  <div className="w-[48%] max-w-[155px] flex justify-center scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
                     {renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}
                   </div>
-                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                  <div className="w-[48%] max-w-[155px] flex justify-center scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
                     {renderPitchCard(targetLineup, 'extra', 'Extra', 'EXTRA')}
                   </div>
                 </div>
                 
                 {/* Midfield: MID */}
                 <div className="flex justify-center w-full">
-                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                  <div className="scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
                     {renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}
                   </div>
                 </div>
                 
                 {/* Defense: DEF */}
                 <div className="flex justify-center w-full">
-                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                  <div className="scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
                     {renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}
                   </div>
                 </div>
                 
                 {/* Goalkeeper: GK */}
                 <div className="flex justify-center w-full">
-                  <div className="scale-[0.85] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
+                  <div className="scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
                     {renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}
                   </div>
                 </div>
@@ -1109,7 +1187,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
                   </div>
 
                   {/* Right Side: 5 Player Thumbnails (Enlarged & Showing Projected Score + Card Bonus Badge) */}
-                  <div className="flex items-start justify-between sm:justify-end gap-2 sm:gap-3 border-t md:border-t-0 border-slate-800/80 pt-3 md:pt-0">
+                  <div className="grid grid-cols-5 sm:flex sm:items-start sm:justify-end gap-1.5 xs:gap-2 sm:gap-3 border-t md:border-t-0 border-slate-800/80 pt-3 md:pt-0 w-full sm:w-auto">
                     {(['gk', 'def', 'mid', 'fwd', 'extra'] as const).map((slotKey) => {
                       const player = comp.slots[slotKey];
                       const breakdown = player ? calculatePlayerProjectedScore(player, comp.strategy, cards) : null;
@@ -1122,9 +1200,9 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
                       return (
                         <div key={slotKey} className="flex flex-col items-center gap-1">
-                          {/* Enlarged Avatar */}
+                          {/* Avatar */}
                           <div
-                            className={`relative h-14 w-14 sm:h-16 sm:w-16 rounded-xl bg-slate-950 border flex items-center justify-center overflow-hidden shadow-md transition-transform hover:scale-105 ${
+                            className={`relative aspect-square w-full max-w-[48px] xs:max-w-[54px] sm:w-16 sm:h-16 rounded-xl bg-slate-950 border flex items-center justify-center overflow-hidden shadow-md transition-transform hover:scale-105 ${
                               isCap ? 'border-emerald-400 ring-2 ring-emerald-400/40' : 'border-slate-700'
                             }`}
                             title={player?.displayName || slotKey.toUpperCase()}

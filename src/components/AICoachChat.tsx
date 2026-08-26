@@ -136,28 +136,28 @@ Aligner 1 GK (Donnarumma), 1 DEF (Hakimi), 1 MID (Vitinha), 1 FWD (Dembélé Cap
   }
 
   return (
-    <div className="flex h-[calc(100vh-220px)] min-h-[500px] flex-col rounded-2xl border border-slate-800 bg-slate-900/90 shadow-2xl backdrop-blur-md overflow-hidden">
+    <div className="flex h-[calc(100dvh-170px)] md:h-[calc(100vh-220px)] min-h-[440px] md:min-h-[500px] flex-col rounded-2xl sm:rounded-3xl border border-slate-800 bg-slate-900/90 shadow-2xl backdrop-blur-md overflow-hidden">
       
       {/* Chat Header */}
-      <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-5 py-3.5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 p-0.5 shadow-md shadow-emerald-500/20">
+      <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-3.5 sm:px-5 py-3 sm:py-3.5">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 p-0.5 shadow-md shadow-emerald-500/20 shrink-0">
             <div className="flex h-full w-full items-center justify-center rounded-[10px] bg-slate-950">
               <Bot className="h-4 w-4 text-emerald-400" />
             </div>
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-white">Coach IA Gemini 3.7 Flash</h3>
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h3 className="text-xs sm:text-sm font-bold text-white">Coach IA Gemini 3.7 Flash</h3>
               <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
             </div>
-            <p className="text-[11px] text-slate-400">Connecté à ta galerie Sorare • Mode Gratuit</p>
+            <p className="text-[10px] sm:text-[11px] text-slate-400">Connecté à ta galerie Sorare • Mode Gratuit</p>
           </div>
         </div>
 
         <button
           onClick={() => setMessages([messages[0]])}
-          className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition"
+          className="flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition"
           title="Réinitialiser la discussion"
         >
           <RefreshCw className="h-3 w-3" />
@@ -166,20 +166,20 @@ Aligner 1 GK (Donnarumma), 1 DEF (Hakimi), 1 MID (Vitinha), 1 FWD (Dembélé Cap
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-3.5 sm:space-y-4 touch-scroll-y">
         {messages.map((msg) => (
           <div
             key={msg.id}
-            className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={`flex items-start gap-2 sm:gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             {msg.role === 'assistant' && (
-              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400">
-                <Bot className="h-4 w-4" />
+              <div className="flex h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 mt-0.5">
+                <Bot className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               </div>
             )}
 
             <div
-              className={`max-w-[85%] rounded-2xl p-4 text-xs leading-relaxed sm:text-sm ${
+              className={`max-w-[88%] sm:max-w-[85%] rounded-2xl px-3.5 py-3 sm:p-4 text-xs leading-relaxed sm:text-sm ${
                 msg.role === 'user'
                   ? 'bg-emerald-500 text-slate-950 font-medium rounded-tr-none shadow-md shadow-emerald-500/10'
                   : 'bg-slate-950 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'

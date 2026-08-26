@@ -12,13 +12,14 @@ import { SlotSwapModal } from './components/SlotSwapModal';
 import { LiveScoringView } from './components/LiveScoringView';
 import { LineupExportModal } from './components/LineupExportModal';
 import { StartingXIMonitorModal } from './components/StartingXIMonitorModal';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { useStartingXIMonitor } from './hooks/useStartingXIMonitor';
 import { StorageService } from './utils/storage';
 import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey, calculatePlayerProjectedScore } from './utils/optimizer';
 
 import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters, PlayingStatus } from './types';
 import { getCurrentGameWeekNumber } from './data/fixturesData';
-import { CheckCircle2, AlertCircle, ShieldAlert } from 'lucide-react';
+import { CheckCircle2, AlertCircle, ShieldAlert, Sparkles, RefreshCw, Share2 } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin'>('pitch');
@@ -82,6 +83,45 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastSynced, setLastSynced] = useState<string | null>(StorageService.getLastSync());
   const abortControllerRef = React.useRef<AbortController | null>(null);
+
+  // Pull-to-refresh mobile gesture support
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const pullTouchStartRef = React.useRef<{ y: number; x: number } | null>(null);
+
+  const handleGlobalTouchStart = (e: React.TouchEvent) => {
+    if (typeof window !== 'undefined' && window.scrollY <= 5 && e.touches.length === 1) {
+      pullTouchStartRef.current = { y: e.touches[0].clientY, x: e.touches[0].clientX };
+    } else {
+      pullTouchStartRef.current = null;
+    }
+  };
+
+  const handleGlobalTouchMove = (e: React.TouchEvent) => {
+    if (!pullTouchStartRef.current || e.touches.length === 0) return;
+    const deltaY = e.touches[0].clientY - pullTouchStartRef.current.y;
+    const deltaX = Math.abs(e.touches[0].clientX - pullTouchStartRef.current.x);
+
+    // Only activate if vertical pull down at top and not lateral swipe
+    if (typeof window !== 'undefined' && window.scrollY <= 0 && deltaY > 0 && deltaY > deltaX * 1.2) {
+      const distance = Math.min(90, deltaY * 0.4);
+      setPullDistance(distance);
+      setIsPulling(true);
+    }
+  };
+
+  const handleGlobalTouchEnd = async () => {
+    if (pullDistance >= 55 && !isSyncing) {
+      setPullDistance(0);
+      setIsPulling(false);
+      showToast('Actualisation Sorare en cours...', 'info');
+      await handleSyncWithSorare();
+    } else {
+      setPullDistance(0);
+      setIsPulling(false);
+    }
+    pullTouchStartRef.current = null;
+  };
 
   const cancelSync = () => {
     if (abortControllerRef.current) {
@@ -858,7 +898,24 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-slate-950">
+    <div
+      onTouchStart={handleGlobalTouchStart}
+      onTouchMove={handleGlobalTouchMove}
+      onTouchEnd={handleGlobalTouchEnd}
+      className="min-h-screen w-full max-w-full overflow-x-hidden bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-slate-950"
+    >
+      {/* Pull to Refresh Mobile Indicator */}
+      {isPulling && pullDistance > 8 && (
+        <div
+          style={{ transform: `translate(-50%, ${pullDistance}px)` }}
+          className="fixed top-2 left-1/2 z-50 transition-transform duration-75 pointer-events-none md:hidden"
+        >
+          <div className="flex items-center gap-2 bg-slate-900/95 border border-emerald-500/50 text-emerald-300 text-xs font-black px-4 py-2 rounded-full shadow-2xl backdrop-blur-md">
+            <RefreshCw className={`h-3.5 w-3.5 ${pullDistance >= 55 ? 'animate-spin text-emerald-400' : ''}`} />
+            <span>{pullDistance >= 55 ? 'Relâcher pour synchroniser' : 'Tirer pour actualiser'}</span>
+          </div>
+        </div>
+      )}
       
       {/* Navigation Header */}
       <Navbar
@@ -920,7 +977,7 @@ export default function App() {
       )}
 
       {/* Main Container */}
-      <main className="w-full px-4 py-6 sm:px-6 lg:px-8">
+      <main className="w-full max-w-full overflow-x-hidden px-2.5 sm:px-6 lg:px-8 py-3 sm:py-6 pb-24 md:pb-8">
         
         {/* Toast Notification Banner */}
         {toast && (
@@ -1089,6 +1146,55 @@ export default function App() {
           setSlotToSwap(slot);
         }}
         onDismissAlert={dismissAlert}
+      />
+
+      {/* Context-Aware Mobile Floating Action Button (FAB) */}
+      <div className="fixed bottom-20 right-4 z-40 md:hidden flex flex-col items-end gap-2 animate-fadeIn">
+        {currentTab === 'pitch' && (
+          <div className="flex flex-col items-end gap-2">
+            <button
+              type="button"
+              onClick={() => setExportLineupTarget(compositions[selectedCompoIndex] || lineup)}
+              className="flex items-center gap-2 rounded-full bg-slate-900 text-emerald-400 border border-emerald-500/40 px-3.5 py-2.5 shadow-2xl active:scale-95 transition hover:brightness-110"
+              title="Exporter la composition"
+            >
+              <Share2 className="h-4 w-4 text-emerald-400" />
+              <span className="text-xs font-bold">Exporter</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOptimizeAI(strategy)}
+              disabled={isOptimizing}
+              className="flex items-center gap-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 px-4 py-3 text-slate-950 font-black shadow-2xl shadow-emerald-500/40 active:scale-95 transition hover:brightness-110 border border-emerald-300"
+              title="Optimiser Automatiquement la Compo"
+            >
+              <Sparkles className={`h-4 w-4 ${isOptimizing ? 'animate-spin' : ''}`} />
+              <span className="text-xs font-black">Optimiser Auto</span>
+            </button>
+          </div>
+        )}
+
+        {currentTab === 'live' && (
+          <button
+            type="button"
+            onClick={() => handleSyncWithSorare()}
+            disabled={isSyncing}
+            className="flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 px-4 py-3 text-slate-950 font-black shadow-2xl shadow-cyan-500/40 active:scale-95 transition hover:brightness-110 border border-cyan-300"
+            title="Actualiser les scores Live"
+          >
+            <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span className="text-xs font-black">Actualiser</span>
+          </button>
+        )}
+      </div>
+
+      {/* Ergonomic Mobile Bottom Navigation Bar (md:hidden) */}
+      <MobileBottomNav
+        currentTab={currentTab}
+        setCurrentTab={setCurrentTab}
+        totalCardsCount={cards.length}
+        alertsCount={startingXIAlerts.length}
+        onOpenStartingXIMonitor={() => setIsStartingXIModalOpen(true)}
       />
 
     </div>

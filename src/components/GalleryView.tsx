@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useTransition } from 'react';
-import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw } from 'lucide-react';
+import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw, LayoutGrid, Square, SlidersHorizontal } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
@@ -58,6 +58,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [minProjectedScore, setMinProjectedScore] = useState<number>(0);
   const [minAasL15, setMinAasL15] = useState<number>(0);
   const [minDsL15, setMinDsL15] = useState<number>(0);
+  const [showMobileFilters, setShowMobileFilters] = useState<boolean>(false);
+  const [mobileColumns, setMobileColumns] = useState<'1' | '2'>('2');
   const [currentPage, setCurrentPage] = useState(1);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -497,11 +499,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           </button>
         </div>
 
-        {/* Filters and Search Bar */}
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
-          
+        {/* Search Bar & Mobile Filter Toggle */}
+        <div className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
           {/* Search Box */}
-          <div className="relative md:col-span-2 lg:col-span-2">
+          <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
@@ -515,10 +516,80 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 });
               }}
               placeholder="Rechercher par nom, club..."
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 py-2.5 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
             />
           </div>
 
+          {/* Quick Sort Selector on Mobile/Tablet */}
+          <div className="flex items-center gap-2">
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="flex-1 sm:flex-initial rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none font-semibold"
+            >
+              <option value="PROJ_DESC">Score Projeté (Décroissant)</option>
+              <option value="PROJ_ASC">Score Projeté (Croissant)</option>
+              <option value="AAS_L15_DESC">All-Around L15</option>
+              <option value="DS_L15_DESC">Score Décisif L15</option>
+              <option value="STARS_DESC">Étoiles (Décroissant)</option>
+              <option value="L5_DESC">Forme L5 (Décroissant)</option>
+              <option value="BONUS_DESC">Bonus % (Décroissant)</option>
+              <option value="NAME_ASC">Nom (A-Z)</option>
+              <option value="CLUB_ASC">Équipe (A-Z)</option>
+            </select>
+
+            {/* Mobile 1-Col vs 2-Col Grid Density Switcher */}
+            <div className="md:hidden flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5">
+              <button
+                type="button"
+                onClick={() => setMobileColumns('1')}
+                className={`p-2 rounded-lg transition ${
+                  mobileColumns === '1'
+                    ? 'bg-emerald-500/20 text-emerald-300 font-bold'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+                title="Affichage 1 Colonne Détaillée"
+              >
+                <Square className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileColumns('2')}
+                className={`p-2 rounded-lg transition ${
+                  mobileColumns === '2'
+                    ? 'bg-emerald-500/20 text-emerald-300 font-bold'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+                title="Affichage 2 Colonnes Compactes"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {/* Mobile Filter Drawer Toggle Button with Active Badge */}
+            <button
+              type="button"
+              onClick={() => setShowMobileFilters(true)}
+              className={`md:hidden flex items-center gap-1.5 rounded-xl border px-3 py-2.5 text-xs font-bold transition shadow-sm ${
+                (maxMatchDate || minWinProb > 0 || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0 || minAasL15 > 0 || minDsL15 > 0 || hideUnavailable)
+                  ? 'border-emerald-500 bg-emerald-950/80 text-emerald-300'
+                  : 'border-slate-800 bg-slate-950 text-slate-400'
+              }`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <span>Filtres</span>
+              {([maxMatchDate, minWinProb > 0, selectedStatus !== 'ALL', selectedBonusTier !== 'ALL', selectedStarsFilter !== 'ALL', minProjectedScore > 0, minAasL15 > 0, minDsL15 > 0, hideUnavailable].filter(Boolean).length > 0) && (
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-400 text-[9px] font-black text-slate-950">
+                  {[maxMatchDate, minWinProb > 0, selectedStatus !== 'ALL', selectedBonusTier !== 'ALL', selectedStarsFilter !== 'ALL', minProjectedScore > 0, minAasL15 > 0, minDsL15 > 0, hideUnavailable].filter(Boolean).length}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Filters Grid (Always visible on desktop) */}
+        <div className="mt-3 hidden md:grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
+          
           {/* Date Filter (Match jusqu'au...) */}
           <div className="relative">
             <input
@@ -659,34 +730,6 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <option value="NOT_PLAYING">DNP (Ne joue pas)</option>
             </select>
           </div>
-
-          {/* Sort Selector */}
-          <div>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none font-semibold"
-            >
-              <option value="PROJ_DESC">Score Projeté (Décroissant)</option>
-              <option value="PROJ_ASC">Score Projeté (Croissant)</option>
-              <option value="AAS_L15_DESC">Score All-Around L15 (Décroissant)</option>
-              <option value="DS_L15_DESC">Score Décisif L15 (Décroissant)</option>
-              <option value="STARS_DESC">Nombre d'étoiles (Décroissant)</option>
-              <option value="STARS_ASC">Nombre d'étoiles (Croissant)</option>
-              <option value="L5_DESC">Forme L5 (Décroissant)</option>
-              <option value="L5_ASC">Forme L5 (Croissant)</option>
-              <option value="L10_DESC">Forme L10 (Décroissant)</option>
-              <option value="L10_ASC">Forme L10 (Croissant)</option>
-              <option value="L40_DESC">Régularité L40 (Décroissant)</option>
-              <option value="L40_ASC">Régularité L40 (Croissant)</option>
-              <option value="BONUS_DESC">Bonus % (Décroissant)</option>
-              <option value="BONUS_ASC">Bonus % (Croissant)</option>
-              <option value="NAME_ASC">Nom (A-Z)</option>
-              <option value="NAME_DESC">Nom (Z-A)</option>
-              <option value="CLUB_ASC">Équipe (A-Z)</option>
-              <option value="CLUB_DESC">Équipe (Z-A)</option>
-            </select>
-          </div>
         </div>
 
         {/* Filter Badges Active */}
@@ -799,7 +842,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-9">
+        <div className={`grid ${mobileColumns === '2' ? 'grid-cols-2 gap-2 sm:gap-4' : 'grid-cols-1 gap-3.5'} sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-9`}>
           {paginatedCards.map((card) => {
             const posBadge = formatPositionBadge(card.positionCode);
             const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
@@ -1671,6 +1714,208 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
           </div>
         </div>
+      )}
+
+      {/* Mobile Bottom Sheet Filter Drawer */}
+      {showMobileFilters && (
+        <div
+          onClick={() => setShowMobileFilters(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/80 backdrop-blur-sm md:hidden animate-fadeIn"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-h-[85vh] overflow-y-auto rounded-t-3xl border-t border-slate-700 bg-slate-900 p-4 pb-safe shadow-2xl flex flex-col space-y-4"
+          >
+            {/* Grabber Handle */}
+            <div
+              onClick={() => setShowMobileFilters(false)}
+              className="w-12 h-1.5 bg-slate-700 hover:bg-slate-500 rounded-full mx-auto cursor-pointer transition-colors"
+              title="Faire glisser vers le bas pour fermer"
+            />
+
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-emerald-400" />
+                <h3 className="text-base font-black text-white">Filtres de Galerie</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMobileFilters(false)}
+                className="h-8 w-8 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Filter Fields */}
+            <div className="space-y-3 text-xs">
+              {/* Position */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Poste</label>
+                <div className="grid grid-cols-5 gap-1">
+                  {(['ALL', 'GK', 'DEF', 'MID', 'FWD'] as const).map((pos) => (
+                    <button
+                      key={pos}
+                      type="button"
+                      onClick={() => { setSelectedPosition(pos); setCurrentPage(1); }}
+                      className={`py-2 rounded-xl text-center font-bold border transition ${
+                        selectedPosition === pos
+                          ? 'border-emerald-400 bg-emerald-500/20 text-emerald-300'
+                          : 'border-slate-800 bg-slate-950 text-slate-400'
+                      }`}
+                    >
+                      {pos === 'ALL' ? 'Tous' : pos}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Status */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Statut du joueur</label>
+                <select
+                  value={selectedStatus}
+                  onChange={(e) => { setSelectedStatus(e.target.value as any); setCurrentPage(1); }}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                >
+                  <option value="ALL">Tous les statuts</option>
+                  <option value="STARTER">Titulaires indiscutables</option>
+                  <option value="REGULAR">Réguliers (ou mieux)</option>
+                  <option value="SUBSTITUTE">Remplaçants (ou mieux)</option>
+                  <option value="DOUBTFUL">Incertains (ou mieux)</option>
+                  <option value="NOT_PLAYING">DNP (Ne joue pas)</option>
+                </select>
+              </div>
+
+              {/* Hide unavailable */}
+              <div>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hideUnavailable}
+                    onChange={(e) => { setHideUnavailable(e.target.checked); setCurrentPage(1); }}
+                    className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 h-4 w-4"
+                  />
+                  <span className="text-amber-300 font-bold">Masquer blessés, suspendus et DNP</span>
+                </label>
+              </div>
+
+              {/* Max Date */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Match inclus jusqu'au (Date limite)</label>
+                <input
+                  type="date"
+                  value={maxMatchDate}
+                  onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                />
+              </div>
+
+              {/* Win Chance */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Chances de victoire du match</label>
+                <select
+                  value={minWinProb}
+                  onChange={(e) => { setMinWinProb(Number(e.target.value)); setCurrentPage(1); }}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                >
+                  <option value={0}>Toutes les cotes</option>
+                  <option value={25}>&ge; 25% chances victoire</option>
+                  <option value={30}>&ge; 30% chances victoire</option>
+                  <option value={35}>&ge; 35% chances victoire</option>
+                  <option value={40}>&ge; 40% chances victoire</option>
+                  <option value={45}>&ge; 45% chances victoire</option>
+                  <option value={50}>&ge; 50% chances victoire</option>
+                </select>
+              </div>
+
+              {/* Stars filter */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Filtre par Étoiles</label>
+                <select
+                  value={selectedStarsFilter}
+                  onChange={(e) => { setSelectedStarsFilter(e.target.value as any); setCurrentPage(1); }}
+                  className="w-full rounded-xl border border-amber-500/40 bg-slate-950 px-3 py-2.5 text-xs text-amber-400 font-bold"
+                >
+                  <option value="ALL" className="text-slate-300">Toutes les étoiles</option>
+                  <option value="5" className="text-amber-400">★★★★★ (5 Étoiles)</option>
+                  <option value="4" className="text-amber-400">★★★★☆ (4 Étoiles)</option>
+                  <option value="3" className="text-amber-400">★★★☆☆ (3 Étoiles)</option>
+                  <option value="2" className="text-amber-400">★★☆☆☆ (2 Étoiles)</option>
+                  <option value="1" className="text-amber-400">★☆☆☆☆ (1 Étoile)</option>
+                </select>
+              </div>
+
+              {/* Card Bonus Tier */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Palier Bonus Carte</label>
+                <select
+                  value={selectedBonusTier}
+                  onChange={(e) => { setSelectedBonusTier(e.target.value as any); setCurrentPage(1); }}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                >
+                  <option value="ALL">Tous les bonus</option>
+                  <option value="0-4">Bonus 0% - 4%</option>
+                  <option value="5-9">Bonus 5% - 9%</option>
+                  <option value="10-14">Bonus 10% - 14%</option>
+                  <option value="15-19">Bonus 15% - 19%</option>
+                  <option value="20+">Bonus 20%+</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedPosition('ALL');
+                  setSelectedStatus('ALL');
+                  setHideUnavailable(false);
+                  setMaxMatchDate('');
+                  setMinWinProb(0);
+                  setSelectedStarsFilter('ALL');
+                  setSelectedBonusTier('ALL');
+                  setMinProjectedScore(0);
+                  setMinAasL15(0);
+                  setMinDsL15(0);
+                  setSearchTerm('');
+                  setLocalSearch('');
+                }}
+                className="py-2.5 px-4 rounded-xl border border-slate-700 bg-slate-800 text-xs font-bold text-slate-300 hover:text-white"
+              >
+                Réinitialiser
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowMobileFilters(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-500 text-xs font-black text-slate-950 hover:bg-emerald-400 text-center shadow-lg"
+              >
+                Appliquer les filtres ({filteredCards.length} cartes)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Action Button for Mobile Gallery Filter */}
+      {!showMobileFilters && (
+        <button
+          type="button"
+          onClick={() => setShowMobileFilters(true)}
+          className="fixed bottom-20 right-4 z-40 md:hidden flex items-center gap-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 px-4 py-3 text-slate-950 font-black shadow-2xl shadow-emerald-500/40 active:scale-95 transition hover:brightness-110 border border-emerald-300"
+          title="Ouvrir les filtres de la galerie"
+        >
+          <Filter className="h-4 w-4" />
+          <span className="text-xs font-black">Filtrer</span>
+          {([maxMatchDate, minWinProb > 0, selectedStatus !== 'ALL', selectedBonusTier !== 'ALL', selectedStarsFilter !== 'ALL', minProjectedScore > 0, minAasL15 > 0, minDsL15 > 0, hideUnavailable].filter(Boolean).length > 0) && (
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-950 text-[9px] font-black text-emerald-400">
+              {[maxMatchDate, minWinProb > 0, selectedStatus !== 'ALL', selectedBonusTier !== 'ALL', selectedStarsFilter !== 'ALL', minProjectedScore > 0, minAasL15 > 0, minDsL15 > 0, hideUnavailable].filter(Boolean).length}
+            </span>
+          )}
+        </button>
       )}
 
     </div>

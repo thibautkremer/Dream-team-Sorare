@@ -178,23 +178,56 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
     });
   }, [cardsWithInfo, slot, extraPositionFilter, hideOpponents, prioritizeTeammates, searchTerm, enforceDateFilter, maxDateFilter, minWinProb, minL5, minL15, minAasL15, minDsL15, minBonus, minProjectedScore, statusFilter, sortBy]);
 
+  // Swipe down to dismiss on mobile
+  const touchStartY = React.useRef<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      touchStartY.current = e.touches[0].clientY;
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartY.current === null || e.changedTouches.length === 0) return;
+    const deltaY = e.changedTouches[0].clientY - touchStartY.current;
+    touchStartY.current = null;
+    // If pulled down by more than 80px, close modal
+    if (deltaY > 80) {
+      onClose();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-      <div className="relative w-full max-w-[95vw] h-[95vh] flex flex-col rounded-3xl border border-slate-700 bg-slate-900 p-4 sm:p-6 shadow-2xl">
-        
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4 backdrop-blur-sm"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        className="relative w-full max-w-full sm:max-w-[95vw] h-[96vh] sm:h-[95vh] flex flex-col rounded-2xl sm:rounded-3xl border border-slate-700 bg-slate-900 p-3 sm:p-6 shadow-2xl"
+      >
+        {/* Mobile Pull Down Handle */}
+        <div
+          onClick={onClose}
+          className="w-12 h-1.5 bg-slate-700 hover:bg-slate-500 rounded-full mx-auto mb-2 md:hidden cursor-pointer transition-colors"
+          title="Faire glisser vers le bas pour fermer"
+        />
+
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 sm:pb-4">
           <div>
-            <h3 className="text-base font-bold text-white">
+            <h3 className="text-sm sm:text-base font-bold text-white">
               Sélectionner un joueur pour le poste : <span className="text-emerald-400">{getPositionTarget(slot)}</span>
             </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
               {searchedCardsInfo.length} candidats disponibles dans votre effectif
             </p>
           </div>
           <button
             onClick={onClose}
-            className="rounded-full bg-slate-800 p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 p-1.5 text-slate-400 hover:bg-slate-700 hover:text-white transition shrink-0"
           >
             <X className="h-4 w-4" />
           </button>
