@@ -742,7 +742,7 @@ export function calculatePlayerProjectedScore(
   const isClubGk = card.positionCode === 'GK';
   const isProvenClubPlayer = !upcomingIsNational && (
     isClubGk 
-      ? (l15 >= 28 || l40 >= 28 || l5 >= 28 || (card.scores?.l15 || 0) >= 28 || (card.scores?.l40 || 0) >= 28 || card.status === 'STARTER' || card.status === 'REGULAR' || (card.starterConfidence ?? 0) >= 40)
+      ? (card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 60 || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 3))
       : (l15 >= 38 || l40 >= 38 || (card.scores?.l15 || 0) >= 38 || (card.scores?.l40 || 0) >= 38 || card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 60)
   );
 
@@ -791,11 +791,10 @@ export function calculatePlayerProjectedScore(
   }
 
   // Règle Gardien de But (GK) :
-  // Si un gardien est titulaire établi en club (ex: Joan Garcia), il ne doit pas être éliminé
+  // Le gardien titulaire reçoit son score projeté ; tout gardien remplaçant a FORCEMENT un score projeté de 0.
   if (card.positionCode === 'GK') {
-    const isStarterGk = isProvenClubPlayer || card.status === 'STARTER' || playerStatus === 'STARTER' || (recentStats.playedLastMatch && recentStats.recentPlayingFactor >= 0.80);
-
-    if (!isStarterGk && (playerStatus !== 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence < 50) || recentStats.playedCountL5 < 1)) {
+    // 1. Si le gardien est explicitement désigné remplaçant / sur le banc / non-joueur
+    if (card.status === 'SUBSTITUTE' || card.status === 'BENCH' || card.status === 'NOT_PLAYING' || (card.starterConfidence !== undefined && card.starterConfidence <= 35)) {
       return {
         ...emptyBreakdown,
         starterFactor: 0,
@@ -803,7 +802,7 @@ export function calculatePlayerProjectedScore(
       };
     }
 
-    // Vérification de concurrence au sein du même club dans la galerie (uniquement pour les matchs de club)
+    // 2. Concurrence intra-club au sein de la galerie (uniquement pour les matchs de club)
     if (allGalleryCards && allGalleryCards.length > 0 && card.club?.name && !upcomingIsNational) {
       const currentSlug = card.playerSlug || card.slug;
       const otherClubGks = allGalleryCards.filter(c => 
@@ -814,22 +813,41 @@ export function calculatePlayerProjectedScore(
         c.injuryStatus !== 'SUSPENDED'
       );
 
-      const hasPrimaryStarterGk = otherClubGks.some(otherGk => {
-        const otherIsConfirmedStarter = (otherGk.status === 'STARTER') && (otherGk.starterConfidence ?? 80) >= 85;
-        if (isStarterGk || isProvenClubPlayer) {
-          // Notre gardien est déjà le titulaire établi du club : un autre gardien n'est pas prioritaire
-          return false;
-        }
-        return otherIsConfirmedStarter && ((otherGk.scores?.l15 || 0) > (card.scores?.l15 || 0) + 10);
-      });
-
-      if (hasPrimaryStarterGk) {
-        return {
-          ...emptyBreakdown,
-          starterFactor: 0,
-          starterImpactLabel: 'Gardien remplaçant n°2 (Titulaire club identifié : 0 pt)',
+      if (otherClubGks.length > 0) {
+        const getGkRank = (gk: SorareCard) => {
+          let rank = 0;
+          if (gk.status === 'STARTER') rank += 1000;
+          if (gk.status === 'SUBSTITUTE' || gk.status === 'BENCH' || gk.status === 'NOT_PLAYING') rank -= 1000;
+          rank += (gk.starterConfidence ?? 50) * 10;
+          const l5p = gk.scores?.l5Played ?? (gk.scores?.last5Scores?.filter(s => typeof s === 'number' && s > 0).length ?? 0);
+          rank += l5p * 100;
+          rank += (gk.scores?.l15 ?? 0);
+          return rank;
         };
+
+        const currentRank = getGkRank(card);
+        const bestOtherGk = otherClubGks.reduce((best, cand) => getGkRank(cand) > getGkRank(best) ? cand : best, otherClubGks[0]);
+        const bestOtherRank = getGkRank(bestOtherGk);
+
+        if (bestOtherRank > currentRank) {
+          const starterName = bestOtherGk.displayName || bestOtherGk.name || 'titulaire n°1';
+          return {
+            ...emptyBreakdown,
+            starterFactor: 0,
+            starterImpactLabel: `Gardien remplaçant (Titulaire : ${starterName} - 0 pt)`,
+          };
+        }
       }
+    }
+
+    // 3. Gardien isolé sans historique de jeu suffisant et non confirmé titulaire
+    const isConfirmedStarterGk = card.status === 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence >= 60) || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2);
+    if (!isConfirmedStarterGk) {
+      return {
+        ...emptyBreakdown,
+        starterFactor: 0,
+        starterImpactLabel: 'Gardien remplaçant : non titulaire (0 pt)',
+      };
     }
   }
 

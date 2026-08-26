@@ -43,14 +43,14 @@ export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
   const l15 = typeof card.scores.l15 === 'number' ? card.scores.l15 : 0;
   const l40 = typeof card.scores.l40 === 'number' ? card.scores.l40 : 0;
 
-  // 1. Exclure les joueurs qui n'ont aucun score valide
+  // 1. Exclure les joueurs qui n'ont aucun score ou aucun historique valide
   const recentMatches = card.scores.recentMatches || [];
   const last5 = card.scores.last5Scores || [];
 
   const hasValidMatchScores = recentMatches.some(m => typeof m?.score === 'number' && m.score > 0);
   const hasValidLast5 = last5.some(s => typeof s === 'number' && s > 0);
 
-  if (l5 <= 0 && l15 <= 0 && l40 <= 0 && !hasValidMatchScores && !hasValidLast5) {
+  if (!hasValidMatchScores && !hasValidLast5) {
     return false;
   }
 
@@ -64,9 +64,14 @@ export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
     return false;
   }
 
-  // 4. Exclure les joueurs qui n'ont aucune chance de jouer (status NOT_PLAYING sans aucun match joué)
+  // 4. Exclure les joueurs qui ne jouent jamais (0 match joué dans L5/L15)
   const l5Played = card.scores.l5Played ?? (last5.filter(s => typeof s === 'number' && s > 0).length);
-  if (card.status === 'NOT_PLAYING' && l5Played === 0 && l5 <= 0) {
+  const l15Played = card.scores.l15Played ?? 0;
+  if (l5Played === 0 && l15Played === 0) {
+    return false;
+  }
+
+  if (card.status === 'NOT_PLAYING' && l5Played === 0) {
     return false;
   }
 
