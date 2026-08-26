@@ -4574,9 +4574,6 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         if (rawPlayingStatus.includes('STARTER') || rawPlayingStatus.includes('STARTING')) {
           status = 'STARTER';
           starterConfidence = 95;
-        } else if (rawPlayingStatus.includes('SUB') || rawPlayingStatus.includes('BENCH')) {
-          status = 'SUBSTITUTE';
-          starterConfidence = 25;
         } else if (rawPlayingStatus.includes('INJUR') || rawPlayingStatus === 'INJURED') {
           injuryStatus = 'INJURED';
           status = 'NOT_PLAYING';
@@ -4585,7 +4582,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           injuryStatus = 'SUSPENDED';
           status = 'NOT_PLAYING';
           starterConfidence = 0;
-        } else if (rawPlayingStatus.includes('OUT') || rawPlayingStatus.includes('UNAVAILABLE') || rawPlayingStatus.includes('RESERVE')) {
+        } else if (rawPlayingStatus.includes('OUT') || rawPlayingStatus.includes('UNAVAILABLE')) {
           status = 'NOT_PLAYING';
           starterConfidence = 0;
         } else if (rawPlayingStatus.includes('DOUBT') || rawPlayingStatus === 'DOUBTFUL') {
@@ -4594,11 +4591,20 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         } else if (rawPlayingStatus.includes('QUESTION') || rawPlayingStatus === 'QUESTIONABLE') {
           injuryStatus = 'QUESTIONABLE';
           starterConfidence = 45;
+        } else if (rawPlayingStatus.includes('SUB') || rawPlayingStatus.includes('BENCH') || rawPlayingStatus.includes('RESERVE')) {
+          // Guard for club matches: if it's a club match and the player is an established club player or GK, override national team BENCH prediction
+          if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28 || l5 >= 28) : (l15 >= 42 || l40 >= 42))) {
+            status = 'STARTER';
+            starterConfidence = 90;
+          } else {
+            status = 'SUBSTITUTE';
+            starterConfidence = 25;
+          }
         } else {
           // Fallback: Calculate status from recent L5 match history
           if (relevantL5Matches.length === 0) {
             if (!upcomingIsNational) {
-              if (l15 > 45 || l40 > 45) {
+              if (posCode === 'GK' || l15 > 38 || l40 > 38) {
                 status = 'STARTER';
                 starterConfidence = 90;
               } else {
@@ -4611,21 +4617,31 @@ app.get('/api/sorare/user-cards', async (req, res) => {
             }
           } else {
             if (playedCountRelevantL5 === 0) {
-              status = 'NOT_PLAYING';
-              starterConfidence = 0;
-              injuryStatus = 'DOUBTFUL';
+              if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28) : (l15 >= 42 || l40 >= 42))) {
+                status = 'STARTER';
+                starterConfidence = 90;
+              } else {
+                status = 'NOT_PLAYING';
+                starterConfidence = 0;
+                injuryStatus = 'DOUBTFUL';
+              }
             } else if (playedCountRelevantL5 === 1) {
-              status = 'SUBSTITUTE';
-              starterConfidence = 20;
+              if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28) : (l15 >= 42 || l40 >= 42))) {
+                status = 'STARTER';
+                starterConfidence = 85;
+              } else {
+                status = 'SUBSTITUTE';
+                starterConfidence = 20;
+              }
             } else if (playedCountRelevantL5 === 2 || playedCountRelevantL5 === 3) {
-              status = 'REGULAR';
-              starterConfidence = 55;
+              status = (!upcomingIsNational && posCode === 'GK' && (l15 >= 28 || l40 >= 28)) ? 'STARTER' : 'REGULAR';
+              starterConfidence = 70;
             } else if (playedCountRelevantL5 >= 4 && playedLastRelevantMatch) {
               status = 'STARTER';
               starterConfidence = 90;
             } else if (playedCountRelevantL5 >= 4 && !playedLastRelevantMatch) {
-              status = 'REGULAR';
-              starterConfidence = 50;
+              status = (!upcomingIsNational && posCode === 'GK' && (l15 >= 28 || l40 >= 28)) ? 'STARTER' : 'REGULAR';
+              starterConfidence = 70;
             }
           }
         }

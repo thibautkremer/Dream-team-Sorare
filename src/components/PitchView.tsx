@@ -197,14 +197,14 @@ export const PitchView: React.FC<PitchViewProps> = ({
     return (
       <div
         onClick={() => onOpenScout(card)}
-        className={`relative flex h-auto min-h-[275px] sm:min-h-[335px] w-full max-w-[150px] xs:max-w-[160px] sm:w-48 flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.03] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
+        className={`relative flex h-full min-h-[420px] w-full flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.02] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
           isCaptain
             ? 'border-emerald-400 ring-2 ring-emerald-400/40 bg-gradient-to-b from-emerald-950/50 via-slate-900/90 to-slate-950 shadow-emerald-500/10'
             : 'border-slate-700/70 bg-slate-900/90 hover:border-slate-500'
         }`}
       >
         {/* Card Header Top */}
-        <div className="flex items-center justify-between p-2 bg-slate-950/80 border-b border-slate-800/60 gap-1">
+        <div className="flex items-center justify-between p-2 bg-slate-950/80 border-b border-slate-800/60 gap-1 shrink-0">
           <div className="flex items-center gap-1 min-w-0">
             <span className={`flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-black shrink-0 ${posBadge.bg} ${posBadge.text} border ${posBadge.border}`}>
               {card.positionCode}
@@ -242,7 +242,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
         </div>
 
         {/* Player Image & Club */}
-        <div className="relative flex flex-col items-center px-3 pt-2">
+        <div className="relative flex flex-col items-center px-3 pt-2 shrink-0">
           <div className="relative">
             <img
               src={card.pictureUrl}
@@ -280,38 +280,38 @@ export const PitchView: React.FC<PitchViewProps> = ({
         </div>
 
         {/* Projected Score & Next Match Info */}
-        <div className="px-2.5 pb-2.5">
+        <div className="flex-1 flex flex-col justify-between px-2.5 pb-2.5 pt-1.5">
           {/* Projected Score Box */}
-          <div className="rounded-xl bg-slate-950/80 p-2 border border-slate-800/80">
+          <div className="rounded-xl bg-slate-950/80 p-2 border border-slate-800/80 space-y-1">
             <div className="space-y-0.5 text-[10px]">
-              <div className="flex items-center justify-between text-slate-400">
-                <span>Base :</span>
-                <span className="font-semibold text-slate-200">{cardBreakdown.baseProjectedScore} ({cardBreakdown.projectedFloor}-{cardBreakdown.projectedCeiling}) pts</span>
+              <div className="flex items-center justify-between text-slate-400 gap-1">
+                <span className="shrink-0 text-slate-400 font-medium">Base</span>
+                <span className="font-semibold text-slate-200 text-right truncate">{cardBreakdown.baseProjectedScore} ({cardBreakdown.projectedFloor}-{cardBreakdown.projectedCeiling}) pts</span>
               </div>
               {isCaptain ? (
                 <>
-                  <div className="flex items-center justify-between text-slate-400 text-[9.5px]">
-                    <span className="text-slate-400">Bonus Carte (+{cardBreakdown.cardBonusPercentage}%) :</span>
-                    <span className="font-semibold text-amber-300">+{cardBreakdown.cardBonusScore} pts</span>
+                  <div className="flex items-center justify-between text-slate-400 text-[9.5px] gap-1">
+                    <span className="shrink-0 text-slate-400">Bonus Carte (+{cardBreakdown.cardBonusPercentage}%)</span>
+                    <span className="font-semibold text-amber-300 text-right">+{cardBreakdown.cardBonusScore} pts</span>
                   </div>
-                  <div className="flex items-center justify-between text-slate-400 text-[9.5px]">
-                    <span className="text-emerald-400 font-semibold">Bonus Cap (+20%) :</span>
-                    <span className="font-semibold text-emerald-400">+{bonusIfCaptain} pts</span>
+                  <div className="flex items-center justify-between text-slate-400 text-[9.5px] gap-1">
+                    <span className="shrink-0 text-emerald-400 font-semibold">Bonus Cap (+20%)</span>
+                    <span className="font-semibold text-emerald-400 text-right">+{bonusIfCaptain} pts</span>
                   </div>
-                  <div className="flex items-center justify-between font-bold border-t border-slate-800/60 pt-0.5 mt-0.5">
-                    <span className="text-amber-300">Total Bonus (+{totalBonusPct}%) :</span>
-                    <span className="font-bold text-amber-300">+{totalBonusScore} pts</span>
+                  <div className="flex items-center justify-between font-bold border-t border-slate-800/60 pt-0.5 mt-0.5 gap-1">
+                    <span className="shrink-0 text-amber-300">Total Bonus (+{totalBonusPct}%)</span>
+                    <span className="font-bold text-amber-300 text-right">+{totalBonusScore} pts</span>
                   </div>
                 </>
               ) : (
-                <div className="flex items-center justify-between text-slate-400">
-                  <span>Bonus Carte (+{cardBreakdown.cardBonusPercentage}%) :</span>
-                  <span className="font-bold text-amber-300">+{cardBreakdown.cardBonusScore} pts</span>
+                <div className="flex items-center justify-between text-slate-400 gap-1">
+                  <span className="shrink-0 text-slate-400">Bonus Carte (+{cardBreakdown.cardBonusPercentage}%)</span>
+                  <span className="font-bold text-amber-300 text-right">+{cardBreakdown.cardBonusScore} pts</span>
                 </div>
               )}
-              <div className="flex items-center justify-between font-black border-t border-slate-800/80 pt-1 mt-1">
-                <span className="text-slate-300">Total Projeté :</span>
-                <span className="text-emerald-400 text-xs font-black">
+              <div className="flex items-center justify-between font-black border-t border-slate-800/80 pt-1 mt-1 gap-1">
+                <span className="shrink-0 text-slate-300">Total Projeté</span>
+                <span className="text-emerald-400 text-xs font-black text-right">
                   {Math.round((cardBreakdown.baseProjectedScore + totalBonusScore) * 10) / 10} pts
                 </span>
               </div>
@@ -673,12 +673,12 @@ export const PitchView: React.FC<PitchViewProps> = ({
           </div>
 
           {/* PC / Wide Screen Horizontal Row */}
-          <div className="hidden md:flex flex-row flex-wrap items-center justify-center gap-4 lg:gap-6 w-full">
-            <div>{renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}</div>
-            <div>{renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}</div>
-            <div>{renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}</div>
-            <div>{renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}</div>
-            <div>{renderPitchCard(targetLineup, 'extra', 'Extra (Joker)', 'EXTRA')}</div>
+          <div className="hidden md:grid md:grid-cols-5 gap-3 lg:gap-4 w-full items-stretch max-w-6xl mx-auto">
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'extra', 'Extra (Joker)', 'EXTRA')}</div>
           </div>
         </div>
 

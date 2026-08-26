@@ -75,7 +75,16 @@ export interface PlayerRecentMatchStats {
  * Retourne une clé unique pour identifier un joueur (indépendamment de la carte/bonus)
  */
 export function getPlayerUniqueKey(card: SorareCard): string {
-  return (card.playerSlug || card.displayName || card.slug || card.id).toLowerCase().trim();
+  if (!card) return '';
+  // Normaliser le nom du joueur en minuscules, sans accents, sans tirets, ni espaces multiples
+  const rawName = card.displayName || card.name || card.playerSlug || card.slug || card.id || '';
+  return rawName
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
@@ -404,20 +413,25 @@ export function precomputeClubContexts(cards: SorareCard[]): Record<string, Club
   return contexts;
 }
 
-export function isNationalTeamMatch(match: { competitionName?: string; opponent?: string }): boolean {
+export function isNationalTeamMatch(match: { competitionName?: string; opponent?: string; isNational?: boolean }): boolean {
+  if (!match) return false;
+  if (match.isNational === true || (match as any).isNationalTeam === true || (match as any).teamType === 'NATIONAL' || (match as any).matchType === 'NATIONAL') {
+    return true;
+  }
+
   const comp = (match.competitionName || '').toLowerCase().trim();
   const opp = (match.opponent || '').toLowerCase().trim();
+
+  if (!comp && !opp) return false;
   
-  // Exclure explicitement les compétitions européennes de clubs
-  if (
-    comp.includes('europa') || 
-    comp.includes('champions league') || 
-    comp.includes('ucl') || 
-    comp.includes('uel') || 
-    comp.includes('uecl') || 
-    comp.includes('conference league') ||
-    comp.includes('club')
-  ) {
+  // Exclure explicitement les compétitions européennes et nationales de clubs
+  const clubCompPatterns = [
+    'europa', 'champions league', 'ucl', 'uel', 'uecl', 'conference league', 'club',
+    'laliga', 'la liga', 'premier league', 'serie a', 'bundesliga', 'ligue 1', 'ligue 2',
+    'copa del rey', 'fa cup', 'dfb pokal', 'coppa italia', 'coupe de france',
+    'eredivisie', 'primeira liga', 'pro league', 'mls', 'championship'
+  ];
+  if (clubCompPatterns.some(pat => comp.includes(pat))) {
     return false;
   }
 
@@ -425,8 +439,8 @@ export function isNationalTeamMatch(match: { competitionName?: string; opponent?
   const intlKeywords = [
     'nations league', 'euro', 'world cup', 'mondial', 'qualif', 'friendly', 
     'friendlies', 'amical', 'amicaux', 'international', 'copa america', 'copa américa', 
-    'can ', 'africa cup', 'conmebol', 'gold cup', 'asian cup', 'national team',
-    'championship', 'sélection', 'selection', 'pays'
+    'can ', 'africa cup', 'afcon', 'conmebol', 'gold cup', 'asian cup', 'national team',
+    'sélection', 'selection', 'pays', 'nations'
   ];
 
   if (intlKeywords.some(kw => comp.includes(kw) || opp.includes(kw))) {
@@ -443,12 +457,16 @@ export function isNationalTeamMatch(match: { competitionName?: string; opponent?
     'ukraine', 'slovakia', 'slovaquie', 'slovenia', 'slovénie', 'czech', 'république tchèque', 
     'brazil', 'brésil', 'argentina', 'argentine', 'uruguay', 'colombia', 'colombie', 
     'chile', 'chili', 'usa', 'etats-unis', 'mexico', 'mexique', 'canada', 'morocco', 'maroc', 
-    'senegal', 'sénégal', 'japan', 'japon', 'korea', 'corée', 'australia', 'australie'
+    'senegal', 'sénégal', 'japan', 'japon', 'korea', 'corée', 'australia', 'australie',
+    'serbia', 'serbie', 'greece', 'grèce', 'sweden', 'suède', 'norway', 'norvège',
+    'finland', 'finlande', 'hungary', 'hongrie', 'cameroon', 'cameroun', 'ivory coast', "côte d'ivoire",
+    'nigeria', 'ghana', 'algeria', 'algérie', 'egypt', 'égypte', 'paraguay', 'ecuador', 'équateur',
+    'peru', 'pérou', 'venezuela', 'bolivia', 'bolivie'
   ];
 
   if (countries.some(c => comp === c || opp === c || opp.includes(c) || comp.includes(c))) {
-    // S'assurer que ce n'est pas un nom de club contenant un pays/ville par coïncidence (ex: Austria Wien, Paris FC)
-    const isClub = /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg|paris|sporting|club|olympiakos|dynamo|spartak|celtic|rangers)\b/i.test(opp) || /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg|paris|sporting|club|olympiakos|dynamo|spartak|celtic|rangers)\b/i.test(comp);
+    // S'assurer que ce n'est pas un nom de club contenant un pays/ville par coïncidence
+    const isClub = /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg|paris|sporting|club|olympiakos|dynamo|spartak|celtic|rangers|slavia|sparta|red star|athletic|bologna|verona)\b/i.test(opp) || /\b(fc|cf|rc|as|sc|cd|united|city|real|atletico|inter|bvb|hotspur|wien|salzburg|paris|sporting|club|olympiakos|dynamo|spartak|celtic|rangers|slavia|sparta|red star|athletic|bologna|verona)\b/i.test(comp);
     if (!isClub) {
       return true;
     }
@@ -489,9 +507,11 @@ export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: Sorar
     };
   }
 
-  const lastMatchScore = clubScores[0]; // Le premier élément est le plus récent (historique inversé)
+  const lastMatchScore = clubScores[0]; // Le premier élément est le plus récent des matchs filtrés
   const playedLastMatch = typeof lastMatchScore === 'number' && lastMatchScore > 0;
   const playedCountL5 = clubScores.slice(0, 5).filter(s => s > 0).length;
+  const totalEvaluated = Math.min(clubScores.length, 5);
+  const playedRate = totalEvaluated > 0 ? playedCountL5 / totalEvaluated : 0;
 
   let consecutiveDnpCount = 0;
   for (let i = 0; i < clubScores.length; i++) {
@@ -507,13 +527,14 @@ export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: Sorar
     recentPlayingFactor = 0.05;
   } else if (consecutiveDnpCount >= 3) {
     recentPlayingFactor = 0.20;
-  } else if (consecutiveDnpCount === 2) {
+  } else if (consecutiveDnpCount === 2 && !card.status?.includes('STARTER')) {
     recentPlayingFactor = 0.45;
   } else if (consecutiveDnpCount === 1 || !playedLastMatch) {
-    recentPlayingFactor = 0.65;
-  } else {
-    // Facteur neutre sans sur-bonification de rythme
+    recentPlayingFactor = card.status === 'STARTER' ? 0.85 : 0.65;
+  } else if (playedRate >= 0.75) {
     recentPlayingFactor = 1.0;
+  } else {
+    recentPlayingFactor = 0.90;
   }
 
   // Malus si le joueur a joué mais était remplaçant (-5%)
@@ -567,7 +588,7 @@ export function calculatePlayerProjectedScore(
   const bonusBreakdown = getCardBonusBreakdown(card);
 
   // 1. Détermination de la nature de la prochaine échéance (Nationale vs Club)
-  const upcomingIsNational = card.upcomingFixture?.competitionName && isNationalTeamMatch({ competitionName: card.upcomingFixture.competitionName });
+  const upcomingIsNational = card.upcomingFixture ? isNationalTeamMatch(card.upcomingFixture) : false;
 
   const calcCleanAverage = (scores: number[] | undefined, count: number, fallback = 40) => {
     if (!scores || scores.length === 0) return fallback;
@@ -717,8 +738,27 @@ export function calculatePlayerProjectedScore(
 
   let playerStatus: string = card.status || 'REGULAR';
 
-  // Correction dynamique du statut si l'analyse récente contredit le statut de la carte
-  if (upcomingIsNational) {
+  // Detection des titulaires/réguliers établis en club (ex: Joan Garcia en gardien principal)
+  const isClubGk = card.positionCode === 'GK';
+  const isProvenClubPlayer = !upcomingIsNational && (
+    isClubGk 
+      ? (l15 >= 28 || l40 >= 28 || l5 >= 28 || (card.scores?.l15 || 0) >= 28 || (card.scores?.l40 || 0) >= 28 || card.status === 'STARTER' || card.status === 'REGULAR' || (card.starterConfidence ?? 0) >= 40)
+      : (l15 >= 38 || l40 >= 38 || (card.scores?.l15 || 0) >= 38 || (card.scores?.l40 || 0) >= 38 || card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 60)
+  );
+
+  if (isProvenClubPlayer) {
+    playerStatus = 'STARTER';
+    recentStats = {
+      ...recentStats,
+      playedLastMatch: true,
+      playedCountL5: Math.max(recentStats.playedCountL5, 3),
+      recentPlayingFactor: Math.max(recentStats.recentPlayingFactor, 0.90),
+    };
+    if (l5 < 25) {
+      l5 = l15 > 0 ? l15 : (l40 > 0 ? l40 : 48);
+    }
+  } else if (upcomingIsNational) {
+    // Correction dynamique du statut si l'analyse récente contredit le statut de la carte pour la sélection
     if (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2) {
       playerStatus = 'STARTER';
     } else if (recentStats.playedLastMatch) {
@@ -729,9 +769,16 @@ export function calculatePlayerProjectedScore(
       playerStatus = 'NOT_PLAYING';
     }
   } else {
-    if (recentStats.playedCountL5 >= 4 && recentStats.playedLastMatch) {
+    // Prochaine échéance : Match de Club
+    const hasRecentMatches = Boolean(card.scores?.recentMatches && card.scores.recentMatches.length > 0);
+    const totalClubEvaluated = hasRecentMatches ? Math.min(card.scores!.recentMatches!.filter(m => !isNationalTeamMatch(m)).length, 5) : 5;
+    const playedClubRate = totalClubEvaluated > 0 ? recentStats.playedCountL5 / totalClubEvaluated : 0;
+
+    if (card.status === 'STARTER') {
       playerStatus = 'STARTER';
-    } else if (recentStats.playedCountL5 >= 2 && (playerStatus === 'NOT_PLAYING' || playerStatus === 'SUBSTITUTE' || playerStatus === 'BENCH')) {
+    } else if (recentStats.playedLastMatch && (recentStats.playedCountL5 >= 4 || (totalClubEvaluated >= 2 && playedClubRate >= 0.75))) {
+      playerStatus = 'STARTER';
+    } else if (recentStats.playedCountL5 >= 2 || card.status === 'REGULAR') {
       playerStatus = 'REGULAR';
     } else if (recentStats.playedCountL5 === 1 && playerStatus === 'NOT_PLAYING') {
       playerStatus = 'SUBSTITUTE';
@@ -743,11 +790,12 @@ export function calculatePlayerProjectedScore(
     return emptyBreakdown;
   }
 
-  // Règle stricte Gardien de But (GK) :
-  // Si un gardien n'est pas le titulaire établi ou si un autre gardien du club est titulaire,
-  // le gardien remplaçant ne jouera pas -> Score projeté = 0.0 pt.
+  // Règle Gardien de But (GK) :
+  // Si un gardien est titulaire établi en club (ex: Joan Garcia), il ne doit pas être éliminé
   if (card.positionCode === 'GK') {
-    if (playerStatus !== 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence < 50) || recentStats.playedCountL5 < 2) {
+    const isStarterGk = isProvenClubPlayer || card.status === 'STARTER' || playerStatus === 'STARTER' || (recentStats.playedLastMatch && recentStats.recentPlayingFactor >= 0.80);
+
+    if (!isStarterGk && (playerStatus !== 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence < 50) || recentStats.playedCountL5 < 1)) {
       return {
         ...emptyBreakdown,
         starterFactor: 0,
@@ -755,20 +803,24 @@ export function calculatePlayerProjectedScore(
       };
     }
 
-    // Vérification de concurrence au sein du même club dans la galerie
-    if (allGalleryCards && allGalleryCards.length > 0 && card.club?.name) {
+    // Vérification de concurrence au sein du même club dans la galerie (uniquement pour les matchs de club)
+    if (allGalleryCards && allGalleryCards.length > 0 && card.club?.name && !upcomingIsNational) {
       const currentSlug = card.playerSlug || card.slug;
       const otherClubGks = allGalleryCards.filter(c => 
         c.positionCode === 'GK' && 
         c.club?.name === card.club?.name && 
-        (c.playerSlug || c.slug) !== currentSlug
+        (c.playerSlug || c.slug) !== currentSlug &&
+        c.injuryStatus !== 'INJURED' &&
+        c.injuryStatus !== 'SUSPENDED'
       );
 
       const hasPrimaryStarterGk = otherClubGks.some(otherGk => {
-        const otherPlayed = otherGk.scores?.l5Played ?? 0;
-        const currentPlayed = card.scores?.l5Played ?? recentStats.playedCountL5;
-        const otherIsConfirmedStarter = otherGk.status === 'STARTER' && (otherGk.starterConfidence ?? 80) >= 80;
-        return (otherIsConfirmedStarter && card.status !== 'STARTER') || (otherPlayed > currentPlayed && otherPlayed >= 3);
+        const otherIsConfirmedStarter = (otherGk.status === 'STARTER') && (otherGk.starterConfidence ?? 80) >= 85;
+        if (isStarterGk || isProvenClubPlayer) {
+          // Notre gardien est déjà le titulaire établi du club : un autre gardien n'est pas prioritaire
+          return false;
+        }
+        return otherIsConfirmedStarter && ((otherGk.scores?.l15 || 0) > (card.scores?.l15 || 0) + 10);
       });
 
       if (hasPrimaryStarterGk) {
@@ -781,12 +833,17 @@ export function calculatePlayerProjectedScore(
     }
   }
 
-  if (recentStats.playedCountL5 === 0 && playerStatus !== 'STARTER') {
+  if (recentStats.playedCountL5 === 0 && !isProvenClubPlayer && playerStatus !== 'STARTER' && card.status !== 'STARTER') {
     return emptyBreakdown;
   }
 
-  if (playerStatus === 'SUBSTITUTE' || playerStatus === 'SUPER_SUBSTITUTE' || playerStatus === 'BENCH' || recentStats.consecutiveDnpCount >= 2 || recentStats.recentPlayingFactor < 0.30) {
-    return emptyBreakdown;
+  // Ne pas éliminer un titulaire de club explicitement désigné sur des DNP de trêve nationale
+  const isProtectedClubStarter = !upcomingIsNational && (card.status === 'STARTER' || playerStatus === 'STARTER' || isProvenClubPlayer) && recentStats.playedLastMatch;
+
+  if (!isProtectedClubStarter) {
+    if (playerStatus === 'SUBSTITUTE' || playerStatus === 'SUPER_SUBSTITUTE' || playerStatus === 'BENCH' || recentStats.consecutiveDnpCount >= 3 || recentStats.recentPlayingFactor < 0.25) {
+      return emptyBreakdown;
+    }
   }
 
   const isRegularStarter = playerStatus === 'STARTER' || playerStatus === 'REGULAR';
@@ -1260,12 +1317,24 @@ export function selectPlayerForPosition(
 ): SorareCard | null {
   if (candidates.length === 0) return null;
 
-  // 1. RÈGLE 1 : STRICTE. Éliminer les candidats qui affrontent un joueur déjà présent dans l'équipe
-  let filtered = candidates;
+  // 0. RÈGLE ABSOLUE ET INVIOLABLE : Aucun doublon de joueur (même id ou même clé de nom) dans la composition
+  const uniqueCandidates = candidates.filter(cand => {
+    const candKey = getPlayerUniqueKey(cand.player);
+    return !selectedPlayers.some(sel => sel.id === cand.player.id || getPlayerUniqueKey(sel) === candKey);
+  });
+
+  if (uniqueCandidates.length === 0) return null;
+
+  // 1. RÈGLE D'OPPOSANTS : Éliminer les candidats qui affrontent un joueur déjà sélectionné
+  let filtered = uniqueCandidates;
   if (!ignoreOpponentsConstraint && selectedPlayers.length > 0) {
-    filtered = candidates.filter(cand => {
+    const noOpponents = uniqueCandidates.filter(cand => {
       return !selectedPlayers.some(sel => areOpponents(cand.player, sel));
     });
+    // Si des candidats sans duel direct existent, on les privilégie à 100%
+    if (noOpponents.length > 0) {
+      filtered = noOpponents;
+    }
   }
 
   if (filtered.length === 0) return null;
