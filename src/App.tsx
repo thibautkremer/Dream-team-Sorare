@@ -14,9 +14,10 @@ import { LineupExportModal } from './components/LineupExportModal';
 import { StartingXIMonitorModal } from './components/StartingXIMonitorModal';
 import { useStartingXIMonitor } from './hooks/useStartingXIMonitor';
 import { StorageService } from './utils/storage';
-import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey } from './utils/optimizer';
+import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey, calculatePlayerProjectedScore } from './utils/optimizer';
 
 import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters, PlayingStatus } from './types';
+import { getCurrentGameWeekNumber } from './data/fixturesData';
 import { CheckCircle2, AlertCircle, ShieldAlert } from 'lucide-react';
 
 export default function App() {
@@ -29,7 +30,7 @@ export default function App() {
   const [isLoadingCards, setIsLoadingCards] = useState(true);
   const [exportLineupTarget, setExportLineupTarget] = useState<Lineup | null>(null);
   const [degradedModeInfo, setDegradedModeInfo] = useState<{ isDegraded: boolean; reason?: string } | null>(null);
-  const [gameWeek, setGameWeek] = useState(48); // Fallback to 48 initially
+  const [gameWeek, setGameWeek] = useState(() => getCurrentGameWeekNumber());
   const [isStartingXIModalOpen, setIsStartingXIModalOpen] = useState(false);
   
   const [filters, setFilters] = useState<LineupOptimizationFilters>({
@@ -297,9 +298,13 @@ export default function App() {
         ) {
           return;
         }
+        const appToken = StorageService.getAppToken();
         fetch('/api/admin/logs/client', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(appToken ? { 'x-app-token': appToken } : {})
+          },
           body: JSON.stringify({ message: msg, error: String(err || '') })
         }).catch(() => {});
       } catch {
@@ -512,9 +517,13 @@ export default function App() {
   const handleOptimizeAI = async (strategy: StrategyType = 'BALANCED') => {
     setIsOptimizing(true);
     try {
+      const appToken = StorageService.getAppToken();
       const response = await fetch('/api/ai/optimize-lineup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(appToken ? { 'x-app-token': appToken } : {})
+        },
         body: JSON.stringify({
           cards,
           strategy,
@@ -615,16 +624,21 @@ export default function App() {
         [resolvedSlot]: player,
       };
 
+      const getSlotPlayerScore = (card: SorareCard | null) => {
+        if (!card) return 0;
+        return calculatePlayerProjectedScore(card, strategy, cards).projectedScore;
+      };
+
       const baseSum = (
-        (updatedSlots.gk?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.def?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.mid?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.fwd?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.extra?.upcomingFixture?.projectedScore || 0)
+        getSlotPlayerScore(updatedSlots.gk) +
+        getSlotPlayerScore(updatedSlots.def) +
+        getSlotPlayerScore(updatedSlots.mid) +
+        getSlotPlayerScore(updatedSlots.fwd) +
+        getSlotPlayerScore(updatedSlots.extra)
       );
 
       const capPlayer = updatedSlots[prev.captainSlot];
-      const capBonus = capPlayer ? Math.round((capPlayer.upcomingFixture?.projectedScore || 0) * 0.20 * 10) / 10 : 0;
+      const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
 
       const updated = {
         ...prev,
@@ -692,16 +706,21 @@ export default function App() {
         [slot]: player,
       };
 
+      const getSlotPlayerScore = (c: SorareCard | null) => {
+        if (!c) return 0;
+        return calculatePlayerProjectedScore(c, strategy, cards).projectedScore;
+      };
+
       const baseSum = (
-        (updatedSlots.gk?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.def?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.mid?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.fwd?.upcomingFixture?.projectedScore || 0) +
-        (updatedSlots.extra?.upcomingFixture?.projectedScore || 0)
+        getSlotPlayerScore(updatedSlots.gk) +
+        getSlotPlayerScore(updatedSlots.def) +
+        getSlotPlayerScore(updatedSlots.mid) +
+        getSlotPlayerScore(updatedSlots.fwd) +
+        getSlotPlayerScore(updatedSlots.extra)
       );
 
       const capPlayer = updatedSlots[compo.captainSlot];
-      const capBonus = capPlayer ? Math.round((capPlayer.upcomingFixture?.projectedScore || 0) * 0.20 * 10) / 10 : 0;
+      const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
 
       const updated = {
         ...compo,
@@ -1015,6 +1034,7 @@ export default function App() {
         <PlayerScoutModal
           card={scoutCard}
           allCards={cards}
+          strategy={strategy}
           onClose={() => setScoutCard(null)}
           onAssignToSlot={handleAssignToSlot}
         />

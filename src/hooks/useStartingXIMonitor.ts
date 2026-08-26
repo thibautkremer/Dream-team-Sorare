@@ -56,12 +56,14 @@ export function useStartingXIMonitor({
     try {
       const allLineups = compositions.length > 0 ? compositions : [currentLineup];
       const apiKey = StorageService.getApiKey() || '';
+      const appToken = StorageService.getAppToken() || '';
 
       const res = await fetch('/api/lineups/starting-xi-check', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'x-sorare-api-key': apiKey } : {}),
+          ...(appToken ? { 'x-app-token': appToken } : {}),
         },
         body: JSON.stringify({
           players: uniquePlayersInCompositions.map((p) => ({
@@ -108,13 +110,29 @@ export function useStartingXIMonitor({
   useEffect(() => {
     checkStartingXI();
 
-    // Check every 60 seconds to detect 1h pre-match lineup announcements
-    const interval = setInterval(() => {
-      checkStartingXI();
-    }, 60 * 1000);
+    const getPollingInterval = () => {
+      let shortestTime = Infinity;
+      const now = new Date().getTime();
+      uniquePlayersInCompositions.forEach(p => {
+        if (p.upcomingFixture?.matchDate) {
+          const matchTime = new Date(p.upcomingFixture.matchDate).getTime();
+          const diff = matchTime - now;
+          if (diff > 0 && diff < shortestTime) {
+            shortestTime = diff;
+          }
+        }
+      });
+      // If a match is within 2 hours, poll every 60s, else 5 minutes
+      if (shortestTime < 2 * 60 * 60 * 1000) {
+        return 60 * 1000;
+      }
+      return 5 * 60 * 1000;
+    };
+
+    let interval = setInterval(checkStartingXI, getPollingInterval());
 
     return () => clearInterval(interval);
-  }, [checkStartingXI]);
+  }, [checkStartingXI, uniquePlayersInCompositions]);
 
   const requestNotificationPermission = async () => {
     const perm = await NotificationService.requestPermission();

@@ -4,6 +4,7 @@ import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 import { getCardTotalBonus } from '../utils/sorareSlug';
 import { normalizeClubName } from '../data/fixturesData';
+import { StorageService } from '../utils/storage';
 export { getCardTotalBonus };
 
 interface MatchupCenterProps {
@@ -98,9 +99,13 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     setIsSyncingRealOdds(true);
     setSyncFeedback('Recherche des cotes officielles des bookmakers via Google Search Grounding...');
     try {
+      const appToken = StorageService.getAppToken();
       const res = await fetch('/api/match-odds/sync-gemini', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(appToken ? { 'x-app-token': appToken } : {})
+        },
         body: JSON.stringify({ slug: 'thib-8', cards }),
       });
       const data = await res.json();

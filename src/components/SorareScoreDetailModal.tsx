@@ -145,9 +145,13 @@ export const SorareScoreDetailModal: React.FC<SorareScoreDetailModalProps> = ({
       setLoading(true);
       try {
         const apiKey = StorageService.getApiKey() || '';
+        const appToken = StorageService.getAppToken();
         const res = await fetch('/api/sorare/player-stats', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(appToken ? { 'x-app-token': appToken } : {})
+          },
           body: JSON.stringify({ so5ScoreId, apiKey })
         });
         if (res.ok) {

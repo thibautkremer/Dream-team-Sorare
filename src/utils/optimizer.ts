@@ -1,5 +1,6 @@
 import { SorareCard, Lineup, StrategyType, ScoringFocus, PositionCode, LineupOptimizationFilters, UpcomingFixture, MatchPerformanceDetail } from '../types';
 import { getCardTotalBonus, getCardBonusBreakdown, CardBonusBreakdown } from './sorareSlug';
+import { getCurrentGameWeekNumber } from '../data/fixturesData';
 
 export interface ScoreBreakdown {
   player: SorareCard;
@@ -873,18 +874,6 @@ export function calculatePlayerProjectedScore(
   const winProb = fixture ? getPlayerWinProbability(fixture) : 50;
 
   if (fixture) {
-    if (winProb >= 60) {
-      difficultyRating = 1;
-    } else if (winProb >= 48) {
-      difficultyRating = 2;
-    } else if (winProb >= 35) {
-      difficultyRating = 3;
-    } else if (winProb >= 22) {
-      difficultyRating = 4;
-    } else {
-      difficultyRating = 5;
-    }
-
     switch (difficultyRating) {
       case 1:
         matchupFactor = 1.12;
@@ -1325,7 +1314,7 @@ export function selectPlayerForPosition(
 export function optimizeLineup(
   cards: SorareCard[],
   strategy: StrategyType = 'BALANCED',
-  gameWeek: number = 48,
+  gameWeek: number = getCurrentGameWeekNumber(),
   filters: LineupOptimizationFilters = {},
   usedCardIds: Set<string> = new Set<string>(),
   usedPlayerKeys: Set<string> = new Set<string>()
@@ -1674,7 +1663,7 @@ export function optimizeLineup(
 export function generateFourDistinctLineups(
   cards: SorareCard[],
   strategy: StrategyType = 'BALANCED',
-  gameWeek: number = 48,
+  gameWeek: number = getCurrentGameWeekNumber(),
   filters: LineupOptimizationFilters = {}
 ): Lineup[] {
   const lineups: Lineup[] = [];
@@ -2100,6 +2089,7 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
         totalScore: 0,
         game: realMatch?.game,
         so5ScoreId: realMatch?.so5ScoreId,
+        isRealData: !!realMatch,
         isDNP: true,
         isStarter: false,
         isSub: false,
@@ -2235,6 +2225,7 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
         totalScore,
         game: realMatch?.game,
         so5ScoreId: realMatch?.so5ScoreId,
+        isRealData: true,
         isDNP: false,
         isStarter,
         isSub,
@@ -2451,6 +2442,7 @@ export function compute40MatchPerformances(card: SorareCard): MatchPerformanceDe
       matchIndex,
       matchLabel: idx === 0 ? 'M1' : `Match M${matchIndex}`,
       totalScore,
+      isRealData: false,
       isDNP: false,
       isStarter,
       isSub,

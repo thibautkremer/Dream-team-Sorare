@@ -427,7 +427,7 @@ app.get('/api/match-odds/auto-sync-status', (req, res) => {
   });
 });
 
-app.post('/api/match-odds/sync-all-daily', async (req, res) => {
+app.post('/api/match-odds/sync-all-daily', requireAppToken, async (req, res) => {
   const result = await syncAllMatchesDaily();
   res.json({
     ...result,
@@ -458,7 +458,7 @@ app.post('/api/admin/logs/clear', requireAppToken, (req, res) => {
 });
 
 // Client and System Logs / Alerts Ingestion
-app.post('/api/admin/logs/event', express.json(), (req, res) => {
+app.post('/api/admin/logs/event', express.json(), requireAppToken, (req, res) => {
   const {
     description,
     service = 'Application Error',
@@ -493,7 +493,7 @@ app.post('/api/admin/logs/event', express.json(), (req, res) => {
 });
 
 // Legacy Client Logs Ingestion
-app.post('/api/admin/logs/client', express.json(), (req, res) => {
+app.post('/api/admin/logs/client', express.json(), requireAppToken, (req, res) => {
   const { message, error } = req.body;
   addApiLog({
     description: `UI Client Error: ${message}`,
@@ -546,7 +546,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
 
     // Live fetch exact 40 scores from Sorare GraphQL using anyPlayer allSo5Scores
     try {
-      const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+      const customApiKey = (req.headers['x-sorare-api-key'] as string) || (req.body?.apiKey as string) || process.env.SORARE_API_KEY || '';
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         'User-Agent': 'TeamSorare-LiveScout/2.0',
@@ -1101,7 +1101,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
 // Sorare Direct Live Scoring API Endpoint
 app.get('/api/sorare/live-scoring', async (req, res) => {
   const rawUsername = (req.query.username as string) || 'thib-8';
-  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const customApiKey = (req.headers['x-sorare-api-key'] as string) || (req.body?.apiKey as string) || process.env.SORARE_API_KEY || '';
   const slug = cleanSlug(rawUsername);
   const startTime = Date.now();
 
@@ -1802,7 +1802,7 @@ app.post('/api/sorare/live-scoring', async (req, res) => {
 // Fetch User Submitted SO5 Lineups from Sorare or Cache
 app.get('/api/sorare/user-lineups', async (req, res) => {
   const rawUsername = (req.query.username as string) || 'thib-8';
-  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const customApiKey = (req.headers['x-sorare-api-key'] as string) || (req.body?.apiKey as string) || process.env.SORARE_API_KEY || '';
   const slug = cleanSlug(rawUsername);
   const startTime = Date.now();
 
@@ -2108,26 +2108,22 @@ app.post('/api/lineups/starting-xi-check', async (req, res) => {
   }
 });
 
-// Helper for cleaning Sorare username slugs
-app.get('/api/admin/debug-raya', requireAppToken, (req, res) => {
-  const cards = Array.from(userCardsCache.values()).flatMap(c => c.cards);
-  const raya = cards.find(c => c.displayName?.toLowerCase().includes('david raya') || c.slug === 'david-raya');
-  if (raya) {
-    return res.json({
-      success: true,
-      displayName: raya.displayName,
-      slug: raya.slug,
-      status: raya.status,
-      upcomingFixture: raya.upcomingFixture,
-      recentMatchesLength: raya.scores?.recentMatches?.length,
-      allCompetitions: Array.from(new Set(raya.scores?.recentMatches?.map(m => m.competitionName))),
-      precomputedL5: raya.scores?.l5,
-      precomputedL15: raya.scores?.l15,
-      precomputedL40: raya.scores?.l40,
-      recentMatches: raya.scores?.recentMatches
-    });
-  }
-  return res.json({ success: false, message: 'Raya not found in server cache' });
+// Starting XI official confirmed lineups endpoint (interrogated by frontend polling)
+app.get('/api/sports/starting-xi', (req, res) => {
+  // Collect confirmed starting slugs from active lineups and cached confirmed players
+  const allCards = Array.from(userCardsCache.values()).flatMap(c => c.cards || []);
+  const confirmedSlugs = allCards
+    .filter(c => c.status === 'STARTER' && (c.starterConfidence || 0) >= 95)
+    .map(c => c.playerSlug || c.slug)
+    .filter(Boolean);
+
+  const uniqueConfirmed = Array.from(new Set(confirmedSlugs));
+  res.json({
+    success: true,
+    confirmedSlugs: uniqueConfirmed,
+    source: 'sorare_live_lineups',
+    timestamp: new Date().toISOString(),
+  });
 });
 
 function cleanSlug(input: string): string {
@@ -2143,7 +2139,7 @@ function cleanSlug(input: string): string {
 
 
 // Targeted endpoint to get detailed stats for a single SO5 Score
-app.post('/api/sorare/player-stats', async (req, res) => {
+app.post('/api/sorare/player-stats', requireAppToken, async (req, res) => {
   const customApiKey = (req.body.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
   const { so5ScoreId } = req.body;
   if (!so5ScoreId) {
@@ -3525,7 +3521,7 @@ Réponds UNIQUEMENT par un JSON valide respectant cette structure exacte :
               awayXG: Math.round((Number(found?.expectedGoals?.awayXG) || 1.10) * 100) / 100,
             },
             difficultyRatings: (() => {
-              let homeFDR = Number(found?.difficultyRatings?.homeFDR) || (hwProb >= 62 ? 1 : hwProb >= 48 ? 2 : hwProb <= 20 ? 5 : hwProb <= 34 ? 4 : 3);
+              let homeFDR = Number(found?.difficultyRatings?.homeFDR) || (hwProb >= 60 ? 1 : hwProb >= 54 ? 2 : hwProb <= 25 ? 5 : hwProb <= 38 ? 4 : 3);
               if (homeFDR < 1) homeFDR = 1;
               if (homeFDR > 5) homeFDR = 5;
               return {
@@ -3890,10 +3886,10 @@ function generateSymmetricMatchOdds(homeTeam: string, awayTeam: string): RealMat
   const awayCS = Math.min(75, Math.max(6, Math.round(Math.exp(-homeXG) * 100)));
 
   let homeFDR = 3;
-  if (homeWinPct >= 62) homeFDR = 1;
-  else if (homeWinPct >= 48) homeFDR = 2;
-  else if (homeWinPct <= 20) homeFDR = 5;
-  else if (homeWinPct <= 34) homeFDR = 4;
+  if (homeWinPct >= 60) homeFDR = 1;
+  else if (homeWinPct >= 54) homeFDR = 2;
+  else if (homeWinPct <= 25) homeFDR = 5;
+  else if (homeWinPct <= 38) homeFDR = 4;
   const awayFDR = 6 - homeFDR;
 
   const entry: RealMatchOddsEntry = {
@@ -3987,7 +3983,7 @@ function getResolvedMatchOdds(clubName: string, opponentName: string, isHome: bo
       const hwProb = Math.round((1 / hw / ((1/hw) + (1/dr) + (1/aw))) * 100);
       const awProb = Math.round((1 / aw / ((1/hw) + (1/dr) + (1/aw))) * 100);
       const drProb = 100 - hwProb - awProb;
-        const homeFDR = hwProb >= 62 ? 1 : hwProb >= 48 ? 2 : hwProb <= 20 ? 5 : hwProb <= 34 ? 4 : 3;
+        const homeFDR = hwProb >= 60 ? 1 : hwProb >= 54 ? 2 : hwProb <= 25 ? 5 : hwProb <= 38 ? 4 : 3;
         const awayFDR = 6 - homeFDR;
         entry = {
           matchKey: makeMatchKey(homeTeam, awayTeam),
@@ -4104,7 +4100,7 @@ function getResolvedMatchOdds(clubName: string, opponentName: string, isHome: bo
 // 2. Sorare GraphQL API Cards Fetcher / Sync
 app.get('/api/sorare/user-cards', async (req, res) => {
   const rawUsername = (req.query.username as string) || 'Thib 8';
-  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const customApiKey = (req.headers['x-sorare-api-key'] as string) || (req.body?.apiKey as string) || process.env.SORARE_API_KEY || '';
   const forceRefresh = req.query.forceRefresh === 'true';
   const slug = cleanSlug(rawUsername);
   
@@ -4277,6 +4273,11 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                   name
                   slug
                   pictureUrl
+                  upcomingGames(first: 1) {
+                    date
+                    homeTeam { name }
+                    awayTeam { name }
+                  }
                 }
                 ... on Player {
                   playingStatus
@@ -4429,7 +4430,9 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           let isHome = pgsIdx % 2 === 0;
           let opponent = `Adversaire J-${pgsIdx + 1}`;
           if (game) {
-            isHome = game.homeTeam?.name === clubName;
+            const rawHomeName = game.homeTeam?.name || '';
+            isHome = normalizeClubName(rawHomeName) === normalizeClubName(clubName) ||
+              (rawHomeName && clubName && (rawHomeName.toLowerCase().includes(clubName.toLowerCase()) || clubName.toLowerCase().includes(rawHomeName.toLowerCase())));
             opponent = isHome ? (game.awayTeam?.name || opponent) : (game.homeTeam?.name || opponent);
           }
 
@@ -4665,7 +4668,9 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         let fixture = getClubUpcomingFixture(clubName, posCode as any, l5);
         if (player?.activeClub?.upcomingGames?.[0]) {
           const game = player.activeClub.upcomingGames[0];
-          const isHome = game.homeTeam?.name === clubName;
+          const rawHomeName = game.homeTeam?.name || '';
+          const isHome = normalizeClubName(rawHomeName) === normalizeClubName(clubName) ||
+            (rawHomeName && clubName && (rawHomeName.toLowerCase().includes(clubName.toLowerCase()) || clubName.toLowerCase().includes(rawHomeName.toLowerCase())));
           const opponentName = isHome ? (game.awayTeam?.name || 'Adversaire') : (game.homeTeam?.name || 'Adversaire');
           
           // Résolution haute-fidélité via le Real Odds Store / Gemini Search Engine
@@ -4811,7 +4816,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
             decisiveRate: l5 > 55 ? 45 : l5 > 45 ? 25 : 10,
           },
           upcomingFixture: fixture,
-          tacticalNotes: `Match GW 48 : ${clubName} vs ${fixture.opponent} (${fixture.isHome ? 'Dom.' : 'Ext.'}, ${fixture.kickoffFormatted}). Moyenne L5: ${l5} pts (${l5Played}/5 joués).`,
+          tacticalNotes: `Match GW ${getCurrentGameWeekNumber()} : ${clubName} vs ${fixture.opponent} (${fixture.isHome ? 'Dom.' : 'Ext.'}, ${fixture.kickoffFormatted}). Moyenne L5: ${l5} pts (${l5Played}/5 joués).`,
           updatedAt: new Date().toISOString(),
         };
       });
@@ -5665,13 +5670,7 @@ async function startServer() {
     });
   }
 
-  app.get('/api/sports/starting-xi', (req, res) => {
-  res.json({
-    success: true,
-    confirmedSlugs: [], 
-    source: 'opta_mock'
-  });
-});
+
 
 app.get('/oauth/callback', async (req, res) => {
   const code = req.query.code;
@@ -5694,7 +5693,7 @@ app.get('/oauth/callback', async (req, res) => {
   `);
 });
 
-app.post('/api/sorare/export-lineup', async (req, res) => {
+app.post('/api/sorare/export-lineup', requireAppToken, async (req, res) => {
   const { token, lineup } = req.body;
   if (!token) return res.status(401).json({ success: false, error: 'OAuth token missing' });
 
@@ -5719,7 +5718,7 @@ app.get('/api/sorare/gameweek', async (req, res) => {
   // true live game week), and falls back to the locally-computed GAME_WEEK_ANCHOR-based number
   // (see fixturesData.ts) if the query fails or the app has no Sorare API key configured — but it
   // never silently freezes on a stale literal again.
-  const customApiKey = (req.query.apiKey as string) || (req.headers['x-sorare-api-key'] as string) || process.env.SORARE_API_KEY || '';
+  const customApiKey = (req.headers['x-sorare-api-key'] as string) || (req.body?.apiKey as string) || process.env.SORARE_API_KEY || '';
   try {
     if (customApiKey) {
       const headers: Record<string, string> = { 'Content-Type': 'application/json', APIKEY: customApiKey };

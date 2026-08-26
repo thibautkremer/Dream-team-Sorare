@@ -2432,6 +2432,44 @@ export function getClubUpcomingFixture(clubName: string, positionCode: 'GK' | 'D
   const norm = normalizeClubName(clubName);
   const def = FIXTURES_CATALOG[norm] || FIXTURES_CATALOG['Club Non Renseigné'];
 
+  const currentGW = getCurrentGameWeekNumber();
+  const weeksDiff = currentGW - GAME_WEEK_ANCHOR.number;
+  
+  let newKickoffDate = def.kickoffDate;
+  let newFormatted = def.kickoffFormatted;
+  let newRelative = def.kickoffRelative;
+
+  if (weeksDiff > 0 && def.kickoffDate) {
+    const d = new Date(def.kickoffDate);
+    if (!isNaN(d.getTime())) {
+      d.setDate(d.getDate() + (weeksDiff * GAME_WEEK_ANCHOR.lengthDays));
+      newKickoffDate = d.toISOString();
+      const formatter = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Europe/Paris',
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      // Try to re-create something like 'Sam. 22 août à 21:00'
+      const parts = formatter.formatToParts(d);
+      const wd = parts.find(p => p.type === 'weekday')?.value || '';
+      const day = parts.find(p => p.type === 'day')?.value || '';
+      const mo = parts.find(p => p.type === 'month')?.value || '';
+      const hr = parts.find(p => p.type === 'hour')?.value || '';
+      const min = parts.find(p => p.type === 'minute')?.value || '';
+      newFormatted = `${wd.charAt(0).toUpperCase() + wd.slice(1)}. ${day} ${mo} à ${hr}:${min}`;
+      
+      const now = new Date();
+      const daysTo = Math.ceil((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      if (daysTo === 0) newRelative = 'Aujourd\'hui';
+      else if (daysTo === 1) newRelative = 'Demain';
+      else if (daysTo > 1) newRelative = `Dans ${daysTo} jours`;
+      else newRelative = 'Terminé';
+    }
+  }
+
   const projScore = Math.max(20, Math.min(95, Math.round((
     (l5Score > 0 ? l5Score : 45) +
     (def.isHome ? 3.5 : -2.5) +
@@ -2448,14 +2486,14 @@ export function getClubUpcomingFixture(clubName: string, positionCode: 'GK' | 'D
   };
 
   return {
-    gameWeek: getCurrentGameWeekNumber(),
+    gameWeek: currentGW,
     opponent: def.opponent,
     isHome: def.isHome,
     difficultyRating: def.difficultyRating,
-    kickoffDate: def.kickoffDate,
-    matchDate: def.kickoffDate,
-    kickoffFormatted: def.kickoffFormatted,
-    kickoffRelative: def.kickoffRelative,
+    kickoffDate: newKickoffDate,
+    matchDate: newKickoffDate,
+    kickoffFormatted: newFormatted,
+    kickoffRelative: newRelative,
     hasUpcomingMatch: def.hasUpcomingMatch,
     competitionName: def.competitionName,
     projectedScore: projScore,

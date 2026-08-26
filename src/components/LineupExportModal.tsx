@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { X, Check, Copy, ExternalLink, Send, Shield, Crown, Sparkles, CheckCircle2, FileCode, Share2 } from 'lucide-react';
 import { Lineup } from '../types';
+import { StorageService } from '../utils/storage';
+import { getCurrentGameWeekNumber } from '../data/fixturesData';
 
 interface LineupExportModalProps {
   lineup: Lineup;
@@ -38,7 +40,7 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
 }`,
     variables: {
       input: {
-        gameWeek: gameWeek || 48,
+        gameWeek: gameWeek || getCurrentGameWeekNumber(),
         formation: "STANDARD_5",
         captainSlug: captainCard?.slug || null,
         captainCardId: captainCard?.id || null,
@@ -54,7 +56,7 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
   };
 
   // 2. Human-readable text format for sharing on Discord / X
-  const shareableText = `🏆 *Ma Composition SO5 Sorare - GW ${gameWeek || 48}*
+  const shareableText = `🏆 *Ma Composition SO5 Sorare - GW ${gameWeek || getCurrentGameWeekNumber()}*
 ⭐ *Stratégie :* ${lineup.name}
 📊 *Score Projeté Total :* ${lineup.projectedTotalWithCaptain} pts (avec Bonus Cap +20%)
 
@@ -98,9 +100,13 @@ export const LineupExportModal: React.FC<LineupExportModalProps> = ({
         const token = event.data.token;
         setIsSubmitting(true);
         try {
+          const appToken = StorageService.getAppToken();
           const res = await fetch('/api/sorare/export-lineup', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              ...(appToken ? { 'x-app-token': appToken } : {})
+            },
             body: JSON.stringify({ token, lineup })
           });
           if (res.ok) {

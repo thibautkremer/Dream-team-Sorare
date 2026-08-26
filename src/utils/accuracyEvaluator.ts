@@ -2,20 +2,19 @@
 // Computes backtesting metrics by GameWeek (RAW scores, STRICTLY WITHOUT CARD BONUSES)
 import { SorareCard, GameWeekAccuracyStats, PlayerEvaluationRecord, PositionCode } from '../types';
 import { calculatePlayerProjectedScore } from './optimizer';
-import { FIXTURES_CATALOG, normalizeClubName, getCurrentGameWeekNumber } from '../data/fixturesData';
+import { FIXTURES_CATALOG, normalizeClubName, getCurrentGameWeekNumber, GAME_WEEK_ANCHOR } from '../data/fixturesData';
 
 /**
  * Derives a relative GameWeek number from match index or match date
  */
-function resolveMatchGameWeek(matchIndex: number, matchDateStr?: string, currentGW: number = 48): number {
+function resolveMatchGameWeek(matchIndex: number, matchDateStr?: string, currentGW: number = getCurrentGameWeekNumber()): number {
   if (matchDateStr) {
     try {
       const matchDate = new Date(matchDateStr);
       if (!isNaN(matchDate.getTime())) {
-        // Approximate 5-day gameweeks from anchor
-        const anchorMs = new Date('2026-08-21T00:00:00.000Z').getTime();
+        const anchorMs = new Date(GAME_WEEK_ANCHOR.startDate).getTime();
         const diffDays = (matchDate.getTime() - anchorMs) / (1000 * 60 * 60 * 24);
-        const calculatedGW = 48 + Math.floor(diffDays / 5);
+        const calculatedGW = GAME_WEEK_ANCHOR.number + Math.floor(diffDays / GAME_WEEK_ANCHOR.lengthDays);
         if (calculatedGW < currentGW && calculatedGW >= 30) {
           return calculatedGW;
         }

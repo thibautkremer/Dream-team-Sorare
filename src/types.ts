@@ -343,6 +343,7 @@ export interface MatchPerformanceDetail {
   isHome: boolean;
   result: string;
   so5ScoreId?: string;
+  isRealData?: boolean; // True if from real Sorare API match data, false if synthesized
   
   // Green Decisive Score Part (Vert)
   decisiveScore: number; // Positive decisive level score (60, 70, 80, 90, 100) or 0 if no decisive action

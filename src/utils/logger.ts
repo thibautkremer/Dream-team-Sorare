@@ -1,5 +1,6 @@
 // Centralized Application Logger & Alert Ingestion
 import { AppLogEntry, NonStarterAlert } from '../types';
+import { StorageService } from './storage';
 
 export class AppLogger {
   private static isInitialized = false;
@@ -161,9 +162,15 @@ export class AppLogger {
   private static async sendToServer(payload: Partial<AppLogEntry>): Promise<void> {
     try {
       if (typeof window === 'undefined') return;
+      
+      const appToken = StorageService.getAppToken();
+      
       await fetch('/api/admin/logs/event', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(appToken ? { 'x-app-token': appToken } : {})
+        },
         body: JSON.stringify(payload),
       });
     } catch {

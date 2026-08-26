@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   USERNAME: 'team_sorare_username_v5',
   USER_META: 'team_sorare_meta_v5',
   API_KEY: 'team_sorare_api_key_v5',
+  APP_TOKEN: 'team_sorare_app_token_v1',
   SAVED_LINEUPS: 'team_sorare_saved_lineups_v5',
   ACTIVE_STRATEGY: 'team_sorare_strategy_v5',
   FAVORITES: 'team_sorare_favorites_v5',
@@ -93,10 +94,17 @@ async function idbSet<T>(key: string, value: T): Promise<boolean> {
   }
 }
 
+
+const safeLS = {
+  getItem: (k: string) => { try { return typeof window !== 'undefined' ? window.localStorage.getItem(k) : null; } catch(e) { return null; } },
+  setItem: (k: string, v: string) => { try { if (typeof window !== 'undefined') window.localStorage.setItem(k, v); } catch(e) {} },
+  removeItem: (k: string) => { try { if (typeof window !== 'undefined') window.localStorage.removeItem(k); } catch(e) {} }
+};
+
 export class StorageService {
   /**
    * Synchronous getCards: returns memory cache immediately if available,
-   * or attempts to read from localStorage.
+   * or attempts to read from safeLS.
    */
   static getCards(): SorareCard[] {
     if (memoryCardsCache && memoryCardsCache.length > 0) {
@@ -105,7 +113,7 @@ export class StorageService {
     
     // Attempt immediate synchronous read from localStorage (light data)
     try {
-      const lsData = localStorage.getItem(STORAGE_KEYS.CARDS);
+      const lsData = safeLS.getItem(STORAGE_KEYS.CARDS);
       if (lsData) {
         const parsed = JSON.parse(lsData);
         if (Array.isArray(parsed) && parsed.length > 0) {
@@ -153,7 +161,7 @@ export class StorageService {
     idbSet('gallery_cards', cards).catch(() => {});
 
     try {
-      localStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+      safeLS.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
       
       // Save light version to localStorage to avoid QuotaExceededError (5MB)
       // We only keep essential properties for initial UI render
@@ -182,7 +190,7 @@ export class StorageService {
         upcomingFixture: c.upcomingFixture
       })).slice(0, 300); // Limit to top 300 cards to stay well within localStorage limits
       
-      localStorage.setItem(STORAGE_KEYS.CARDS, JSON.stringify(lightCards));
+      safeLS.setItem(STORAGE_KEYS.CARDS, JSON.stringify(lightCards));
     } catch (e) {
       console.warn('Could not save light cards to localStorage', e);
     }
@@ -192,24 +200,24 @@ export class StorageService {
     memoryCardsCache = [];
     idbSet('gallery_cards', []).catch(() => {});
     try {
-      localStorage.removeItem(STORAGE_KEYS.CARDS);
-      localStorage.removeItem(STORAGE_KEYS.LAST_SYNC);
+      safeLS.removeItem(STORAGE_KEYS.CARDS);
+      safeLS.removeItem(STORAGE_KEYS.LAST_SYNC);
     } catch (e) {
       console.error('Failed to clear cards', e);
     }
   }
 
   static getUsername(): string {
-    return localStorage.getItem(STORAGE_KEYS.USERNAME) || 'Thib 8';
+    return safeLS.getItem(STORAGE_KEYS.USERNAME) || 'Thib 8';
   }
 
   static saveUsername(username: string): void {
-    localStorage.setItem(STORAGE_KEYS.USERNAME, username);
+    safeLS.setItem(STORAGE_KEYS.USERNAME, username);
   }
 
   static getUserMeta(): SorareUserMeta {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.USER_META);
+      const data = safeLS.getItem(STORAGE_KEYS.USER_META);
       if (data) return JSON.parse(data);
     } catch (e) {}
     return {
@@ -222,21 +230,29 @@ export class StorageService {
 
   static saveUserMeta(meta: SorareUserMeta): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.USER_META, JSON.stringify(meta));
+      safeLS.setItem(STORAGE_KEYS.USER_META, JSON.stringify(meta));
     } catch (e) {}
   }
 
   static getApiKey(): string {
-    return localStorage.getItem(STORAGE_KEYS.API_KEY) || '';
+    return safeLS.getItem(STORAGE_KEYS.API_KEY) || '';
   }
 
   static saveApiKey(apiKey: string): void {
-    localStorage.setItem(STORAGE_KEYS.API_KEY, apiKey);
+    safeLS.setItem(STORAGE_KEYS.API_KEY, apiKey);
+  }
+
+  static getAppToken(): string {
+    return safeLS.getItem(STORAGE_KEYS.APP_TOKEN) || '';
+  }
+
+  static saveAppToken(token: string): void {
+    safeLS.setItem(STORAGE_KEYS.APP_TOKEN, token);
   }
 
   static getSavedLineups(): Lineup[] {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.SAVED_LINEUPS);
+      const data = safeLS.getItem(STORAGE_KEYS.SAVED_LINEUPS);
       if (data) {
         return JSON.parse(data);
       }
@@ -255,7 +271,7 @@ export class StorageService {
       } else {
         current.unshift(lineup);
       }
-      localStorage.setItem(STORAGE_KEYS.SAVED_LINEUPS, JSON.stringify(current));
+      safeLS.setItem(STORAGE_KEYS.SAVED_LINEUPS, JSON.stringify(current));
     } catch (e) {
       console.error('Error saving lineup', e);
     }
@@ -264,24 +280,24 @@ export class StorageService {
   static deleteLineup(id: string): void {
     try {
       const current = this.getSavedLineups().filter(l => l.id !== id);
-      localStorage.setItem(STORAGE_KEYS.SAVED_LINEUPS, JSON.stringify(current));
+      safeLS.setItem(STORAGE_KEYS.SAVED_LINEUPS, JSON.stringify(current));
     } catch (e) {
       console.error('Error deleting lineup', e);
     }
   }
 
   static getLastSync(): string | null {
-    return localStorage.getItem(STORAGE_KEYS.LAST_SYNC);
+    return safeLS.getItem(STORAGE_KEYS.LAST_SYNC);
   }
 
   static clearAndReset(): void {
     try {
       memoryCardsCache = [];
       idbSet('gallery_cards', []).catch(() => {});
-      localStorage.removeItem(STORAGE_KEYS.CARDS);
-      localStorage.removeItem(STORAGE_KEYS.SAVED_LINEUPS);
-      localStorage.removeItem(STORAGE_KEYS.LAST_SYNC);
-      localStorage.removeItem(STORAGE_KEYS.USER_META);
+      safeLS.removeItem(STORAGE_KEYS.CARDS);
+      safeLS.removeItem(STORAGE_KEYS.SAVED_LINEUPS);
+      safeLS.removeItem(STORAGE_KEYS.LAST_SYNC);
+      safeLS.removeItem(STORAGE_KEYS.USER_META);
     } catch (e) {
       console.error('Error resetting storage', e);
     }

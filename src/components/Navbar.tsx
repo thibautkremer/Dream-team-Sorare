@@ -43,6 +43,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [tempUsername, setTempUsername] = useState(username);
   const [apiKeyInput, setApiKeyInput] = useState(StorageService.getApiKey());
+  const [appTokenInput, setAppTokenInput] = useState(StorageService.getAppToken());
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const userMeta: SorareUserMeta = StorageService.getUserMeta();
 
@@ -51,6 +52,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     if (tempUsername.trim()) {
       setUsername(tempUsername.trim());
       StorageService.saveApiKey(apiKeyInput.trim());
+      StorageService.saveAppToken(appTokenInput.trim());
       setIsAccountModalOpen(false);
       onSync(tempUsername.trim());
     }
@@ -58,6 +60,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const handleSaveApiKeyOnly = () => {
     StorageService.saveApiKey(apiKeyInput.trim());
+    StorageService.saveAppToken(appTokenInput.trim());
     setApiKeySaved(true);
     setTimeout(() => setApiKeySaved(false), 2500);
   };
@@ -366,11 +369,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <label className="flex items-center justify-between text-xs font-bold text-slate-300">
                   <span className="flex items-center gap-1.5">
                     <Key className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Clé API Sorare (Optionnel)</span>
+                    <span>Clés d'Accès (API / App)</span>
                   </span>
-                  <span className="text-[10px] font-normal text-slate-500">Pour lever les limites de requêtes</span>
+                  <span className="text-[10px] font-normal text-slate-500">Avancé</span>
                 </label>
-                <div className="mt-1.5 flex gap-2">
+                <div className="mt-1.5 flex flex-col gap-2">
                   <input
                     type="password"
                     value={apiKeyInput}
@@ -378,13 +381,22 @@ export const Navbar: React.FC<NavbarProps> = ({
                     placeholder="Optionnel : Clé API développeur Sorare"
                     className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
                   />
-                  <button
-                    type="button"
-                    onClick={handleSaveApiKeyOnly}
-                    className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700"
-                  >
-                    {apiKeySaved ? <Check className="h-4 w-4 text-emerald-400" /> : 'Sauvegarder'}
-                  </button>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={appTokenInput}
+                      onChange={(e) => setAppTokenInput(e.target.value)}
+                      placeholder="Optionnel : Token d'accès app"
+                      className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-emerald-400 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveApiKeyOnly}
+                      className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                    >
+                      {apiKeySaved ? <Check className="h-4 w-4 text-emerald-400" /> : 'Sauvegarder'}
+                    </button>
+                  </div>
                 </div>
               </div>
 

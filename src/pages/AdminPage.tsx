@@ -89,7 +89,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ cards: propCards, gameWeek
   const fetchLogs = async () => {
     setIsLoadingLogs(true);
     try {
-      const res = await fetch('/api/admin/logs');
+      const appToken = StorageService.getAppToken();
+      const res = await fetch('/api/admin/logs', {
+        headers: appToken ? { 'x-app-token': appToken } : {}
+      });
       if (res.ok) {
         const data = await res.json();
         setLogs(Array.isArray(data.logs) ? data.logs : []);
@@ -105,7 +108,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({ cards: propCards, gameWeek
     if (!window.confirm('Voulez-vous vraiment effacer tous les journaux système et alertes ?')) return;
     setIsClearing(true);
     try {
-      const res = await fetch('/api/admin/logs/clear', { method: 'POST' });
+      const appToken = StorageService.getAppToken();
+      const res = await fetch('/api/admin/logs/clear', { 
+        method: 'POST',
+        headers: appToken ? { 'x-app-token': appToken } : {}
+      });
       if (res.ok) {
         setLogs([]);
         setSelectedLog(null);

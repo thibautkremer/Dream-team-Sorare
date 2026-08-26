@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Send, Bot, User, CornerDownLeft, RefreshCw, Lightbulb, Zap, ShieldAlert, Cpu } from 'lucide-react';
 import { SorareCard, ChatMessage } from '../types';
+import { StorageService } from '../utils/storage';
 
 interface AICoachChatProps {
   cards: SorareCard[];
@@ -8,8 +9,20 @@ interface AICoachChatProps {
 }
 
 export const AICoachChat: React.FC<AICoachChatProps> = ({ cards, gameWeekNumber }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    // Generate dynamic suggestions based on actual gallery
+    const fwd = cards.filter(c => c.positionCode === 'FWD').sort((a,b) => b.scores.l5 - a.scores.l5).slice(0, 3).map(c => c.displayName);
+    const mid = cards.filter(c => c.positionCode === 'MID').sort((a,b) => b.scores.l5 - a.scores.l5).slice(0, 3).map(c => c.displayName);
+    const gk = cards.filter(c => c.positionCode === 'GK').sort((a,b) => b.scores.l5 - a.scores.l5).slice(0, 2).map(c => c.displayName);
+    
+    const suggestedActions = [
+      fwd.length >= 2 ? `Qui nommer Capitaine (+20%) parmi ${fwd.join(' et ')} ?` : 'Qui nommer Capitaine cette semaine ?',
+      gk.length >= 2 ? `${gk[0]} vs ${gk[1]} au poste de Gardien ?` : 'Quel gardien titulariser ?',
+      mid.length >= 2 ? `Quel est le meilleur Extra entre ${mid.join(' et ')} ?` : 'Qui placer en Extra ?',
+      'Détecter les joueurs avec risque de DNP (0 pt) dans ma galerie.',
+    ];
+
+    return [{
       id: 'welcome-msg',
       role: 'assistant',
       content: `Salut Thibaut (Thib 8) ! Je suis ton **Coach Tactique IA Sorare**, connecté en direct à ta galerie officielle de cartes (${cards.length} cartes synchronisées). 
@@ -18,14 +31,9 @@ J'ai analysé tes joueurs clés (L5, L15, L40), les statuts de titulaires vérif
 
 Comment puis-je t'aider à optimiser ta composition gratuite SO5 ?`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      suggestedActions: [
-        'Qui nommer Capitaine (+20%) parmi Cristian Espinoza, David Costa et Ariel Lassiter ?',
-        'Nicholas Hansen vs Thibaut Courtois / Jonas Urbig au poste de Gardien ?',
-        'Quel est le meilleur Extra entre Lukas MacNaughton, Renato Veiga et Felix Nmecha ?',
-        'Détecter les joueurs avec risque de DNP (0 pt) dans ma galerie.',
-      ],
-    },
-  ]);
+      suggestedActions,
+    }];
+  });
 
   const [inputPrompt, setInputPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -56,9 +64,13 @@ Comment puis-je t'aider à optimiser ta composition gratuite SO5 ?`,
     setIsLoading(true);
 
     try {
+      const appToken = StorageService.getAppToken();
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(appToken ? { 'x-app-token': appToken } : {})
+        },
         body: JSON.stringify({
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
           gallery: cards,

@@ -1,19 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, Sparkles, Shield, Trophy, Activity, Target, AlertTriangle, CheckCircle2, TrendingUp, Calendar, Zap, ChevronDown, BarChart3, Percent, HelpCircle, ShieldAlert, Award, UserX, CheckCircle, UserCheck, Clock, CornerDownRight, Send, ShieldCheck, Eye, Users, Star, Cpu } from 'lucide-react';
-import { SorareCard, MatchPerformanceDetail, AiScoutReport } from '../types';
+import { SorareCard, MatchPerformanceDetail, AiScoutReport, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, compute40MatchPerformances } from '../utils/optimizer';
 import { SorareScoreDetailModal } from './SorareScoreDetailModal';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars } from '../utils/sorareSlug';
 import { ProjectionBreakdownModal } from './ProjectionBreakdownModal';
+import { getCurrentGameWeekNumber } from '../data/fixturesData';
+import { StorageService } from '../utils/storage';
 
 interface PlayerScoutModalProps {
   card: SorareCard | null;
   onClose: () => void;
   onAssignToSlot?: (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   allCards?: SorareCard[];
+  strategy?: StrategyType;
 }
 
-export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initialCard, onClose, onAssignToSlot, allCards = [] }) => {
+export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initialCard, onClose, onAssignToSlot, allCards = [], strategy = 'BALANCED' }) => {
   const [aiReport, setAiReport] = useState<any>(null);
   const [isLoadingAI, setIsLoadingAI] = useState(false);
   const [liveCard, setLiveCard] = useState<SorareCard | null>(null);
@@ -34,7 +37,6 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
 
   const fetchLivePlayerDetails = async (playerCard: SorareCard) => {
     try {
-      const StorageService = (await import('../utils/storage')).StorageService;
       const apiKey = StorageService.getApiKey();
       const res = await fetch(`/api/sorare/player-live-detail?slug=${encodeURIComponent(playerCard.slug || playerCard.id)}`, {
         headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
@@ -212,10 +214,14 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
   const fetchScoutReport = async (playerCard: SorareCard) => {
     setIsLoadingAI(true);
     try {
+      const appToken = StorageService.getAppToken();
       const res = await fetch('/api/ai/scout-player', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player: playerCard, gameWeek: 48 }),
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(appToken ? { 'x-app-token': appToken } : {})
+        },
+        body: JSON.stringify({ player: playerCard, gameWeek: getCurrentGameWeekNumber() }),
       });
       if (res.ok) {
         const json = await res.json();
@@ -238,7 +244,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
       verdict: isStarter ? (playerCard.scores.l5 > 60 ? 'Aligner absolument' : 'Titulaire solide') : 'Risque de banc',
       confidenceRating: playerCard.starterConfidence,
       floorScore: Math.max(35, Math.round(playerCard.scores.l40 * 0.8)),
-      expectedScore: Math.round(calculatePlayerProjectedScore(playerCard, 'BALANCED', allCards).projectedScore),
+      expectedScore: Math.round(calculatePlayerProjectedScore(playerCard, strategy, allCards).projectedScore),
       ceilingScore: Math.min(100, Math.round(playerCard.scores.l5 * 1.35)),
       matchupAnalysis: `Match face à ${playerCard.upcomingFixture?.opponent || 'Adversaire'}. FDR : ${playerCard.upcomingFixture?.difficultyRating || 2}/5.`,
       starterSecurity: isStarter ? 'Titulaire indiscutable dans le XI de départ.' : 'Temps de jeu incertain.',
@@ -484,7 +490,7 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
 
   const posBadge = formatPositionBadge(card.positionCode);
   const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
-  const proj = calculatePlayerProjectedScore(card, 'BALANCED', allCards);
+  const proj = calculatePlayerProjectedScore(card, strategy, allCards);
   const winProb = getPlayerWinProbability(card.upcomingFixture);
   const formattedDate = formatKickoffDate(card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate);
 
@@ -986,6 +992,16 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
                   <span className="text-[10px] text-slate-500 font-mono">
                     • {selectedMatch.result}
                   </span>
+                  {selectedMatch.isRealData ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-400 border border-emerald-500/20" title="Score et statistiques détaillées issus du flux officiel Sorare">
+                      <CheckCircle2 className="h-2.5 w-2.5" />
+                      <span>Match officiel</span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-800/80 px-2 py-0.5 text-[9px] font-semibold text-slate-400 border border-slate-700" title="Score reconstitué à partir des historiques récents">
+                      <span>Historique modélisé</span>
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1.5">

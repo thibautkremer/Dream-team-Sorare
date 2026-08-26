@@ -3,6 +3,7 @@ import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle
 import { SorareCard, PositionCode, PlayingStatus, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
+import { StorageService } from '../utils/storage';
 
 interface GalleryViewProps {
   cards: SorareCard[];
@@ -369,20 +370,18 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <div className="flex gap-1">
                 <button
                   onClick={async () => {
-                    import('../utils/storage').then(async mod => {
                       try {
-                        const username = mod.StorageService.getUsername();
-                        const apiKey = mod.StorageService.getApiKey();
+                        const username = StorageService.getUsername();
+                        const apiKey = StorageService.getApiKey();
                         await fetch(`/api/sorare/user-cards?username=${encodeURIComponent(username)}&clearCache=true`, {
                           headers: apiKey ? { 'x-sorare-api-key': apiKey } : {}
                         }).catch(() => {});
-                        mod.StorageService.clearCards();
+                        StorageService.clearCards();
                         window.location.reload();
                       } catch (err) {
                         console.error('Failed to clear cache safely', err);
                         window.location.reload();
                       }
-                    });
                   }}
                   className="flex items-center gap-2 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-600/20 hover:bg-red-500 transition active:scale-95 whitespace-nowrap"
                 >
