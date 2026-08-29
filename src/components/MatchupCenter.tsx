@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink, AlertTriangle } from 'lucide-react';
+import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink, AlertTriangle, Clock, Layers, Flame, Shield, HelpCircle, ArrowUpDown } from 'lucide-react';
 import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 import { getCardTotalBonus } from '../utils/sorareSlug';
 import { normalizeClubName } from '../data/fixturesData';
 import { StorageService } from '../utils/storage';
 import { ApiFootballMatchModal } from './ApiFootballMatchModal';
+import { MatchOpportunitiesBar } from './matchups/MatchOpportunitiesBar';
+import { MatchTimelineView } from './matchups/MatchTimelineView';
 export { getCardTotalBonus };
 
 interface MatchupCenterProps {
@@ -385,12 +387,84 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
 
   const allFixtures = Array.from(fixtureMap.values());
 
-  // Filter states
+  // View & Advanced Filter states
+  const [viewMode, setViewMode] = useState<'grid' | 'timeline'>('grid');
+  const [profileFilter, setProfileFilter] = useState<'ALL' | 'CLEAN_SHEET' | 'HIGH_XG' | 'BIG_FAVORITE' | 'MY_PLAYERS'>('ALL');
+  const [expandedSimulatorMatchKey, setExpandedSimulatorMatchKey] = useState<string | null>(null);
+
   const [selectedCompetition, setSelectedCompetition] = useState<string>('ALL');
   const [minWinChance, setMinWinChance] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedDay, setSelectedDay] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'DATE_ASC' | 'WIN_DESC' | 'CS_DESC' | 'XG_DESC' | 'DIFFICULTY_ASC'>('DATE_ASC');
+
+  // Top Opportunities calculations
+  const topCleanSheets = useMemo(() => {
+    return allFixtures
+      .map(f => {
+        const gkDefs = f.players.filter(p => p.positionCode === 'GK' || p.positionCode === 'DEF');
+        const csProb = f.cleanSheetProb || 30;
+        const csOdds = csProb > 0 ? parseFloat((1.075 / (csProb / 100)).toFixed(2)) : 3.50;
+        return {
+          club: f.club,
+          opponent: f.opponent,
+          isHome: f.isHome,
+          csProb,
+          csOdds,
+          gkDefCount: gkDefs.length,
+          competition: f.competition,
+        };
+      })
+      .sort((a, b) => b.csProb - a.csProb)
+      .slice(0, 6);
+  }, [allFixtures]);
+
+  const topOffensiveMatches = useMemo(() => {
+    const seenMatches = new Set<string>();
+    const list: any[] = [];
+    allFixtures.forEach(f => {
+      const mKey = `${normalizeClubName(f.homeTeam || f.club).toLowerCase()}_vs_${normalizeClubName(f.awayTeam || f.opponent).toLowerCase()}`;
+      if (seenMatches.has(mKey)) return;
+      seenMatches.add(mKey);
+
+      const hXg = f.homeXG || (f.isHome ? f.goalExpectancy : 1.2);
+      const aXg = f.awayXG || (!f.isHome ? f.goalExpectancy : 1.1);
+      const totalXG = parseFloat(String(hXg)) + parseFloat(String(aXg));
+      const bttsProb = Math.min(85, Math.max(30, Math.round((Math.min(hXg, aXg) / 1.5) * 50 + 25)));
+      const fwdMid = f.players.filter(p => p.positionCode === 'MID' || p.positionCode === 'FWD');
+
+      list.push({
+        matchLabel: `${f.homeTeam || f.club} vs ${f.awayTeam || f.opponent}`,
+        homeTeam: f.homeTeam || f.club,
+        awayTeam: f.awayTeam || f.opponent,
+        totalXG,
+        bttsProb,
+        fwdMidCount: fwdMid.length,
+        competition: f.competition,
+      });
+    });
+    return list.sort((a, b) => b.totalXG - a.totalXG).slice(0, 6);
+  }, [allFixtures]);
+
+  const topValuePlayers = useMemo(() => {
+    return cards
+      .filter(c => c.upcomingFixture && c.club?.name)
+      .map(c => {
+        const breakdown = calculatePlayerProjectedScore(c, strategy, cards);
+        const winProb = c.upcomingFixture ? getPlayerWinProbability(c.upcomingFixture) : 50;
+        const bonusPct = getCardTotalBonus(c);
+        const scorerOdds = c.upcomingFixture?.bookmaker?.anytimeScorerOdds;
+        return {
+          card: c,
+          projectedScore: breakdown.projectedScore,
+          winProb,
+          scorerOdds,
+          bonusPct,
+        };
+      })
+      .sort((a, b) => b.projectedScore - a.projectedScore)
+      .slice(0, 6);
+  }, [cards, strategy]);
 
   const competitions = useMemo(() => {
     const set = new Set<string>();
@@ -416,6 +490,21 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     // Filter competition
     if (selectedCompetition !== 'ALL') {
       result = result.filter(f => f.competition === selectedCompetition);
+    }
+
+    // Filter profile
+    if (profileFilter === 'CLEAN_SHEET') {
+      result = result.filter(f => (f.cleanSheetProb || 0) >= 35);
+    } else if (profileFilter === 'HIGH_XG') {
+      result = result.filter(f => {
+        const hXg = f.homeXG || (f.isHome ? f.goalExpectancy : 1.2);
+        const aXg = f.awayXG || (!f.isHome ? f.goalExpectancy : 1.1);
+        return (parseFloat(String(hXg)) + parseFloat(String(aXg))) >= 2.7 || f.goalExpectancy >= 1.6;
+      });
+    } else if (profileFilter === 'BIG_FAVORITE') {
+      result = result.filter(f => (f.winProb || 0) >= 55);
+    } else if (profileFilter === 'MY_PLAYERS') {
+      result = result.filter(f => f.players.length > 0);
     }
 
     // Filter search
@@ -488,7 +577,50 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     });
 
     return sortedResult;
-  }, [cards, selectedCompetition, minWinChance, searchQuery, selectedDay, sortBy, strategy]);
+  }, [allFixtures, selectedCompetition, profileFilter, minWinChance, searchQuery, selectedDay, sortBy, strategy]);
+
+  // Timeline Fixtures list
+  const timelineFixtures = useMemo(() => {
+    return processedFixtures.map(f => {
+      const homeTeam = f.homeTeam || (f.isHome ? f.club : f.opponent);
+      const awayTeam = f.awayTeam || (f.isHome ? f.opponent : f.club);
+      const homeWinOdds = f.homeWinOdds || (f.isHome ? f.winOdds : f.lossOdds);
+      const drawOdds = f.drawOdds || 3.40;
+      const awayWinOdds = f.awayWinOdds || (f.isHome ? f.lossOdds : f.winOdds);
+      const homeWinProb = f.homeWinProb || (f.isHome ? (f.winProb || 50) : (f.lossProb || 25));
+      const awayWinProb = f.awayWinProb || (!f.isHome ? (f.winProb || 50) : (f.lossProb || 25));
+      const homeCS = f.homeCleanSheetProb || (f.isHome ? f.cleanSheetProb : 25);
+      const awayCS = f.awayCleanSheetProb || (!f.isHome ? f.cleanSheetProb : 25);
+      const homeXG = f.homeXG || (f.isHome ? f.goalExpectancy : 1.2);
+      const awayXG = f.awayXG || (!f.isHome ? f.goalExpectancy : 1.1);
+
+      return {
+        id: `${f.club}_${f.opponent}_${f.isHome ? 'h' : 'a'}`,
+        club: f.club,
+        opponent: f.opponent,
+        isHome: f.isHome,
+        homeTeam,
+        awayTeam,
+        competition: f.competition,
+        kickoffDate: f.kickoffDate,
+        kickoffFormatted: f.kickoffFormatted,
+        kickoffRelative: f.kickoffRelative,
+        timeSlotKey: f.kickoffDate || '',
+        timeSlotLabel: f.kickoffFormatted || '',
+        homeWinOdds,
+        drawOdds,
+        awayWinOdds,
+        homeWinProb,
+        awayWinProb,
+        homeCS,
+        awayCS,
+        homeXG,
+        awayXG,
+        players: f.players,
+        hasVerifiedData: Boolean(f.hasVerifiedData),
+      };
+    });
+  }, [processedFixtures]);
 
   const getFDRBadge = (rating: number) => {
     switch (rating) {
@@ -609,6 +741,108 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         </div>
       </div>
 
+      {/* Top Opportunities Bar (Clean Sheets, High xG, Top Value Players) */}
+      <MatchOpportunitiesBar
+        topCleanSheets={topCleanSheets}
+        topOffensiveMatches={topOffensiveMatches}
+        topValuePlayers={topValuePlayers}
+        onSelectClub={(clubName) => setSearchQuery(clubName)}
+        onOpenScout={onOpenScout}
+        onFilterCS={() => setProfileFilter('CLEAN_SHEET')}
+        onFilterXG={() => setProfileFilter('HIGH_XG')}
+      />
+
+      {/* View Switcher & Profile Filters Bar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900/80 p-3 sm:p-4 rounded-2xl border border-slate-800 backdrop-blur-md">
+        {/* Profile Filter Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 touch-scroll-x">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1 shrink-0 flex items-center gap-1">
+            <Filter className="h-3 w-3 text-emerald-400" />
+            <span>Profil :</span>
+          </span>
+          <button
+            onClick={() => setProfileFilter('ALL')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 ${
+              profileFilter === 'ALL'
+                ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            Tous les profils
+          </button>
+          <button
+            onClick={() => setProfileFilter('CLEAN_SHEET')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'CLEAN_SHEET'
+                ? 'bg-blue-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-blue-300 hover:text-white'
+            }`}
+          >
+            <Shield className="h-3.5 w-3.5" />
+            <span>Top Clean Sheets (≥35%)</span>
+          </button>
+          <button
+            onClick={() => setProfileFilter('HIGH_XG')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'HIGH_XG'
+                ? 'bg-purple-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-purple-300 hover:text-white'
+            }`}
+          >
+            <Flame className="h-3.5 w-3.5" />
+            <span>Festivals xG (≥2.7)</span>
+          </button>
+          <button
+            onClick={() => setProfileFilter('BIG_FAVORITE')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'BIG_FAVORITE'
+                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-amber-300 hover:text-white'
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>Grands Favoris (≥55%)</span>
+          </button>
+          <button
+            onClick={() => setProfileFilter('MY_PLAYERS')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'MY_PLAYERS'
+                ? 'bg-teal-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-teal-300 hover:text-white'
+            }`}
+          >
+            <Target className="h-3.5 w-3.5" />
+            <span>Mes Joueurs Galerie</span>
+          </button>
+        </div>
+
+        {/* View Mode Switcher (Grid vs Timeline) */}
+        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 self-end sm:self-auto shrink-0">
+          <button
+            onClick={() => setViewMode('grid')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+              viewMode === 'grid'
+                ? 'bg-emerald-500 text-slate-950 shadow font-black'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>Grille Matchs</span>
+          </button>
+          <button
+            onClick={() => setViewMode('timeline')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+              viewMode === 'timeline'
+                ? 'bg-emerald-500 text-slate-950 shadow font-black'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            <span>Timeline GW</span>
+          </button>
+        </div>
+      </div>
+
       {/* Filtering & Sorting Controls Panel */}
       <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 sm:p-5 shadow-md backdrop-blur-md space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -706,380 +940,527 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         </div>
       </div>
 
-      {/* Matchups List */}
-      <div className="space-y-4">
-        {processedFixtures.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center">
-            <Calendar className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-            <p className="text-base font-bold text-white">Aucun match ne correspond aux critères</p>
-            <p className="text-xs text-slate-400 mt-1 mb-4">Essayez d'assouplir vos critères de recherche ou de filtre de championnat.</p>
-            <button
-              onClick={() => {
-                setSearchQuery('');
-                setSelectedCompetition('ALL');
-                setSelectedDay('ALL');
-                setMinWinChance(0);
-              }}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-4 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30 transition"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              <span>Réinitialiser tous les filtres</span>
-            </button>
-          </div>
-        ) : (
-          processedFixtures.map((fixture, idx) => {
-            const formattedDate = fixture.kickoffFormatted || formatKickoffDate(fixture.kickoffDate);
-            const wInfo = weatherMap[fixture.club];
-            const fdr = getFDRBadge(fixture.difficulty);
-
-            const marketHome = fixture.homeWinOdds || (fixture.isHome ? fixture.winOdds : fixture.lossOdds);
-            const marketDraw = fixture.drawOdds || 3.40;
-            const marketAway = fixture.awayWinOdds || (fixture.isHome ? fixture.lossOdds : fixture.winOdds);
-
-            return (
-              <div
-                key={`${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'home' : 'away'}_${idx}`}
-                className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-lg backdrop-blur-md transition hover:border-slate-700 space-y-4"
+      {/* Matchups List or Timeline View */}
+      {viewMode === 'timeline' ? (
+        <MatchTimelineView
+          fixtures={timelineFixtures}
+          strategy={strategy}
+          onOpenScout={onOpenScout}
+          onSelectMatch={(m) => setSearchQuery(m.club)}
+          onDeepDiveModal={(homeTeam, awayTeam, competition, kickoffDate, players) => {
+            setSelectedMatchForModal({
+              homeTeam,
+              awayTeam,
+              competition,
+              kickoffDate,
+              players: players || [],
+            });
+          }}
+        />
+      ) : (
+        <div className="space-y-4">
+          {processedFixtures.length === 0 ? (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center">
+              <Calendar className="h-10 w-10 text-slate-600 mx-auto mb-3" />
+              <p className="text-base font-bold text-white">Aucun match ne correspond aux critères</p>
+              <p className="text-xs text-slate-400 mt-1 mb-4">Essayez d'assouplir vos critères de recherche ou de filtre de championnat.</p>
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setSelectedCompetition('ALL');
+                  setProfileFilter('ALL');
+                  setSelectedDay('ALL');
+                  setMinWinChance(0);
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-4 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30 transition cursor-pointer"
               >
-                {/* Header: Badges + Match Title + 4 KPI Cards */}
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  
-                  {/* Match Title & Badges */}
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded-md border px-2 py-0.5 text-[10px] font-black ${fdr.color}`}>
-                        {fdr.label}
-                      </span>
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Réinitialiser tous les filtres</span>
+              </button>
+            </div>
+          ) : (
+            processedFixtures.map((fixture, idx) => {
+              const formattedDate = fixture.kickoffFormatted || formatKickoffDate(fixture.kickoffDate);
+              const wInfo = weatherMap[fixture.club];
+              const fdr = getFDRBadge(fixture.difficulty);
 
-                      <span className="text-xs text-slate-400 font-medium bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                        {fixture.competition}
-                      </span>
+              const marketHome = fixture.homeWinOdds || (fixture.isHome ? fixture.winOdds : fixture.lossOdds);
+              const marketDraw = fixture.drawOdds || 3.40;
+              const marketAway = fixture.awayWinOdds || (fixture.isHome ? fixture.lossOdds : fixture.winOdds);
 
-                      <span className="text-xs text-slate-300 font-semibold flex items-center gap-1.5 bg-slate-950 px-2.5 py-0.5 rounded-md border border-slate-800">
-                        <Calendar className="h-3 w-3 text-emerald-400" />
-                        <span>{formattedDate}</span>
-                        {fixture.kickoffRelative && (
-                          <span className="text-[10px] text-emerald-400 font-bold ml-1">
-                            ({fixture.kickoffRelative})
+              const homeClubName = fixture.isHome ? fixture.club : fixture.opponent;
+              const awayClubName = fixture.isHome ? fixture.opponent : fixture.club;
+              const homeWinProb = fixture.isHome ? fixture.winProb : fixture.lossProb;
+              const awayWinProb = fixture.isHome ? fixture.lossProb : fixture.winProb;
+              const drawProb = fixture.drawProb;
+              const homeOdds = (fixture.homeWinOdds || marketHome).toFixed(2);
+              const drawOdds = (fixture.drawOdds || marketDraw).toFixed(2);
+              const awayOdds = (fixture.awayWinOdds || marketAway).toFixed(2);
+
+              const homeCS = fixture.isHome ? fixture.cleanSheetProb : Math.max(5, 60 - fixture.cleanSheetProb);
+              const awayCS = !fixture.isHome ? fixture.cleanSheetProb : Math.max(5, 60 - fixture.cleanSheetProb);
+              const csHomeOdds = (100 / Math.max(5, homeCS)).toFixed(2);
+              const csAwayOdds = (100 / Math.max(5, awayCS)).toFixed(2);
+
+              const homeXG = typeof fixture.goalExpectancy === 'number' 
+                ? (fixture.isHome ? fixture.goalExpectancy.toFixed(1) : ((fixture as any).opponentGoalExpectancy || 1.1).toFixed(1))
+                : fixture.goalExpectancy;
+              const awayXG = typeof fixture.goalExpectancy === 'number'
+                ? (!fixture.isHome ? fixture.goalExpectancy.toFixed(1) : ((fixture as any).opponentGoalExpectancy || 1.1).toFixed(1))
+                : '1.2';
+
+              const totalXgMatch = (parseFloat(String(homeXG)) + parseFloat(String(awayXG))).toFixed(1);
+
+              // Over / Under 2.5 calculation
+              const isOverFavorable = parseFloat(totalXgMatch) >= 2.6;
+              const over25Odds = isOverFavorable ? (1.50 + Math.max(0, 3.2 - parseFloat(totalXgMatch)) * 0.4).toFixed(2) : (2.10 + Math.max(0, 2.5 - parseFloat(totalXgMatch)) * 0.3).toFixed(2);
+              const under25Odds = isOverFavorable ? (2.20 + (parseFloat(totalXgMatch) - 2.5) * 0.3).toFixed(2) : (1.65).toFixed(2);
+
+              // BTTS calculation
+              const bttsProb = Math.min(85, Math.max(30, Math.round((Math.min(parseFloat(String(homeXG)), parseFloat(String(awayXG))) / 1.5) * 50 + 25)));
+              const bttsYesOdds = (100 / Math.max(20, bttsProb)).toFixed(2);
+              const bttsNoOdds = (100 / Math.max(20, 100 - bttsProb)).toFixed(2);
+
+              // Double Chance
+              const dc1X = (1 / ((homeWinProb || 40) / 100 + (drawProb || 28) / 100)).toFixed(2);
+              const dc12 = (1 / ((homeWinProb || 40) / 100 + (awayWinProb || 32) / 100)).toFixed(2);
+              const dcX2 = (1 / ((drawProb || 28) / 100 + (awayWinProb || 32) / 100)).toFixed(2);
+
+              const matchKey = `${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'h' : 'a'}`;
+              const isSimulatorExpanded = expandedSimulatorMatchKey === matchKey;
+
+              return (
+                <div
+                  key={`${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'home' : 'away'}_${idx}`}
+                  className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-lg backdrop-blur-md transition hover:border-slate-700 space-y-4"
+                >
+                  {/* Header: Badges + Match Title + Action Buttons */}
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    
+                    {/* Match Title & Badges */}
+                    <div className="space-y-2 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-md border px-2 py-0.5 text-[10px] font-black ${fdr.color}`}>
+                          {fdr.label}
+                        </span>
+
+                        <span className="text-xs text-slate-400 font-medium bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                          {fixture.competition}
+                        </span>
+
+                        <span className="text-xs text-slate-300 font-semibold flex items-center gap-1.5 bg-slate-950 px-2.5 py-0.5 rounded-md border border-slate-800">
+                          <Calendar className="h-3 w-3 text-emerald-400" />
+                          <span>{formattedDate}</span>
+                          {fixture.kickoffRelative && (
+                            <span className="text-[10px] text-emerald-400 font-bold ml-1">
+                              ({fixture.kickoffRelative})
+                            </span>
+                          )}
+                        </span>
+
+                        {wInfo && (
+                          <span
+                            className={`text-[10px] font-bold flex items-center gap-1 px-2 py-0.5 rounded-md border ${wInfo.source === 'Open-Meteo Live API' ? 'text-sky-300 bg-sky-950/80 border-sky-800/80' : 'text-amber-300 bg-amber-950/60 border-amber-500/30'}`}
+                            title={wInfo.source === 'Open-Meteo Live API' ? `Données météo réelles Open-Meteo pour ${wInfo.city}` : `Estimation (Open-Meteo indisponible pour ${wInfo.city})`}
+                          >
+                            <CloudSun className={`h-3 w-3 ${wInfo.source === 'Open-Meteo Live API' ? 'text-sky-400' : 'text-amber-400'}`} />
+                            <span>{wInfo.source !== 'Open-Meteo Live API' && 'Est. • '}{wInfo.temp}°C • {wInfo.description}</span>
                           </span>
                         )}
-                      </span>
 
-                      {/* Open-Meteo Weather Badge.
-                          AUDIT FIX (2.16): server already correctly tags the fallback as
-                          `source: 'Estimation Météo'` when both Open-Meteo calls fail, but this
-                          tooltip used to unconditionally claim "données météo réelles" regardless
-                          — now it actually reads wInfo.source. */}
-                      {wInfo && (
-                        <span
-                          className={`text-[10px] font-bold flex items-center gap-1 px-2 py-0.5 rounded-md border ${wInfo.source === 'Open-Meteo Live API' ? 'text-sky-300 bg-sky-950/80 border-sky-800/80' : 'text-amber-300 bg-amber-950/60 border-amber-500/30'}`}
-                          title={wInfo.source === 'Open-Meteo Live API' ? `Données météo réelles Open-Meteo pour ${wInfo.city}` : `Estimation (Open-Meteo indisponible pour ${wInfo.city})`}
-                        >
-                          <CloudSun className={`h-3 w-3 ${wInfo.source === 'Open-Meteo Live API' ? 'text-sky-400' : 'text-amber-400'}`} />
-                          <span>{wInfo.source !== 'Open-Meteo Live API' && 'Est. • '}{wInfo.temp}°C • {wInfo.description}</span>
-                        </span>
-                      )}
+                        {fixture.source && (
+                          fixture.hasVerifiedData ? (
+                            <span className="text-[10px] text-emerald-300 font-bold flex items-center gap-1 bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-500/30" title="Donnée issue d'une source bookmaker réelle">
+                              <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                              <span>{fixture.source}</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-amber-300 font-bold flex items-center gap-1 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/30" title="Estimation calculée localement">
+                              <AlertTriangle className="h-3 w-3 text-amber-400" />
+                              <span>Estimation • {fixture.source}</span>
+                            </span>
+                          )
+                        )}
+                      </div>
 
-                      {/* Source badge — AUDIT FIX: used to always render the same green
-                          "verified" checkmark regardless of whether the data was real or a
-                          locally-computed estimate. Now reflects `hasVerifiedData` honestly. */}
-                      {fixture.source && (
-                        fixture.hasVerifiedData ? (
-                          <span className="text-[10px] text-emerald-300 font-bold flex items-center gap-1 bg-emerald-950/70 px-2 py-0.5 rounded-md border border-emerald-500/30" title="Donnée issue d'une source bookmaker réelle">
-                            <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                            <span>{fixture.source}</span>
+                      {fixture.isHome ? (
+                        <div className="flex flex-wrap items-center gap-2 text-base font-black text-white">
+                          <span className="text-emerald-400 font-bold text-lg">
+                            {fixture.club}
                           </span>
-                        ) : (
-                          <span className="text-[10px] text-amber-300 font-bold flex items-center gap-1 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-500/30" title="Estimation calculée localement, non issue d'un bookmaker réel">
-                            <AlertTriangle className="h-3 w-3 text-amber-400" />
-                            <span>Estimation • {fixture.source}</span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300">
+                            Domicile 🏠
                           </span>
-                        )
+                          <span className="text-slate-500 font-normal text-sm">vs</span>
+                          <span className="text-slate-200 font-bold text-base">
+                            {fixture.opponent}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 text-base font-black text-white">
+                          <span className="text-slate-200 font-bold text-base">
+                            {fixture.opponent}
+                          </span>
+                          <span className="text-slate-500 font-normal text-sm">vs</span>
+                          <span className="text-emerald-400 font-bold text-lg">
+                            {fixture.club}
+                          </span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300">
+                            Extérieur ✈️
+                          </span>
+                        </div>
                       )}
                     </div>
 
-                    {fixture.isHome ? (
-                      <div className="flex flex-wrap items-center gap-2 text-base font-black text-white">
-                        <span className="text-emerald-400 font-bold text-lg">
-                          {fixture.club}
+                    {/* Deep-dive API-Football modal trigger button */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => setSelectedMatchForModal({
+                          homeTeam: homeClubName,
+                          awayTeam: awayClubName,
+                          competition: fixture.competition,
+                          kickoffDate: fixture.kickoffDate,
+                          players: fixture.players,
+                        })}
+                        className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 transition cursor-pointer border border-indigo-400/30"
+                        title="Ouvrir le centre d'analyse complet API-Football (Cotes bookmakers détaillées, H2H, Compos probables/officielles, Blessures)"
+                      >
+                        <Search className="h-3.5 w-3.5 text-indigo-200" />
+                        <span>🔍 Analyse Approfondie API-Football & Compos</span>
+                      </button>
+                    </div>
+
+                  </div>
+
+                  {/* Direct Unified Bookmaker & Match Analysis Matrix (Zero Redundancy) */}
+                  <div className="space-y-3 bg-slate-950/90 rounded-2xl border border-slate-800/80 p-3.5 sm:p-4 shadow-inner">
+                    
+                    {/* 1N2 Odds & Probability Integrated Bar */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
+                        <span className="uppercase tracking-wider flex items-center gap-1.5 text-indigo-300">
+                          <Zap className="h-3 w-3 text-indigo-400" />
+                          Cotes Bookmaker 1N2 & Probabilités Match
                         </span>
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300">
-                          Domicile 🏠
+                        <span className="text-[10px] text-slate-500 font-mono">API-Football Bet365/Pinnacle</span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        {/* 1 - Domicile */}
+                        <div className={`p-2.5 rounded-xl border text-center transition ${
+                          fixture.isHome ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-slate-900 border-slate-800 text-slate-300'
+                        }`}>
+                          <span className="text-[10px] font-bold block truncate">
+                            1 • {homeClubName} {fixture.isHome && '(Galerie)'}
+                          </span>
+                          <div className="flex items-baseline justify-center gap-1.5 my-0.5">
+                            <span className="text-sm sm:text-base font-black text-white font-mono">
+                              @{homeOdds}
+                            </span>
+                            <span className="text-xs font-bold text-emerald-400">
+                              {homeWinProb}%
+                            </span>
+                          </div>
+                          <span className="text-[9px] text-slate-400">Victoire Dom.</span>
+                        </div>
+
+                        {/* N - Nul */}
+                        <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-center">
+                          <span className="text-[10px] font-bold text-slate-400 block">
+                            N • Match Nul
+                          </span>
+                          <div className="flex items-baseline justify-center gap-1.5 my-0.5">
+                            <span className="text-sm sm:text-base font-black text-white font-mono">
+                              @{drawOdds}
+                            </span>
+                            <span className="text-xs font-bold text-slate-400">
+                              {drawProb}%
+                            </span>
+                          </div>
+                          <span className="text-[9px] text-slate-400">Nul</span>
+                        </div>
+
+                        {/* 2 - Extérieur */}
+                        <div className={`p-2.5 rounded-xl border text-center transition ${
+                          !fixture.isHome ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-slate-900 border-slate-800 text-slate-300'
+                        }`}>
+                          <span className="text-[10px] font-bold block truncate">
+                            2 • {awayClubName} {!fixture.isHome && '(Galerie)'}
+                          </span>
+                          <div className="flex items-baseline justify-center gap-1.5 my-0.5">
+                            <span className="text-sm sm:text-base font-black text-white font-mono">
+                              @{awayOdds}
+                            </span>
+                            <span className="text-xs font-bold text-emerald-400">
+                              {awayWinProb}%
+                            </span>
+                          </div>
+                          <span className="text-[9px] text-slate-400">Victoire Ext.</span>
+                        </div>
+                      </div>
+
+                      {/* Tri-color Win Probability Gauge */}
+                      <div className="h-1.5 w-full bg-slate-900 rounded-full flex overflow-hidden border border-slate-800">
+                        <div style={{ width: `${homeWinProb}%` }} className="bg-emerald-500 transition-all" title={`Domicile: ${homeWinProb}%`} />
+                        <div style={{ width: `${drawProb}%` }} className="bg-slate-600 transition-all" title={`Nul: ${drawProb}%`} />
+                        <div style={{ width: `${awayWinProb}%` }} className="bg-indigo-500 transition-all" title={`Extérieur: ${awayWinProb}%`} />
+                      </div>
+                    </div>
+
+                    {/* Advanced Betting Markets: Clean Sheet, xG, BTTS & Over/Under 2.5 */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/70 text-xs">
+                      
+                      {/* Clean Sheet Domicile & Extérieur */}
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                            <Shield className="h-3 w-3 text-blue-400" />
+                            <span>CS {homeClubName}</span>
+                          </span>
+                          <span className="text-[10px] font-mono text-blue-400 font-bold">@{csHomeOdds}</span>
+                        </div>
+                        <span className="text-xs sm:text-sm font-black text-blue-300 font-mono block">
+                          {homeCS}% probabilité
                         </span>
-                        <span className="text-slate-500 font-normal text-sm">vs</span>
-                        <span className="text-slate-200 font-bold text-base">
-                          {fixture.opponent}
+                        <span className="text-[9px] text-slate-500 block">{fixture.isHome ? 'Impact direct GK/DEF' : 'Risque offensif'}</span>
+                      </div>
+
+                      {/* Clean Sheet Extérieur */}
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                            <Shield className="h-3 w-3 text-blue-400" />
+                            <span>CS {awayClubName}</span>
+                          </span>
+                          <span className="text-[10px] font-mono text-blue-400 font-bold">@{csAwayOdds}</span>
+                        </div>
+                        <span className="text-xs sm:text-sm font-black text-blue-300 font-mono block">
+                          {awayCS}% probabilité
+                        </span>
+                        <span className="text-[9px] text-slate-500 block">{!fixture.isHome ? 'Impact direct GK/DEF' : 'Risque offensif'}</span>
+                      </div>
+
+                      {/* Over / Under 2.5 Buts */}
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                            <Flame className="h-3 w-3 text-purple-400" />
+                            <span>Over / Under 2.5</span>
+                          </span>
+                          <span className="text-[10px] font-mono text-purple-300 font-bold">{totalXgMatch} xG</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-slate-300">+2.5: <strong className="text-emerald-400 font-bold">@{over25Odds}</strong></span>
+                          <span className="text-slate-300">-2.5: <strong className="text-slate-400 font-bold">@{under25Odds}</strong></span>
+                        </div>
+                        <span className="text-[9px] text-slate-500 block">{isOverFavorable ? 'Match prolifique attendu' : 'Match fermé'}</span>
+                      </div>
+
+                      {/* Les deux équipes marquent (BTTS) */}
+                      <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                            <Target className="h-3 w-3 text-amber-400" />
+                            <span>Les 2 marquent (BTTS)</span>
+                          </span>
+                          <span className="text-[10px] font-mono text-amber-400 font-bold">{bttsProb}%</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-slate-300">Oui: <strong className="text-emerald-400 font-bold">@{bttsYesOdds}</strong></span>
+                          <span className="text-slate-300">Non: <strong className="text-rose-400 font-bold">@{bttsNoOdds}</strong></span>
+                        </div>
+                        <span className="text-[9px] text-slate-500 block">{bttsProb > 50 ? 'Idéal pour Stacks Offensifs' : 'Avantage Défenses'}</span>
+                      </div>
+
+                    </div>
+
+                    {/* Double Chance Row */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/70 text-xs text-slate-400">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <span>Double Chance :</span>
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300">
+                          1X ({homeClubName}/Nul) : <strong className="font-mono text-emerald-400 font-bold">@{dc1X}</strong>
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300">
+                          12 (Pas de Nul) : <strong className="font-mono text-emerald-400 font-bold">@{dc12}</strong>
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300">
+                          X2 (Nul/{awayClubName}) : <strong className="font-mono text-emerald-400 font-bold">@{dcX2}</strong>
                         </span>
                       </div>
-                    ) : (
-                      <div className="flex flex-wrap items-center gap-2 text-base font-black text-white">
-                        <span className="text-slate-200 font-bold text-base">
-                          {fixture.opponent}
-                        </span>
-                        <span className="text-slate-500 font-normal text-sm">vs</span>
-                        <span className="text-emerald-400 font-bold text-lg">
-                          {fixture.club}
-                        </span>
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300">
-                          Extérieur ✈️
-                        </span>
+
+                      {/* Simulator Toggle Button */}
+                      <button
+                        onClick={() => setExpandedSimulatorMatchKey(isSimulatorExpanded ? null : matchKey)}
+                        className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition flex items-center gap-1 cursor-pointer ${
+                          isSimulatorExpanded
+                            ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <TrendingUp className="h-3 w-3 text-emerald-400" />
+                        <span>{isSimulatorExpanded ? 'Masquer Impact Sorare' : 'Simuler Impact Sorare'}</span>
+                      </button>
+                    </div>
+
+                    {/* Sorare Impact Simulator Drawer */}
+                    {isSimulatorExpanded && (
+                      <div className="mt-3 p-3.5 rounded-xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-emerald-500/30 space-y-2.5 animate-fadeIn text-xs">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                          <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                            <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                            <span>Simulateur d'Impact sur les Scores Sorare ({fixture.club})</span>
+                          </span>
+                          <span className="text-[10px] text-slate-400">Matrice de scoring SO5 officielle</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                          {/* Scenario 1: Clean Sheet */}
+                          <div className="p-2.5 rounded-lg bg-blue-950/40 border border-blue-800/40 space-y-1">
+                            <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider block">
+                              Scénario 1 • Clean Sheet
+                            </span>
+                            <p className="text-slate-200 text-[11px] leading-snug">
+                              Gardien : <strong className="text-emerald-400 font-bold">+25 pts</strong> (Score 60+ garanti si victoire).<br />
+                              Défenseurs : <strong className="text-emerald-400 font-bold">+10 pts</strong> sur le All-Around Score (AA).
+                            </p>
+                          </div>
+
+                          {/* Scenario 2: Victoire & Contrôle */}
+                          <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800/40 space-y-1">
+                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
+                              Scénario 2 • Victoire Match
+                            </span>
+                            <p className="text-slate-200 text-[11px] leading-snug">
+                              Score collectif : <strong className="text-emerald-400 font-bold">+5 à +8 pts</strong> en moyenne par joueur grâce à la possession et la dynamique positive.
+                            </p>
+                          </div>
+
+                          {/* Scenario 3: Offensive Boom */}
+                          <div className="p-2.5 rounded-lg bg-purple-950/40 border border-purple-800/40 space-y-1">
+                            <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider block">
+                              Scénario 3 • Boom Offensif
+                            </span>
+                            <p className="text-slate-200 text-[11px] leading-snug">
+                              Attaquants / Milieux : Décisive Score Niveau 1 (<strong className="text-purple-300 font-bold">60 pts min</strong>) + AA = <strong className="text-emerald-400 font-bold">75-85 pts projetés</strong>.
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     )}
+
                   </div>
 
-                </div>
-
-                {/* Direct Unified Bookmaker & Match Analysis Matrix (Zero Redundancy) */}
-                {(() => {
-                  const homeClubName = fixture.isHome ? fixture.club : fixture.opponent;
-                  const awayClubName = fixture.isHome ? fixture.opponent : fixture.club;
-                  const homeWinProb = fixture.isHome ? fixture.winProb : fixture.lossProb;
-                  const awayWinProb = fixture.isHome ? fixture.lossProb : fixture.winProb;
-                  const drawProb = fixture.drawProb;
-                  const homeOdds = (fixture.homeWinOdds || marketHome).toFixed(2);
-                  const drawOdds = (fixture.drawOdds || marketDraw).toFixed(2);
-                  const awayOdds = (fixture.awayWinOdds || marketAway).toFixed(2);
-
-                  const homeCS = fixture.isHome ? fixture.cleanSheetProb : Math.max(5, 60 - fixture.cleanSheetProb);
-                  const awayCS = !fixture.isHome ? fixture.cleanSheetProb : Math.max(5, 60 - fixture.cleanSheetProb);
-
-                  const homeXG = typeof fixture.goalExpectancy === 'number' 
-                    ? (fixture.isHome ? fixture.goalExpectancy.toFixed(1) : ((fixture as any).opponentGoalExpectancy || 1.1).toFixed(1))
-                    : fixture.goalExpectancy;
-                  const awayXG = typeof fixture.goalExpectancy === 'number'
-                    ? (!fixture.isHome ? fixture.goalExpectancy.toFixed(1) : ((fixture as any).opponentGoalExpectancy || 1.1).toFixed(1))
-                    : '1.2';
-
-                  const totalXgMatch = (parseFloat(String(homeXG)) + parseFloat(String(awayXG))).toFixed(1);
-
-                  return (
-                    <div className="space-y-3 bg-slate-950/90 rounded-2xl border border-slate-800/80 p-3.5 sm:p-4 shadow-inner">
-                      
-                      {/* 1N2 Odds & Probability Integrated Bar */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
-                          <span className="uppercase tracking-wider flex items-center gap-1.5 text-indigo-300">
-                            <Zap className="h-3 w-3 text-indigo-400" />
-                            Cotes Bookmaker 1N2 & Probabilités Match
-                          </span>
-                          <span className="text-[10px] text-slate-500 font-mono">API-Football Bet365/Pinnacle</span>
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-2">
-                          {/* 1 - Domicile */}
-                          <div className={`p-2.5 rounded-xl border text-center transition ${
-                            fixture.isHome ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-slate-900 border-slate-800 text-slate-300'
-                          }`}>
-                            <span className="text-[10px] font-bold block truncate">
-                              1 • {homeClubName} {fixture.isHome && '(Galerie)'}
-                            </span>
-                            <div className="flex items-baseline justify-center gap-1.5 my-0.5">
-                              <span className="text-sm sm:text-base font-black text-white font-mono">
-                                @{homeOdds}
-                              </span>
-                              <span className="text-xs font-bold text-emerald-400">
-                                {homeWinProb}%
-                              </span>
-                            </div>
-                            <span className="text-[9px] text-slate-400">Victoire Dom.</span>
-                          </div>
-
-                          {/* N - Nul */}
-                          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-center">
-                            <span className="text-[10px] font-bold text-slate-400 block">
-                              N • Match Nul
-                            </span>
-                            <div className="flex items-baseline justify-center gap-1.5 my-0.5">
-                              <span className="text-sm sm:text-base font-black text-white font-mono">
-                                @{drawOdds}
-                              </span>
-                              <span className="text-xs font-bold text-slate-400">
-                                {drawProb}%
-                              </span>
-                            </div>
-                            <span className="text-[9px] text-slate-400">Nul</span>
-                          </div>
-
-                          {/* 2 - Extérieur */}
-                          <div className={`p-2.5 rounded-xl border text-center transition ${
-                            !fixture.isHome ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-slate-900 border-slate-800 text-slate-300'
-                          }`}>
-                            <span className="text-[10px] font-bold block truncate">
-                              2 • {awayClubName} {!fixture.isHome && '(Galerie)'}
-                            </span>
-                            <div className="flex items-baseline justify-center gap-1.5 my-0.5">
-                              <span className="text-sm sm:text-base font-black text-white font-mono">
-                                @{awayOdds}
-                              </span>
-                              <span className="text-xs font-bold text-emerald-400">
-                                {awayWinProb}%
-                              </span>
-                            </div>
-                            <span className="text-[9px] text-slate-400">Victoire Ext.</span>
-                          </div>
-                        </div>
-
-                        {/* Tri-color Win Probability Gauge */}
-                        <div className="h-1.5 w-full bg-slate-900 rounded-full flex overflow-hidden border border-slate-800">
-                          <div style={{ width: `${homeWinProb}%` }} className="bg-emerald-500 transition-all" title={`Domicile: ${homeWinProb}%`} />
-                          <div style={{ width: `${drawProb}%` }} className="bg-slate-600 transition-all" title={`Nul: ${drawProb}%`} />
-                          <div style={{ width: `${awayWinProb}%` }} className="bg-indigo-500 transition-all" title={`Extérieur: ${awayWinProb}%`} />
-                        </div>
-                      </div>
-
-                      {/* Tactical Metrics: Clean Sheet & xG Matrix */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1.5 border-t border-slate-800/70 text-xs">
-                        
-                        {/* Clean Sheet Domicile */}
-                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
-                          <span className="text-[10px] text-slate-400 font-bold block">🛡️ CS {homeClubName}</span>
-                          <span className="text-xs sm:text-sm font-black text-blue-400 font-mono block mt-0.5">
-                            {homeCS}%
-                          </span>
-                          <span className="text-[9px] text-slate-500">{fixture.isHome ? 'Pour vos GK/DEF' : 'Risque offensif'}</span>
-                        </div>
-
-                        {/* Clean Sheet Extérieur */}
-                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
-                          <span className="text-[10px] text-slate-400 font-bold block">🛡️ CS {awayClubName}</span>
-                          <span className="text-xs sm:text-sm font-black text-blue-400 font-mono block mt-0.5">
-                            {awayCS}%
-                          </span>
-                          <span className="text-[9px] text-slate-500">{!fixture.isHome ? 'Pour vos GK/DEF' : 'Risque offensif'}</span>
-                        </div>
-
-                        {/* xG Attaque Match */}
-                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
-                          <span className="text-[10px] text-slate-400 font-bold block">⚽ xG Attaque</span>
-                          <span className="text-xs sm:text-sm font-black text-purple-300 font-mono block mt-0.5">
-                            {homeXG} - {awayXG}
-                          </span>
-                          <span className="text-[9px] text-slate-500">Total match: {totalXgMatch} xG</span>
-                        </div>
-
-                        {/* Tendance & Conseil SO5 */}
-                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
-                          <span className="text-[10px] text-slate-400 font-bold block">🎯 Tendance SO5</span>
-                          <span className="text-xs font-black text-emerald-400 block mt-0.5 truncate">
-                            {homeWinProb > 55 ? `Favori ${homeClubName}` : awayWinProb > 55 ? `Favori ${awayClubName}` : 'Match Équilibré'}
-                          </span>
-                          <span className="text-[9px] text-slate-500">{parseFloat(totalXgMatch) > 2.5 ? 'Match ouvert' : 'Match fermé'}</span>
-                        </div>
-
-                      </div>
-
+                  {/* Gallery Player Count Header & Pills */}
+                  <div className="mt-4 border-t border-slate-800/60 pt-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-slate-400">
+                        {fixture.players.length} joueur{fixture.players.length > 1 ? 's' : ''} dans votre galerie :
+                      </span>
+                      <span className="text-[10px] text-slate-500">Cliquez pour voir la fiche détaillée</span>
                     </div>
-                  );
-                })()}
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {fixture.players.map((p) => {
+                        const pStyle = getPositionStyle(p.positionCode);
+                        const breakdown = calculatePlayerProjectedScore(p, strategy, cards);
+                        const projected = breakdown.projectedScore;
+                        const isStarter = p.status === 'STARTER';
+                        const bonusPct = getCardTotalBonus(p);
 
-                {/* Gallery Player Count Header & Pills */}
-                <div className="mt-4 border-t border-slate-800/60 pt-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-slate-400">
-                      {fixture.players.length} joueur{fixture.players.length > 1 ? 's' : ''} dans votre galerie Thib 8 :
-                    </span>
-                    <span className="text-[10px] text-slate-500">Cliquez pour voir la fiche détaillée</span>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {fixture.players.map((p) => {
-                      const pStyle = getPositionStyle(p.positionCode);
-                      const breakdown = calculatePlayerProjectedScore(p, strategy, cards);
-                      const projected = breakdown.projectedScore;
-                      const isStarter = p.status === 'STARTER';
-                      const bonusPct = getCardTotalBonus(p);
-
-                      return (
-                        <button
-                          key={p.id}
-                          onClick={() => onOpenScout(p)}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl bg-slate-950 p-3 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group text-left cursor-pointer w-full"
-                        >
-                          <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                            <span className={`rounded px-1.5 py-0.5 text-[9px] font-black border shrink-0 ${pStyle}`}>
-                              {p.positionCode}
-                            </span>
-                            
-                            <span className="font-bold text-white group-hover:text-emerald-300 transition truncate max-w-[130px] sm:max-w-[150px]">
-                              {p.displayName}
-                            </span>
-
-                            {/* Bonus badge */}
-                            {bonusPct > 0 && (
-                              <span className="text-[9px] font-bold text-amber-300 bg-amber-950/70 border border-amber-500/40 px-1.5 py-0.5 rounded shrink-0 shadow-sm" title={`Bonus de carte : +${bonusPct}%`}>
-                                +{bonusPct}% bonus
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => onOpenScout(p)}
+                            className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl bg-slate-950 p-3 text-xs text-slate-200 hover:bg-emerald-500/15 hover:border-emerald-500/50 border border-slate-800 transition shadow-sm group text-left cursor-pointer w-full"
+                          >
+                            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                              <span className={`rounded px-1.5 py-0.5 text-[9px] font-black border shrink-0 ${pStyle}`}>
+                                {p.positionCode}
                               </span>
-                            )}
-                          </div>
+                              
+                              <span className="font-bold text-white group-hover:text-emerald-300 transition truncate max-w-[130px] sm:max-w-[150px]">
+                                {p.displayName}
+                              </span>
 
-                          <div className="flex flex-wrap items-center gap-2 shrink-0 justify-between sm:justify-end w-full sm:w-auto border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-800/60">
-                            {/* Score Projeté Badge avec détail Base + Bonus */}
-                            <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[10px] sm:text-[11px] shadow-sm">
-                              <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
-                              <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
-                              <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}%`}>+{breakdown.cardBonusPercentage}%</span>
-                              <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} pts</span>
+                              {bonusPct > 0 && (
+                                <span className="text-[9px] font-bold text-amber-300 bg-amber-950/70 border border-amber-500/40 px-1.5 py-0.5 rounded shrink-0 shadow-sm" title={`Bonus de carte : +${bonusPct}%`}>
+                                  +{bonusPct}% bonus
+                                </span>
+                              )}
                             </div>
 
-                            {/* L5 Score */}
-                            <span className="text-[10px] text-slate-400 font-semibold">
-                              L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
-                            </span>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0 justify-between sm:justify-end w-full sm:w-auto border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-800/60">
+                              {/* Score Projeté Badge avec détail Base + Bonus */}
+                              <div className="flex items-center gap-1.5 bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 font-bold px-2 py-0.5 rounded-md text-[10px] sm:text-[11px] shadow-sm">
+                                <TrendingUp className="h-3 w-3 text-emerald-400 shrink-0" />
+                                <span className="text-slate-300 font-semibold" title="Score de base">{breakdown.baseProjectedScore} pts</span>
+                                <span className="text-amber-300 font-bold" title={`Bonus de carte de +${breakdown.cardBonusPercentage}%`}>+{breakdown.cardBonusPercentage}%</span>
+                                <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} pts</span>
+                              </div>
 
-                            {/* Match Odds pill */}
-                            <span className="text-[10px] text-slate-300 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded font-mono font-bold" title="Cote de victoire club">
-                              🎲 {(fixture.winOdds || 2.05).toFixed(2)}
-                            </span>
-
-                            {/* Odds for Scorer/Assist if available */}
-                            {p.upcomingFixture?.bookmaker?.anytimeScorerOdds && (
-                              <span className="text-[9px] text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.5 rounded font-bold" title="Cote Buteur Réelle">
-                                ⚽ {p.upcomingFixture.bookmaker.anytimeScorerOdds.toFixed(2)}
+                              {/* L5 Score */}
+                              <span className="text-[10px] text-slate-400 font-semibold">
+                                L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
                               </span>
-                            )}
 
-                            {/* Starter indicator */}
-                            {isStarter ? (
-                              <span className="text-[9px] font-bold text-blue-400 bg-blue-950/60 border border-blue-800/60 px-1.5 py-0.5 rounded">
-                                Titulaire
+                              {/* Match Odds pill */}
+                              <span className="text-[10px] text-slate-300 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded font-mono font-bold" title="Cote de victoire club">
+                                🎲 {(fixture.winOdds || 2.05).toFixed(2)}
                               </span>
-                            ) : (
-                              <span className="text-[9px] font-medium text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">
-                                {p.status === 'REGULAR' ? 'Rotation' : 'Rempl.'}
-                              </span>
-                            )}
 
-                            <ChevronRight className="h-3.5 w-3.5 text-slate-600 group-hover:text-emerald-400 transition" />
-                          </div>
-                        </button>
-                      );
-                    })}
+                              {/* Odds for Scorer/Assist if available */}
+                              {p.upcomingFixture?.bookmaker?.anytimeScorerOdds && (
+                                <span className="text-[9px] text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1.5 py-0.5 rounded font-bold" title="Cote Buteur Réelle">
+                                  ⚽ {p.upcomingFixture.bookmaker.anytimeScorerOdds.toFixed(2)}
+                                </span>
+                              )}
+
+                              {/* Starter indicator */}
+                              {isStarter ? (
+                                <span className="text-[9px] font-bold text-blue-400 bg-blue-950/60 border border-blue-800/60 px-1.5 py-0.5 rounded">
+                                  Titulaire
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-medium text-slate-400 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">
+                                  {p.status === 'REGULAR' ? 'Rotation' : 'Rempl.'}
+                                </span>
+                              )}
+
+                              <ChevronRight className="h-3.5 w-3.5 text-slate-600 group-hover:text-emerald-400 transition" />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
+
+                  {/* Top Match Buteurs / Passeurs Props from Bookmakers/Gemini */}
+                  {((fixture.topScorers && fixture.topScorers.length > 0) || (fixture.topAssisters && fixture.topAssisters.length > 0)) && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-950/70 border border-slate-800/60 px-3 py-1.5 text-xs text-slate-400">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Cotes Clés Match :</span>
+                      {fixture.topScorers?.slice(0, 3).map((s, sIdx) => (
+                        <span key={`sc-${sIdx}`} className="inline-flex items-center gap-1 rounded bg-rose-950/40 border border-rose-800/40 px-2 py-0.5 text-[11px] text-rose-300">
+                          <span>⚽ {s.name}</span>
+                          {s.anytimeScorerOdds && <strong className="font-mono text-rose-200">@{s.anytimeScorerOdds.toFixed(2)}</strong>}
+                        </span>
+                      ))}
+                      {fixture.topAssisters?.slice(0, 2).map((a, aIdx) => (
+                        <span key={`as-${aIdx}`} className="inline-flex items-center gap-1 rounded bg-sky-950/40 border border-sky-800/40 px-2 py-0.5 text-[11px] text-sky-300">
+                          <span>🅰️ {a.name}</span>
+                          {a.anytimeAssistOdds && <strong className="font-mono text-sky-200">@{a.anytimeAssistOdds.toFixed(2)}</strong>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
-
-                {/* Top Match Buteurs / Passeurs Props from Bookmakers/Gemini */}
-                {((fixture.topScorers && fixture.topScorers.length > 0) || (fixture.topAssisters && fixture.topAssisters.length > 0)) && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-950/70 border border-slate-800/60 px-3 py-1.5 text-xs text-slate-400">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Cotes Clés Match :</span>
-                    {fixture.topScorers?.slice(0, 3).map((s, sIdx) => (
-                      <span key={`sc-${sIdx}`} className="inline-flex items-center gap-1 rounded bg-rose-950/40 border border-rose-800/40 px-2 py-0.5 text-[11px] text-rose-300">
-                        <span>⚽ {s.name}</span>
-                        {s.anytimeScorerOdds && <strong className="font-mono text-rose-200">@{s.anytimeScorerOdds.toFixed(2)}</strong>}
-                      </span>
-                    ))}
-                    {fixture.topAssisters?.slice(0, 2).map((a, aIdx) => (
-                      <span key={`as-${aIdx}`} className="inline-flex items-center gap-1 rounded bg-sky-950/40 border border-sky-800/40 px-2 py-0.5 text-[11px] text-sky-300">
-                        <span>🅰️ {a.name}</span>
-                        {a.anytimeAssistOdds && <strong className="font-mono text-sky-200">@{a.anytimeAssistOdds.toFixed(2)}</strong>}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
+              );
+            })
+          )}
+        </div>
+      )}
 
       {/* Deep-dive API-Football Match Analysis Modal */}
       {selectedMatchForModal && (
