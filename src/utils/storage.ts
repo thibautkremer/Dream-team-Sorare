@@ -10,6 +10,7 @@ const STORAGE_KEYS = {
   SAVED_LINEUPS: 'team_sorare_saved_lineups_v5',
   ACTIVE_STRATEGY: 'team_sorare_strategy_v5',
   FAVORITES: 'team_sorare_favorites_v5',
+  CARD_TAGS: 'team_sorare_card_tags_v5',
   LAST_SYNC: 'team_sorare_last_sync_v5',
   HAS_CLEARED: 'team_sorare_has_cleared',
 };
@@ -284,6 +285,65 @@ export class StorageService {
     } catch (e) {
       console.error('Error deleting lineup', e);
     }
+  }
+
+  static getFavorites(): string[] {
+    try {
+      const data = safeLS.getItem(STORAGE_KEYS.FAVORITES);
+      if (data) return JSON.parse(data);
+    } catch (e) {}
+    return [];
+  }
+
+  static toggleFavorite(cardId: string): string[] {
+    try {
+      const favs = this.getFavorites();
+      const next = favs.includes(cardId) ? favs.filter(id => id !== cardId) : [...favs, cardId];
+      safeLS.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(next));
+      return next;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  static isFavorite(cardId: string): boolean {
+    const favs = this.getFavorites();
+    return favs.includes(cardId);
+  }
+
+  static getCardTags(): Record<string, string[]> {
+    try {
+      const data = safeLS.getItem(STORAGE_KEYS.CARD_TAGS);
+      if (data) return JSON.parse(data);
+    } catch (e) {}
+    return {};
+  }
+
+  static setCardTags(cardId: string, tags: string[]): Record<string, string[]> {
+    try {
+      const allTags = this.getCardTags();
+      if (tags.length === 0) {
+        delete allTags[cardId];
+      } else {
+        allTags[cardId] = Array.from(new Set(tags));
+      }
+      safeLS.setItem(STORAGE_KEYS.CARD_TAGS, JSON.stringify(allTags));
+      return allTags;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  static addCardTag(cardId: string, tag: string): Record<string, string[]> {
+    const cleanTag = tag.trim();
+    if (!cleanTag) return this.getCardTags();
+    const current = this.getCardTags()[cardId] || [];
+    return this.setCardTags(cardId, [...current, cleanTag]);
+  }
+
+  static removeCardTag(cardId: string, tag: string): Record<string, string[]> {
+    const current = this.getCardTags()[cardId] || [];
+    return this.setCardTags(cardId, current.filter(t => t !== tag));
   }
 
   static getLastSync(): string | null {

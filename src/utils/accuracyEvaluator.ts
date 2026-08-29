@@ -31,10 +31,8 @@ function resolveMatchGameWeek(matchIndex: number, matchDateStr?: string, current
 /**
  * Checks if a player/card is eligible for statistical accuracy evaluation:
  * Excludes players who have:
- * - L40 == 0 (or missing/invalid)
- * - L5 == 0 AND L15 == 0
- * - No valid positive scores (no match history)
- * - Zero chance of playing (long-term inactive / NOT_PLAYING with 0 played matches)
+ * - L5 == 0, L15 == 0, and L40 == 0 (all zero / inactive squad member)
+ * - No valid positive scores / match history
  */
 export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
   if (!card || !card.scores) return false;
@@ -43,35 +41,19 @@ export function isPlayerEligibleForStatsEvaluation(card: SorareCard): boolean {
   const l15 = typeof card.scores.l15 === 'number' ? card.scores.l15 : 0;
   const l40 = typeof card.scores.l40 === 'number' ? card.scores.l40 : 0;
 
-  // 1. Exclure les joueurs qui n'ont aucun score ou aucun historique valide
+  // 1. Exclure les joueurs pour lesquels L5, L15 et L40 sont tous les trois à zéro (inactifs)
+  if (l5 <= 0 && l15 <= 0 && l40 <= 0) {
+    return false;
+  }
+
+  // 2. Exclure les joueurs qui n'ont aucun score ou aucun historique valide
   const recentMatches = card.scores.recentMatches || [];
   const last5 = card.scores.last5Scores || [];
 
   const hasValidMatchScores = recentMatches.some(m => typeof m?.score === 'number' && m.score > 0);
   const hasValidLast5 = last5.some(s => typeof s === 'number' && s > 0);
 
-  if (!hasValidMatchScores && !hasValidLast5) {
-    return false;
-  }
-
-  // 2. Exclure les joueurs qui ont L40 = 0 (ou <= 0)
-  if (l40 <= 0) {
-    return false;
-  }
-
-  // 3. Exclure les joueurs qui ont L5 = 0 ET L15 = 0
-  if (l5 <= 0 && l15 <= 0) {
-    return false;
-  }
-
-  // 4. Exclure les joueurs qui ne jouent jamais (0 match joué dans L5/L15)
-  const l5Played = card.scores.l5Played ?? (last5.filter(s => typeof s === 'number' && s > 0).length);
-  const l15Played = card.scores.l15Played ?? 0;
-  if (l5Played === 0 && l15Played === 0) {
-    return false;
-  }
-
-  if (card.status === 'NOT_PLAYING' && l5Played === 0) {
+  if (!hasValidMatchScores && !hasValidLast5 && (l5 <= 0 && l15 <= 0 && l40 <= 0)) {
     return false;
   }
 

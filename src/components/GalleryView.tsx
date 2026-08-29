@@ -1,9 +1,13 @@
-import React, { useState, useMemo, useTransition } from 'react';
-import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw, LayoutGrid, Square, SlidersHorizontal } from 'lucide-react';
+import React, { useState, useMemo, useTransition, useEffect } from 'react';
+import { Search, Filter, Plus, ArrowUpDown, Shield, Flame, Activity, CheckCircle2, AlertTriangle, Sparkles, UserPlus, ChevronLeft, ChevronRight, Layers, Award, Calendar, Percent, Star, X, ArrowRight, TrendingUp, TrendingDown, Info, RefreshCw, LayoutGrid, Square, SlidersHorizontal, Table, Tag, Trophy, BarChart2, Check, ExternalLink } from 'lucide-react';
 import { SorareCard, PositionCode, PlayingStatus, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, isCardMatchOnOrBeforeDate, getCardAasL15, getCardDsL15, precomputeClubContexts, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, getCardTotalBonus, getPlayerStars } from '../utils/sorareSlug';
 import { StorageService } from '../utils/storage';
+import { GalleryCompareModal } from './gallery/GalleryCompareModal';
+import { CardTagModal } from './gallery/CardTagModal';
+import { GalleryTableView } from './gallery/GalleryTableView';
+import { GalleryStacksView } from './gallery/GalleryStacksView';
 
 interface GalleryViewProps {
   cards: SorareCard[];
@@ -28,13 +32,29 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   compositions = [],
   onReplacePlayerInCompo,
 }) => {
+  // Display Mode (Point 5: Detailed, Compact, Table, Stacks)
+  const [displayMode, setDisplayMode] = useState<'grid_detailed' | 'grid_compact' | 'table' | 'stacks'>('grid_detailed');
+
   const [searchTerm, setSearchTerm] = useState('');
   const [localSearch, setLocalSearch] = useState('');
   const [isPending, startTransition] = useTransition();
   const [selectedPosition, setSelectedPosition] = useState<PositionCode | 'ALL'>('ALL');
-  // AUDIT FIX (4.3): quick one-click toggle to hide injured/suspended/DNP players, separate from
-  // the existing multi-value status dropdown (which requires deliberately picking "DNP" to filter
-  // FOR them rather than a fast way to hide them).
+  
+  // Point 2: Alignment & Availability filter
+  const [alignmentFilter, setAlignmentFilter] = useState<'ALL' | 'UNALIGNED_READY' | 'ALIGNED' | 'OVERUSED' | 'NO_FIXTURE'>('ALL');
+
+  // Point 3: Favorites & Custom Tags State
+  const [favorites, setFavorites] = useState<string[]>(() => StorageService.getFavorites());
+  const [onlyFavorites, setOnlyFavorites] = useState<boolean>(false);
+  const [cardTags, setCardTags] = useState<Record<string, string[]>>(() => StorageService.getCardTags());
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
+  const [selectedCardForTags, setSelectedCardForTags] = useState<SorareCard | null>(null);
+
+  // Point 4: Head-to-Head Comparison State
+  const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+  const [showCompareModal, setShowCompareModal] = useState<boolean>(false);
+
+  // AUDIT FIX (4.3): quick one-click toggle to hide injured/suspended/DNP players
   const [hideUnavailable, setHideUnavailable] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<PlayingStatus | 'ALL'>('ALL');
   const [selectedRarity, setSelectedRarity] = useState<string>('ALL');
@@ -81,6 +101,70 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   const [newCardL40, setNewCardL40] = useState(55);
   const [newCardStatus, setNewCardStatus] = useState<PlayingStatus>('STARTER');
 
+  // Load favorites & tags from storage on mount
+  useEffect(() => {
+    setFavorites(StorageService.getFavorites());
+    setCardTags(StorageService.getCardTags());
+  }, []);
+
+  const handleToggleFavorite = (cardId: string) => {
+    const updated = StorageService.toggleFavorite(cardId);
+    setFavorites(updated);
+  };
+
+  const handleSaveCardTags = (cardId: string, tags: string[]) => {
+    const updated = StorageService.setCardTags(cardId, tags);
+    setCardTags(updated);
+  };
+
+  const handleToggleCompare = (cardId: string) => {
+    setSelectedForCompare((prev) => {
+      if (prev.includes(cardId)) {
+        return prev.filter((id) => id !== cardId);
+      }
+      if (prev.length >= 4) {
+        // limit to 4 players max
+        return [...prev.slice(1), cardId];
+      }
+      return [...prev, cardId];
+    });
+  };
+
+  const handleRemoveCompareCard = (cardId: string) => {
+    setSelectedForCompare((prev) => prev.filter((id) => id !== cardId));
+  };
+
+  // Map of which cards are assigned to which compositions (Point 2)
+  const playerLineupMap = useMemo(() => {
+    const map = new Map<string, Array<{ compoIndex: number; compoName: string }>>();
+    compositions.forEach((compo, idx) => {
+      const compoName = compo.name || `Compo ${idx + 1}`;
+      const slots = compo.slots || {};
+      Object.values(slots).forEach((player: any) => {
+        if (player && player.id) {
+          if (!map.has(player.id)) {
+            map.set(player.id, []);
+          }
+          map.get(player.id)!.push({ compoIndex: idx, compoName });
+        }
+      });
+      if (Array.isArray(compo.players)) {
+        compo.players.forEach((player: any) => {
+          if (player && player.id) {
+            if (!map.has(player.id)) {
+              map.set(player.id, []);
+            }
+            const existing = map.get(player.id)!;
+            if (!existing.some(e => e.compoIndex === idx)) {
+              existing.push({ compoIndex: idx, compoName });
+            }
+          }
+        });
+      }
+    });
+    return map;
+  }, [compositions]);
+
   // Compute position counts across all cards
   const counts = useMemo(() => {
     const res = { ALL: cards.length, GK: 0, DEF: 0, MID: 0, FWD: 0 };
@@ -93,11 +177,16 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return res;
   }, [cards]);
 
-  // Memoized Map of card projected scores to avoid re-evaluating calculatePlayerProjectedScore inside loops.
-  // BUGFIX: this used to always score with the 'BALANCED' strategy regardless of the strategy
-  // actually selected by the user, so the score shown here could silently differ from the one
-  // used by the Optimizer/Pitch view. Now uses the real active strategy (falls back to BALANCED
-  // only if none was passed in, for backward compatibility).
+  // Distinct list of all tags present in user collection
+  const allAvailableTags = useMemo(() => {
+    const set = new Set<string>();
+    Object.values(cardTags).forEach((tagList) => {
+      tagList.forEach((t) => set.add(t));
+    });
+    return Array.from(set);
+  }, [cardTags]);
+
+  // Memoized Map of card projected scores
   const projectionsMap = useMemo(() => {
     const map = new Map<string, ReturnType<typeof calculatePlayerProjectedScore>>();
     const precomputedContext = precomputeClubContexts(cards);
@@ -106,6 +195,11 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     });
     return map;
   }, [cards, strategy]);
+
+  // Cards selected for head-to-head comparison
+  const cardsForComparison = useMemo(() => {
+    return cards.filter((c) => selectedForCompare.includes(c.id));
+  }, [cards, selectedForCompare]);
 
   const filteredCards = useMemo(() => {
     return cards.filter(card => {
@@ -194,9 +288,70 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         matchesDs = getCardDsL15(card) >= minDsL15;
       }
 
-      return matchesSearch && matchesPos && matchesAvailability && matchesStatus && matchesRarity && matchesDate && matchesWin && matchesBonus && matchesStars && matchesScore && matchesAas && matchesDs;
+      // Point 3: Favorites filter
+      const matchesFavorite = !onlyFavorites || favorites.includes(card.id);
+
+      // Point 3: Custom Tag filter
+      const matchesTag =
+        selectedTagFilter === 'ALL' ||
+        (cardTags[card.id] && cardTags[card.id].includes(selectedTagFilter));
+
+      // Point 2: Alignment & Availability filter
+      let matchesAlignment = true;
+      const alignedCount = playerLineupMap.get(card.id)?.length || 0;
+      const hasFixture = !!card.upcomingFixture?.opponent;
+
+      if (alignmentFilter === 'UNALIGNED_READY') {
+        matchesAlignment = hasFixture && alignedCount === 0 && card.status !== 'NOT_PLAYING' && card.injuryStatus !== 'INJURED' && card.injuryStatus !== 'SUSPENDED';
+      } else if (alignmentFilter === 'ALIGNED') {
+        matchesAlignment = alignedCount > 0;
+      } else if (alignmentFilter === 'OVERUSED') {
+        matchesAlignment = alignedCount >= 2;
+      } else if (alignmentFilter === 'NO_FIXTURE') {
+        matchesAlignment = !hasFixture;
+      }
+
+      return (
+        matchesSearch &&
+        matchesPos &&
+        matchesAvailability &&
+        matchesStatus &&
+        matchesRarity &&
+        matchesDate &&
+        matchesWin &&
+        matchesBonus &&
+        matchesStars &&
+        matchesScore &&
+        matchesAas &&
+        matchesDs &&
+        matchesFavorite &&
+        matchesTag &&
+        matchesAlignment
+      );
     });
-  }, [cards, searchTerm, selectedPosition, hideUnavailable, selectedStatus, selectedRarity, selectedBonusTier, selectedStarsFilter, maxMatchDate, minWinProb, minProjectedScore, minAasL15, minDsL15, projectionsMap]);
+  }, [
+    cards,
+    searchTerm,
+    selectedPosition,
+    hideUnavailable,
+    selectedStatus,
+    selectedRarity,
+    selectedBonusTier,
+    selectedStarsFilter,
+    maxMatchDate,
+    minWinProb,
+    minProjectedScore,
+    minAasL15,
+    minDsL15,
+    onlyFavorites,
+    favorites,
+    selectedTagFilter,
+    cardTags,
+    alignmentFilter,
+    playerLineupMap,
+    projectionsMap,
+    strategy,
+  ]);
 
   const sortedCards = useMemo(() => {
     return [...filteredCards].sort((a, b) => {
@@ -356,18 +511,78 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Cliquez sur une carte pour ouvrir sa fiche détaillée, son historique complet sur 15 matchs et sa date de match.
+              Centre de commandement pour optimiser vos compositions, comparer vos cartes et détecter vos stacks.
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Display Mode Switcher (Point 5) */}
+            <div className="flex items-center bg-slate-950/80 border border-slate-800 rounded-xl p-1 shadow-inner">
+              <button
+                type="button"
+                onClick={() => setDisplayMode('grid_detailed')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  displayMode === 'grid_detailed'
+                    ? 'bg-emerald-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Grille Détaillée"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Grille</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDisplayMode('grid_compact')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  displayMode === 'grid_compact'
+                    ? 'bg-emerald-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Grille Compacte"
+              >
+                <Square className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Compact</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDisplayMode('table')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  displayMode === 'table'
+                    ? 'bg-emerald-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Vue Tableau Données"
+              >
+                <Table className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Tableau</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDisplayMode('stacks')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  displayMode === 'stacks'
+                    ? 'bg-emerald-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Vue Stacks & Synergies Clubs"
+              >
+                <Shield className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Stacks</span>
+              </button>
+            </div>
+
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="flex items-center gap-2 rounded-xl bg-emerald-500 px-3.5 py-2 text-xs font-bold text-slate-950 shadow-md shadow-emerald-500/20 hover:bg-emerald-400 transition active:scale-95 whitespace-nowrap"
+              className="flex items-center gap-2 rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-700 hover:text-white transition active:scale-95 whitespace-nowrap"
             >
-              <UserPlus className="h-4 w-4" />
-              <span>Ajouter Manuellement</span>
+              <UserPlus className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="hidden md:inline">Ajouter</span>
             </button>
+
             {confirmClear ? (
               <div className="flex gap-1">
                 <button
@@ -385,13 +600,13 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                         window.location.reload();
                       }
                   }}
-                  className="flex items-center gap-2 rounded-xl bg-red-600 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-600/20 hover:bg-red-500 transition active:scale-95 whitespace-nowrap"
+                  className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white shadow-md shadow-red-600/20 hover:bg-red-500 transition active:scale-95 whitespace-nowrap"
                 >
                   Confirmer
                 </button>
                 <button
                   onClick={() => setConfirmClear(false)}
-                  className="flex items-center gap-2 rounded-xl bg-slate-700 px-3.5 py-2 text-xs font-bold text-slate-200 hover:bg-slate-600 transition active:scale-95 whitespace-nowrap"
+                  className="flex items-center gap-1.5 rounded-xl bg-slate-700 px-3 py-2 text-xs font-bold text-slate-200 hover:bg-slate-600 transition active:scale-95 whitespace-nowrap"
                 >
                   Annuler
                 </button>
@@ -399,9 +614,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             ) : (
               <button
                 onClick={() => setConfirmClear(true)}
-                className="flex items-center gap-2 rounded-xl bg-red-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-red-500/20 hover:bg-red-400 transition active:scale-95 whitespace-nowrap"
+                className="flex items-center gap-1.5 rounded-xl bg-slate-800/80 border border-slate-700 px-3 py-2 text-xs font-bold text-rose-400 hover:bg-rose-950/40 transition active:scale-95 whitespace-nowrap"
+                title="Effacer la galerie en cache"
               >
-                Effacer Galerie
+                Effacer
               </button>
             )}
           </div>
@@ -482,21 +698,88 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           </button>
         </div>
 
-        {/* AUDIT FIX (4.3): quick one-click toggle to hide injured/suspended/DNP players */}
-        <div className="mt-3">
+        {/* Quick Functional Toggles (Points 2 & 3) */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/80">
+          
+          {/* Point 2: Alignment & Readiness Quick Filter */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400 font-semibold flex items-center gap-1">
+              <Layers className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Alignement GW :</span>
+            </span>
+            <select
+              value={alignmentFilter}
+              onChange={(e) => { setAlignmentFilter(e.target.value as any); setCurrentPage(1); }}
+              className="rounded-xl border border-slate-800 bg-slate-950 px-2.5 py-1.5 text-xs font-bold text-slate-200 focus:border-emerald-400 focus:outline-none"
+            >
+              <option value="ALL">Tous les statuts d'alignement</option>
+              <option value="UNALIGNED_READY">🟢 Prêts pour GW (Non alignés)</option>
+              <option value="ALIGNED">🛡️ Déjà alignés dans une compo</option>
+              <option value="OVERUSED">⚠️ Doublons (Alignés ≥ 2 fois)</option>
+              <option value="NO_FIXTURE">❌ Sans match programmé</option>
+            </select>
+          </div>
+
+          {/* Point 3: Favorites Quick Toggle */}
+          <button
+            onClick={() => { setOnlyFavorites((prev) => !prev); setCurrentPage(1); }}
+            className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition border ${
+              onlyFavorites
+                ? 'border-amber-400 bg-amber-500/15 text-amber-300 shadow-sm'
+                : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700'
+            }`}
+          >
+            <Star className={`h-3.5 w-3.5 ${onlyFavorites ? 'fill-amber-400 text-amber-400' : 'text-slate-500'}`} />
+            <span>Favoris ({favorites.length})</span>
+          </button>
+
+          {/* Point 3: Custom Tag Dropdown Filter */}
+          {allAvailableTags.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-400 font-semibold flex items-center gap-1">
+                <Tag className="h-3.5 w-3.5 text-indigo-400" />
+                <span>Étiquette :</span>
+              </span>
+              <select
+                value={selectedTagFilter}
+                onChange={(e) => { setSelectedTagFilter(e.target.value); setCurrentPage(1); }}
+                className="rounded-xl border border-slate-800 bg-slate-950 px-2.5 py-1.5 text-xs font-bold text-slate-200 focus:border-indigo-400 focus:outline-none"
+              >
+                <option value="ALL">Toutes les étiquettes</option>
+                {allAvailableTags.map((tag) => (
+                  <option key={tag} value={tag}>
+                    🏷️ {tag}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* AUDIT FIX (4.3): Hide unavailable toggle */}
           <button
             onClick={() => { setHideUnavailable(v => !v); setCurrentPage(1); }}
-            className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition border ${
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-bold transition border ${
               hideUnavailable
                 ? 'border-amber-400 bg-amber-500/15 text-amber-300'
                 : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700'
             }`}
           >
-            <span className={`h-3.5 w-3.5 rounded-full border flex items-center justify-center ${hideUnavailable ? 'border-amber-400 bg-amber-400' : 'border-slate-600'}`}>
-              {hideUnavailable && <span className="h-1.5 w-1.5 rounded-full bg-slate-950" />}
+            <span className={`h-3 w-3 rounded-full border flex items-center justify-center ${hideUnavailable ? 'border-amber-400 bg-amber-400' : 'border-slate-600'}`}>
+              {hideUnavailable && <span className="h-1 w-1 rounded-full bg-slate-950" />}
             </span>
-            <span>Masquer les indisponibles (blessés / suspendus / DNP)</span>
+            <span>Masquer indisponibles (DNP/Blessés)</span>
           </button>
+
+          {/* Point 4: Compare Selection Count Badge */}
+          {selectedForCompare.length > 0 && (
+            <button
+              onClick={() => setShowCompareModal(true)}
+              className="ml-auto flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-md shadow-indigo-500/20 hover:bg-indigo-500 transition animate-pulse"
+            >
+              <BarChart2 className="h-3.5 w-3.5" />
+              <span>Comparer ({selectedForCompare.length})</span>
+            </button>
+          )}
         </div>
 
         {/* Search Bar & Mobile Filter Toggle */}
@@ -797,19 +1080,154 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         )}
       </div>
 
+      {/* Active Filter Badges */}
+      {(maxMatchDate || minWinProb > 0 || searchTerm || selectedPosition !== 'ALL' || hideUnavailable || selectedStatus !== 'ALL' || selectedBonusTier !== 'ALL' || selectedStarsFilter !== 'ALL' || minProjectedScore > 0 || minAasL15 > 0 || minDsL15 > 0 || onlyFavorites || selectedTagFilter !== 'ALL' || alignmentFilter !== 'ALL') && (
+        <div className="flex flex-wrap items-center gap-2 pt-1 pb-1">
+          <span className="text-[11px] text-slate-400">Filtres actifs :</span>
+          {onlyFavorites && (
+            <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400 flex items-center gap-1">
+              <Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />
+              Favoris uniquement
+            </span>
+          )}
+          {alignmentFilter !== 'ALL' && (
+            <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+              {alignmentFilter === 'UNALIGNED_READY' && '🟢 Prêts non-alignés'}
+              {alignmentFilter === 'ALIGNED' && '🛡️ Déjà alignés'}
+              {alignmentFilter === 'OVERUSED' && '⚠️ Doublons (≥ 2 compo)'}
+              {alignmentFilter === 'NO_FIXTURE' && '❌ Sans match'}
+            </span>
+          )}
+          {selectedTagFilter !== 'ALL' && (
+            <span className="rounded-md bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 text-[10px] font-bold text-indigo-300 flex items-center gap-1">
+              <Tag className="h-2.5 w-2.5 text-indigo-400" />
+              Étiquette : {selectedTagFilter}
+            </span>
+          )}
+          {maxMatchDate && (
+            <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+              Match &le; {maxMatchDate}
+            </span>
+          )}
+          {selectedStarsFilter !== 'ALL' && (
+            <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400 flex items-center gap-1">
+              <Star className="h-2.5 w-2.5 text-amber-400 fill-amber-400" />
+              {selectedStarsFilter} Étoile{Number(selectedStarsFilter) > 1 ? 's' : ''}
+            </span>
+          )}
+          {minProjectedScore > 0 && (
+            <span className="rounded-md bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
+              Score &ge; {minProjectedScore}
+            </span>
+          )}
+          {minDsL15 > 0 && (
+            <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400">
+              DS &ge; {minDsL15}
+            </span>
+          )}
+          {minAasL15 > 0 && (
+            <span className="rounded-md bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
+              AAS &ge; {minAasL15}
+            </span>
+          )}
+          {selectedBonusTier !== 'ALL' && (
+            <span className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-300 flex items-center gap-1">
+              <Sparkles className="h-2.5 w-2.5 text-amber-400" />
+              Bonus {selectedBonusTier === '20+' ? '≥ 20%' : `${selectedBonusTier}%`}
+            </span>
+          )}
+          {minWinProb > 0 && (
+            <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+              Victoire &ge; {minWinProb}%
+            </span>
+          )}
+          <button
+            onClick={() => {
+              setMaxMatchDate('');
+              setMinWinProb(0);
+              setLocalSearch('');
+              setSearchTerm('');
+              setSelectedPosition('ALL');
+              setHideUnavailable(false);
+              setSelectedStatus('ALL');
+              setSelectedRarity('ALL');
+              setSelectedBonusTier('ALL');
+              setSelectedStarsFilter('ALL');
+              setMinProjectedScore(0);
+              setMinAasL15(0);
+              setMinDsL15(0);
+              setOnlyFavorites(false);
+              setSelectedTagFilter('ALL');
+              setAlignmentFilter('ALL');
+            }}
+            className="text-[10px] font-bold text-slate-400 hover:text-white underline ml-auto"
+          >
+            Tout effacer
+          </button>
+        </div>
+      )}
+
       {/* Cards Results Count */}
       <div className="flex items-center justify-between text-xs text-slate-400">
         <span>
           Affichage de <strong className="text-white">{sortedCards.length}</strong> carte(s) trouvée(s)
-          {totalPages > 1 && ` • Page ${validPage} sur ${totalPages}`}
+          {displayMode !== 'stacks' && totalPages > 1 && ` • Page ${validPage} sur ${totalPages}`}
         </span>
+        <div className="flex items-center gap-2">
+          {selectedForCompare.length > 0 && (
+            <button
+              onClick={() => setSelectedForCompare([])}
+              className="text-[11px] text-slate-400 hover:text-rose-400 font-semibold underline"
+            >
+              Désélectionner tout ({selectedForCompare.length})
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Cards Grid - Each Card is Clickable to Open Player Scout Modal */}
-      {isLoadingCards && cards.length === 0 ? (
-        // AUDIT FIX: was previously showing "Aucune carte ne correspond à vos filtres" (a filter
-        // empty-state) during the brief window before IndexedDB hydration resolves, which
-        // misleadingly implied the user's filters were the problem rather than a loading state.
+      {/* Display Mode 1: Stacks & Synergies View */}
+      {displayMode === 'stacks' ? (
+        <GalleryStacksView
+          cards={filteredCards}
+          strategy={strategy}
+          onOpenScout={onOpenScout}
+          onFilterByClub={(clubName) => {
+            setSearchTerm(clubName);
+            setLocalSearch(clubName);
+            setDisplayMode('grid_detailed');
+          }}
+          onReplacePlayer={(card) => {
+            setSelectedCardForReplace(card);
+            setShowReplacePopup(true);
+            setSelectedCompoIndexForReplace(0);
+          }}
+          projectionsMap={projectionsMap}
+          playerLineupMap={playerLineupMap}
+        />
+      ) : displayMode === 'table' ? (
+        /* Display Mode 2: Table Data View */
+        <GalleryTableView
+          cards={sortedCards}
+          strategy={strategy}
+          allCards={cards}
+          onOpenScout={onOpenScout}
+          favorites={favorites}
+          onToggleFavorite={handleToggleFavorite}
+          cardTags={cardTags}
+          onOpenTagModal={(card) => setSelectedCardForTags(card)}
+          selectedForCompare={selectedForCompare}
+          onToggleCompare={handleToggleCompare}
+          onReplacePlayer={(card) => {
+            setSelectedCardForReplace(card);
+            setShowReplacePopup(true);
+            setSelectedCompoIndexForReplace(0);
+          }}
+          projectionsMap={projectionsMap}
+          playerLineupMap={playerLineupMap}
+          sortBy={sortBy}
+          onSortChange={(newSort) => setSortBy(newSort)}
+        />
+      ) : isLoadingCards && cards.length === 0 ? (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-12 text-center animate-pulse">
           <div className="mx-auto h-8 w-8 rounded-full border-2 border-slate-600 border-t-emerald-400 animate-spin mb-3" />
           <p className="text-sm font-semibold text-slate-300">Chargement de votre galerie...</p>
@@ -834,6 +1252,9 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               setMinProjectedScore(0);
               setMinAasL15(0);
               setMinDsL15(0);
+              setOnlyFavorites(false);
+              setSelectedTagFilter('ALL');
+              setAlignmentFilter('ALL');
             }}
             className="inline-flex items-center gap-2 rounded-xl bg-emerald-500/20 border border-emerald-500/50 px-4 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/30 transition"
           >
@@ -841,7 +1262,147 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             <span>Réinitialiser tous les filtres</span>
           </button>
         </div>
+      ) : displayMode === 'grid_compact' ? (
+        /* Display Mode 3: Grid Compact */
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-2.5">
+          {paginatedCards.map((card) => {
+            const posBadge = formatPositionBadge(card.positionCode);
+            const bonusPct = getCardTotalBonus(card);
+            const isInjured = card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED';
+            const isFav = favorites.includes(card.id);
+            const isCompared = selectedForCompare.includes(card.id);
+            const tags = cardTags[card.id] || [];
+            const lineups = playerLineupMap.get(card.id) || [];
+            const cachedBreakdown = projectionsMap.get(card.id);
+            const breakdown = cachedBreakdown || calculatePlayerProjectedScore(card, strategy, cards);
+
+            return (
+              <div
+                key={card.id}
+                onClick={() => onOpenScout(card)}
+                className={`group relative flex flex-col justify-between rounded-xl border p-2.5 transition-all duration-150 cursor-pointer shadow hover:shadow-lg hover:border-emerald-500/60 ${
+                  isCompared
+                    ? 'border-indigo-500 bg-indigo-950/20 ring-1 ring-indigo-500'
+                    : isInjured
+                    ? 'border-rose-900/60 bg-rose-950/20 opacity-80'
+                    : 'border-slate-800 bg-slate-900/90 hover:bg-slate-850'
+                }`}
+              >
+                {/* Compact Top Bar */}
+                <div className="flex items-center justify-between gap-1 mb-1.5">
+                  <div className="flex items-center gap-1">
+                    <span className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-black ${posBadge.bg} ${posBadge.text} border ${posBadge.border}`}>
+                      {card.positionCode}
+                    </span>
+                    <span className="text-[9px] font-bold text-amber-300 bg-amber-950/70 border border-amber-500/30 px-1 py-0.2 rounded">
+                      +{bonusPct}%
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleFavorite(card.id)}
+                      className="p-1 text-slate-500 hover:text-amber-400 transition"
+                      title={isFav ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                    >
+                      <Star className={`h-3.5 w-3.5 ${isFav ? 'fill-amber-400 text-amber-400' : ''}`} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleCompare(card.id)}
+                      className={`p-1 rounded transition ${isCompared ? 'text-indigo-400 bg-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'}`}
+                      title={isCompared ? 'Retirer du comparateur' : 'Ajouter au comparateur'}
+                    >
+                      <BarChart2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Photo & Name */}
+                <div className="flex items-center gap-2">
+                  <div className="relative h-10 w-10 flex-shrink-0">
+                    {card.pictureUrl ? (
+                      <img
+                        src={card.pictureUrl}
+                        alt={card.displayName}
+                        referrerPolicy="no-referrer"
+                        className="h-10 w-10 rounded-lg object-contain bg-slate-950/40 border border-slate-700 p-0.5"
+                      />
+                    ) : (
+                      <div className="h-10 w-10 rounded-lg bg-slate-800 flex items-center justify-center text-[10px] font-black text-slate-400 border border-slate-700">
+                        {card.positionCode}
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h4 className="truncate text-xs font-bold text-white group-hover:text-emerald-400 transition">
+                      {card.displayName}
+                    </h4>
+                    <p className="truncate text-[10px] text-slate-400">{card.club?.name || 'Club'}</p>
+                  </div>
+                </div>
+
+                {/* Scores pill */}
+                <div className="mt-2 grid grid-cols-2 gap-1 rounded-lg bg-slate-950/80 p-1 text-center border border-slate-800">
+                  <div>
+                    <span className="block text-[9px] text-slate-400">L5</span>
+                    <span className={`text-xs font-black ${card.scores.l5 >= 50 ? 'text-emerald-400' : 'text-slate-300'}`}>
+                      {card.scores.l5 > 0 ? card.scores.l5 : '-'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="block text-[9px] text-slate-400">Projeté</span>
+                    <span className="text-xs font-black text-emerald-400">
+                      {breakdown.projectedScore}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Opponent & Alignment info */}
+                <div className="mt-1.5 space-y-1">
+                  {card.upcomingFixture ? (
+                    <div className="flex items-center justify-between text-[9px] text-slate-400 bg-slate-950/60 px-1.5 py-0.5 rounded border border-slate-800/60">
+                      <span className="truncate max-w-[70px]">
+                        {card.upcomingFixture.isHome ? 'vs' : '@'} {card.upcomingFixture.opponent}
+                      </span>
+                      <span className="font-bold text-slate-200">
+                        FDR {card.upcomingFixture.difficultyRating || 3}/5
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="text-[9px] text-slate-500 text-center py-0.5">Pas de match</div>
+                  )}
+
+                  {/* Alignment badge */}
+                  <div className="flex items-center justify-between gap-1 text-[9px]">
+                    {lineups.length > 0 ? (
+                      <span className={`truncate px-1.5 py-0.5 rounded font-bold border ${lineups.length >= 2 ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'}`}>
+                        🛡️ {lineups[0].compoName} {lineups.length > 1 ? `(+${lineups.length - 1})` : ''}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 px-1 font-medium">Non aligné</span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedCardForTags(card);
+                      }}
+                      className="text-slate-500 hover:text-indigo-300 transition"
+                      title="Gérer les étiquettes"
+                    >
+                      <Tag className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
+        /* Display Mode 4: Grid Detailed */
         <div className={`grid ${mobileColumns === '2' ? 'grid-cols-2 gap-2 sm:gap-4' : 'grid-cols-1 gap-3.5'} sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-9`}>
           {paginatedCards.map((card) => {
             const posBadge = formatPositionBadge(card.positionCode);
@@ -853,13 +1414,19 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             const cachedBreakdown = projectionsMap.get(card.id);
             const breakdown = cachedBreakdown || calculatePlayerProjectedScore(card, strategy, cards);
             const projScore = breakdown.projectedScore;
+            const isFav = favorites.includes(card.id);
+            const isCompared = selectedForCompare.includes(card.id);
+            const tags = cardTags[card.id] || [];
+            const lineups = playerLineupMap.get(card.id) || [];
 
             return (
               <div
                 key={card.id}
                 onClick={() => onOpenScout(card)}
-                className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-200 overflow-hidden shadow-lg hover:shadow-2xl cursor-pointer hover:scale-[1.02] hover:border-emerald-500/60 active:scale-[0.99] ${
-                  isInjured
+                className={`group relative flex flex-col justify-between rounded-2xl border transition-all duration-200 overflow-hidden shadow-lg hover:shadow-2xl cursor-pointer hover:scale-[1.02] active:scale-[0.99] ${
+                  isCompared
+                    ? 'border-indigo-500 bg-indigo-950/20 ring-2 ring-indigo-500/50'
+                    : isInjured
                     ? 'border-rose-900/60 bg-rose-950/20 opacity-80'
                     : card.status === 'DOUBTFUL' || card.status === 'NOT_PLAYING'
                     ? 'border-slate-800/80 bg-slate-900/60 opacity-85'
@@ -880,10 +1447,31 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <span className={`rounded-md border px-2 py-0.5 text-[10px] font-bold ${statusInfo.color}`}>
-                        {statusInfo.label}
-                      </span>
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {/* Favorite Button */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleFavorite(card.id)}
+                        className={`p-1 rounded-lg transition ${
+                          isFav ? 'text-amber-400 bg-amber-500/10' : 'text-slate-500 hover:text-amber-400'
+                        }`}
+                        title={isFav ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                      >
+                        <Star className={`h-3.5 w-3.5 ${isFav ? 'fill-amber-400 text-amber-400' : ''}`} />
+                      </button>
+
+                      {/* Compare Checkbox */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCompare(card.id)}
+                        className={`p-1 rounded-lg transition ${
+                          isCompared ? 'text-indigo-300 bg-indigo-500/20' : 'text-slate-500 hover:text-indigo-400'
+                        }`}
+                        title={isCompared ? 'Retirer du comparateur' : 'Ajouter au comparateur'}
+                      >
+                        <BarChart2 className="h-3.5 w-3.5" />
+                      </button>
+
                       <span
                         className="rounded-md border border-amber-500/40 bg-amber-950/70 px-1.5 py-0.5 text-[10px] font-black text-amber-300 shadow-sm flex items-center gap-0.5 shrink-0"
                         title={`Bonus de la carte: +${bonusPct}%`}
@@ -946,8 +1534,49 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                     </div>
                   </div>
 
+                  {/* Alignment & Tags row */}
+                  <div className="mt-2.5 flex items-center justify-between gap-1 flex-wrap text-[10px]">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {lineups.length > 0 ? (
+                        <span className={`rounded-md border px-1.5 py-0.5 font-bold ${
+                          lineups.length >= 2
+                            ? 'border-amber-500/40 bg-amber-950/40 text-amber-300'
+                            : 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300'
+                        }`}>
+                          🛡️ {lineups[0].compoName} {lineups.length > 1 ? `(+${lineups.length - 1})` : ''}
+                        </span>
+                      ) : (
+                        <span className="rounded-md border border-slate-800 bg-slate-950/70 px-1.5 py-0.5 text-slate-400">
+                          🟢 Non aligné
+                        </span>
+                      )}
+
+                      {/* Custom Tags Pills */}
+                      {tags.slice(0, 2).map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-md bg-indigo-500/15 border border-indigo-500/30 px-1.5 py-0.5 text-[9px] font-bold text-indigo-300"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedCardForTags(card);
+                      }}
+                      className="p-1 text-slate-500 hover:text-indigo-300 rounded hover:bg-slate-800 transition"
+                      title="Gérer les étiquettes de cette carte"
+                    >
+                      <Tag className="h-3 w-3" />
+                    </button>
+                  </div>
+
                   {/* SO5 Stats Pillars (L5 / L15 / L40) */}
-                  <div className="mt-3.5 grid grid-cols-3 gap-1.5 rounded-xl bg-slate-950/80 p-2 border border-slate-800/80">
+                  <div className="mt-2.5 grid grid-cols-3 gap-1.5 rounded-xl bg-slate-950/80 p-2 border border-slate-800/80">
                     <div className="text-center">
                       <span className="block text-[10px] font-semibold text-slate-400">L5 (Forme)</span>
                       <span className={`text-sm font-black ${
@@ -990,7 +1619,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
                   {/* Upcoming Matchup & Win Prob from Bookmaker */}
                   {card.upcomingFixture && (
-                    <div className="mt-2.5 rounded-xl bg-slate-950/70 p-2 text-[11px] border border-slate-800/60 space-y-1">
+                    <div className="mt-2 rounded-xl bg-slate-950/70 p-2 text-[11px] border border-slate-800/60 space-y-1">
                       <div className="flex items-center justify-between text-slate-400">
                         <span className="text-[10px] truncate max-w-[130px] font-medium">
                           {card.upcomingFixture.isHome ? '🏠 vs' : '✈️ @'} <strong className="text-slate-200">{card.upcomingFixture.opponent}</strong>
@@ -1003,15 +1632,15 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                         <span>{formattedDate}</span>
                         <div className="flex items-center gap-1 text-[10px]">
                           <span className="font-semibold text-slate-300" title="Score de base">{breakdown.baseProjectedScore} pts</span>
-                          <span className="font-bold text-amber-300" title={`Bonus de carte de +${breakdown.cardBonusPercentage}% (soit +${breakdown.cardBonusScore} pts)`}>+{breakdown.cardBonusPercentage}% (+{breakdown.cardBonusScore} pts)</span>
-                          <span className="font-black text-emerald-400 bg-emerald-500/10 px-1 rounded" title="Score total projeté avec bonus">= {projScore} ({breakdown.projectedFloor}-{breakdown.projectedCeiling}) pts</span>
+                          <span className="font-bold text-amber-300" title={`Bonus de carte: +${breakdown.cardBonusPercentage}%`}>+{breakdown.cardBonusPercentage}%</span>
+                          <span className="font-black text-emerald-400 bg-emerald-500/10 px-1 rounded" title="Score total projeté avec bonus">= {projScore} pts</span>
                         </div>
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* Card Actions Footer - Removed Scout button as clicking card opens player page */}
+                {/* Card Actions Footer */}
                 <div className="border-t border-slate-800/80 bg-slate-950/90 p-2.5 flex items-center justify-between gap-1.5">
                   <span className="text-[11px] text-slate-400 font-medium">
                     Cliquer pour analyser
@@ -1036,8 +1665,85 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         </div>
       )}
 
+      {/* Floating Bottom Comparison Dock (Point 4) */}
+      {selectedForCompare.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[95%] max-w-2xl rounded-2xl border border-indigo-500/50 bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-md animate-fadeIn">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 overflow-x-auto py-1">
+              <span className="text-xs font-black text-indigo-300 shrink-0">
+                Comparateur ({selectedForCompare.length}/4) :
+              </span>
+              <div className="flex items-center gap-1.5">
+                {cardsForComparison.map((c) => (
+                  <div
+                    key={c.id}
+                    className="flex items-center gap-1.5 rounded-xl bg-slate-950 border border-slate-800 px-2 py-1 text-xs text-white shrink-0"
+                  >
+                    <span className="text-[10px] font-black text-emerald-400">{c.positionCode}</span>
+                    <span className="font-bold truncate max-w-[90px]">{c.displayName}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCompareCard(c.id)}
+                      className="text-slate-500 hover:text-rose-400 ml-1"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSelectedForCompare([])}
+                className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-300 hover:text-white"
+              >
+                Vider
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCompareModal(true)}
+                className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow-lg shadow-indigo-500/30 hover:bg-indigo-500 transition active:scale-95"
+              >
+                <BarChart2 className="h-4 w-4" />
+                <span>Comparer côte à côte</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Point 4: Head-to-Head Comparison Modal */}
+      <GalleryCompareModal
+        isOpen={showCompareModal}
+        onClose={() => setShowCompareModal(false)}
+        selectedCards={cardsForComparison}
+        onRemoveCard={handleRemoveCompareCard}
+        onClear={() => setSelectedForCompare([])}
+        onOpenScout={onOpenScout}
+        strategy={strategy}
+        allCards={cards}
+        onReplacePlayer={(card) => {
+          setSelectedCardForReplace(card);
+          setShowReplacePopup(true);
+          setSelectedCompoIndexForReplace(0);
+          setShowCompareModal(false);
+        }}
+      />
+
+      {/* Point 3: Card Tagging Modal */}
+      <CardTagModal
+        isOpen={!!selectedCardForTags}
+        onClose={() => setSelectedCardForTags(null)}
+        card={selectedCardForTags}
+        currentTags={selectedCardForTags ? cardTags[selectedCardForTags.id] || [] : []}
+        onSaveTags={handleSaveCardTags}
+        allExistingTags={allAvailableTags}
+      />
+
       {/* Pagination Controls */}
-      {totalPages > 1 && (
+      {displayMode !== 'stacks' && totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 pt-4">
           <button
             onClick={() => handlePageChange(Math.max(1, validPage - 1))}
@@ -1786,6 +2492,38 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                   <option value="DOUBTFUL">Incertains (ou mieux)</option>
                   <option value="NOT_PLAYING">DNP (Ne joue pas)</option>
                 </select>
+              </div>
+
+              {/* Alignment Filter */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Statut d'alignement GW</label>
+                <select
+                  value={alignmentFilter}
+                  onChange={(e) => { setAlignmentFilter(e.target.value as any); setCurrentPage(1); }}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                >
+                  <option value="ALL">Tous les statuts</option>
+                  <option value="UNALIGNED_READY">🟢 Prêts pour GW (Non alignés)</option>
+                  <option value="ALIGNED">🛡️ Déjà alignés dans une compo</option>
+                  <option value="OVERUSED">⚠️ Doublons (Alignés ≥ 2 fois)</option>
+                  <option value="NO_FIXTURE">❌ Sans match programmé</option>
+                </select>
+              </div>
+
+              {/* Favorites only */}
+              <div>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onlyFavorites}
+                    onChange={(e) => { setOnlyFavorites(e.target.checked); setCurrentPage(1); }}
+                    className="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-0 h-4 w-4"
+                  />
+                  <span className="text-amber-300 font-bold flex items-center gap-1">
+                    <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                    Favoris uniquement ({favorites.length})
+                  </span>
+                </label>
               </div>
 
               {/* Hide unavailable */}

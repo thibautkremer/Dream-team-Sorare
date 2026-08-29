@@ -1,7 +1,7 @@
 export type PositionCode = 'GK' | 'DEF' | 'MID' | 'FWD';
 export type SlotPosition = 'GK' | 'DEF' | 'MID' | 'FWD' | 'EXTRA';
-export type PlayingStatus = 'STARTER' | 'REGULAR' | 'SUPER_SUBSTITUTE' | 'SUBSTITUTE' | 'NOT_PLAYING' | 'BENCH' | 'DOUBTFUL' | 'CONFIRMED';
-export type InjuryStatus = 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED';
+export type PlayingStatus = 'STARTER' | 'REGULAR' | 'SUPER_SUBSTITUTE' | 'SUBSTITUTE' | 'NOT_PLAYING' | 'BENCH' | 'DOUBTFUL' | 'CONFIRMED' | string;
+export type InjuryStatus = 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED' | string;
 export type StrategyType = 'BALANCED' | 'SAFE_TITULAR' | 'HIGH_CEILING' | 'PURE_FORM';
 export type ScoringFocus = 'BALANCED' | 'AAS' | 'DS';
 export type CardRarity = 'common' | 'limited' | 'rare' | 'super_rare' | 'unique' | 'custom' | 'COMMON' | 'LIMITED' | 'RARE' | 'SUPER_RARE' | 'UNIQUE' | string;
@@ -162,6 +162,10 @@ export interface SorareCard {
   } | string;
   league?: string;
   status: PlayingStatus;
+  playingStatus?: PlayingStatus;
+  lineupStatus?: OfficialLineupStatus;
+  isStarter?: boolean;
+  isLineupAnnounced?: boolean;
   starterConfidence: number; // 0 - 100%
   injuryStatus: InjuryStatus;
   injuryDetails?: string;
@@ -449,6 +453,7 @@ export interface StartingXIPlayerInfo {
   displayName: string;
   clubName?: string;
   status: PlayingStatus | string;
+  playingStatus?: PlayingStatus | string;
   lineupStatus: OfficialLineupStatus;
   isStarter: boolean;
   isLineupAnnounced: boolean;
@@ -458,6 +463,29 @@ export interface StartingXIPlayerInfo {
   opponent?: string;
   gameId?: string;
   gameStatus?: string;
+}
+
+export interface LineupValidationIssue {
+  type: 'DUPLICATE_PLAYER_ID' | 'BENCH_PLAYER' | 'OUT_PLAYER' | 'NON_STARTER' | 'MISSING_SLOT' | 'SAME_CLUB_STARTER_CONFLICT';
+  slot?: SlotPosition;
+  playerId?: string;
+  playerName?: string;
+  reason: string;
+  severity: 'ERROR' | 'WARNING';
+}
+
+export interface LineupValidationResult {
+  isValid: boolean;
+  hasDuplicates: boolean;
+  hasBenchOrOutPlayers: boolean;
+  hasSameClubStarterConflict?: boolean;
+  duplicatePlayerIds: string[];
+  duplicatePlayerNames: string[];
+  benchOrOutPlayerIds: string[];
+  benchOrOutPlayerNames: string[];
+  conflictingClubNames?: string[];
+  issues: LineupValidationIssue[];
+  rejectionReasons: string[];
 }
 
 export interface NonStarterAlert {

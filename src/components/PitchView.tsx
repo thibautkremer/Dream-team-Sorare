@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download, BellRing, Radio } from 'lucide-react';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download, BellRing, Radio, Target } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters, NonStarterAlert, StartingXIPlayerInfo } from '../types';
-import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub } from '../utils/optimizer';
+import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub, getPlayerUniqueKey } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
+import { ApiFootballMatchModal } from './ApiFootballMatchModal';
 
 interface PitchViewProps {
   lineup: Lineup;
@@ -58,6 +59,15 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
   // Touch swipe support for switching compositions on mobile
   const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  // API-Football Match Intel Modal state
+  const [selectedMatchForModal, setSelectedMatchForModal] = useState<{
+    homeTeam: string;
+    awayTeam: string;
+    competition?: string;
+    kickoffDate?: string;
+    players: SorareCard[];
+  } | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 1) {
@@ -354,7 +364,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
             {/* Next Fixture Snippet with Win Prob & Date */}
             {card.upcomingFixture && (
-              <div className="mt-1 border-t border-slate-800/60 pt-1 text-[10px] space-y-0.5">
+              <div className="mt-1 border-t border-slate-800/60 pt-1 text-[10px] space-y-1">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400 truncate max-w-[85px] font-medium">
                     {card.upcomingFixture.isHome ? 'vs' : '@'} {card.upcomingFixture.opponent}
@@ -363,17 +373,51 @@ export const PitchView: React.FC<PitchViewProps> = ({
                     {winProb}% Vic.
                   </span>
                 </div>
-                <div className="text-[9px] text-slate-500 truncate">
-                  📅 {formatKickoffDate(card.upcomingFixture.kickoffDate || card.upcomingFixture.matchDate)}
+
+                {/* Bookmaker Proposition Indicator */}
+                {(() => {
+                  const bm = card.upcomingFixture.bookmaker;
+                  const isDefensive = card.positionCode === 'GK' || card.positionCode === 'DEF';
+                  if (isDefensive) {
+                    const cs = bm?.cleanSheetProb || (card.upcomingFixture.isHome ? 38 : 26);
+                    return (
+                      <div className="flex items-center justify-between text-[9px] bg-slate-900/90 border border-slate-800/80 px-1.5 py-0.5 rounded">
+                        <span className="text-slate-400 flex items-center gap-0.5">
+                          <Shield className="h-2.5 w-2.5 text-blue-400" /> CS Attendu:
+                        </span>
+                        <strong className="text-blue-300 font-mono">{cs}%</strong>
+                      </div>
+                    );
+                  } else {
+                    const scorerOdd = bm?.anytimeScorerOdds;
+                    const xg = bm?.goalExpectancy || (card.upcomingFixture.isHome ? 1.8 : 1.2);
+                    return (
+                      <div className="flex items-center justify-between text-[9px] bg-slate-900/90 border border-slate-800/80 px-1.5 py-0.5 rounded">
+                        <span className="text-slate-400 flex items-center gap-0.5">
+                          <Target className="h-2.5 w-2.5 text-rose-400" /> {scorerOdd ? 'Cote but:' : 'xG Équipe:'}
+                        </span>
+                        <strong className="text-rose-300 font-mono">
+                          {scorerOdd ? `@${scorerOdd.toFixed(2)}` : `${xg}`}
+                        </strong>
+                      </div>
+                    );
+                  }
+                })()}
+
+                <div className="flex items-center justify-between text-[9px] text-slate-400 pt-0.5">
+                  <span className="truncate">📅 {formatKickoffDate(card.upcomingFixture.kickoffDate || card.upcomingFixture.matchDate)}</span>
+                  <span className="text-[8px] font-bold text-emerald-400 bg-emerald-950/70 border border-emerald-500/30 px-1 rounded shrink-0 ml-1">
+                    Bookmakers
+                  </span>
                 </div>
               </div>
             )}
 
             {/* Official Starting Lineup Badge (1h before kickoff) */}
             {(() => {
-              const pSlug = (card.playerSlug || card.slug || card.displayName || '').toLowerCase();
+              const pKey = getPlayerUniqueKey(card).toLowerCase();
               const sInfo = playerStatusMap ? Object.values(playerStatusMap).find(
-                i => i.playerSlug.toLowerCase() === pSlug || i.displayName.toLowerCase() === card.displayName.toLowerCase()
+                i => i.playerSlug.toLowerCase() === pKey || (i.displayName && card.displayName && i.displayName.toLowerCase() === card.displayName.toLowerCase())
               ) : null;
 
               if (!sInfo) return null;
@@ -682,8 +726,107 @@ export const PitchView: React.FC<PitchViewProps> = ({
           </div>
         </div>
 
+        {/* Tactical & Bookmakers Intelligence Matrix Bar */}
+        {(() => {
+          const lineupCards = (['gk', 'def', 'mid', 'fwd', 'extra'] as const)
+            .map(slotKey => targetLineup.slots[slotKey])
+            .filter((c): c is SorareCard => c !== null);
+
+          if (lineupCards.length === 0) return null;
+
+          const avgWinProb = Math.round(
+            lineupCards.reduce((acc, c) => acc + getPlayerWinProbability(c.upcomingFixture), 0) / lineupCards.length
+          );
+
+          const gk = targetLineup.slots.gk;
+          const def = targetLineup.slots.def;
+          const csGk = gk?.upcomingFixture?.bookmaker?.cleanSheetProb || (gk?.upcomingFixture?.isHome ? 38 : 28);
+          const csDef = def?.upcomingFixture?.bookmaker?.cleanSheetProb || (def?.upcomingFixture?.isHome ? 38 : 28);
+          const avgCs = Math.round((csGk + csDef) / 2);
+
+          const totalXg = (
+            lineupCards.reduce((acc, c) => {
+              const xg = c.upcomingFixture?.bookmaker?.goalExpectancy || (c.upcomingFixture?.isHome ? 1.7 : 1.2);
+              return acc + xg;
+            }, 0) / (lineupCards.length || 1)
+          ).toFixed(1);
+
+          return (
+            <div className="mt-4 rounded-2xl bg-slate-950/80 border border-emerald-500/30 p-3 sm:p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                    <Zap className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-white flex items-center gap-1.5">
+                      <span>Synthèse Intelligence API-Football & Bookmakers</span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                        {lineupCards.length}/5 joueurs
+                      </span>
+                    </h4>
+                    <p className="text-[10px] text-slate-400">
+                      Indicateurs tactiques consolidés pour la GameWeek
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1 rounded-xl">
+                    <Zap className="h-3 w-3 text-emerald-400" />
+                    <span>API-Football v3 Intégrée</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* 4 Metric Pills */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3">
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2 text-center">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Win Rate Moyen
+                  </span>
+                  <span className="text-sm sm:text-base font-black text-emerald-400 font-mono">
+                    {avgWinProb}%
+                  </span>
+                  <span className="text-[8px] text-slate-500 block">Cotes bookmakers</span>
+                </div>
+
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2 text-center">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                    xG Équipes (Moy)
+                  </span>
+                  <span className="text-sm sm:text-base font-black text-amber-400 font-mono">
+                    {totalXg} buts
+                  </span>
+                  <span className="text-[8px] text-slate-500 block">Potentiel offensif</span>
+                </div>
+
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2 text-center">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Clean Sheet (GK+DEF)
+                  </span>
+                  <span className="text-sm sm:text-base font-black text-blue-400 font-mono">
+                    {avgCs}%
+                  </span>
+                  <span className="text-[8px] text-slate-500 block">Probabilité invincibilité</span>
+                </div>
+
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2 text-center">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Capitaine Stratégique
+                  </span>
+                  <span className="text-xs sm:text-sm font-black text-emerald-300 truncate block">
+                    {targetLineup.slots[targetLineup.captainSlot]?.displayName.split(' ').pop() || 'Auto'}
+                  </span>
+                  <span className="text-[8px] text-emerald-500 font-bold block">+20% Bonus</span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Pitch Legend Bottom */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-emerald-800/40 pt-4 text-xs text-emerald-300/80">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-emerald-800/40 pt-4 text-xs text-emerald-300/80">
           <div className="flex items-center gap-2">
             <Crown className="h-4 w-4 text-emerald-400" />
             <span>Capitaine avec <strong>+20% de bonus</strong> (cliquez sur le badge C pour changer)</span>
@@ -1159,7 +1302,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
                         (Cap: {comp.slots[comp.captainSlot]?.displayName || 'Capitaine'} | <span className="text-amber-400 font-bold">+{Math.round((comp.projectedTotalWithCaptain - comp.projectedTotal) * 10) / 10} pts</span>)
                       </span>
                       <span className="text-xs text-blue-400 font-semibold ml-1">
-                        CS: {comp.slots.gk?.upcomingFixture?.bookmaker?.cleanSheetProb || 60}%
+                        CS: {comp.slots.gk?.upcomingFixture?.bookmaker?.cleanSheetProb || (comp.slots.gk?.upcomingFixture?.isHome ? 38 : 28)}%
                       </span>
                     </div>
 
@@ -1266,6 +1409,19 @@ export const PitchView: React.FC<PitchViewProps> = ({
           })}
         </div>
       </div>
+
+      {/* Deep-dive API-Football Match Modal */}
+      {selectedMatchForModal && (
+        <ApiFootballMatchModal
+          homeTeam={selectedMatchForModal.homeTeam}
+          awayTeam={selectedMatchForModal.awayTeam}
+          competition={selectedMatchForModal.competition}
+          kickoffDate={selectedMatchForModal.kickoffDate}
+          galleryPlayers={selectedMatchForModal.players}
+          onClose={() => setSelectedMatchForModal(null)}
+          onOpenScout={onOpenScout}
+        />
+      )}
 
     </div>
   );

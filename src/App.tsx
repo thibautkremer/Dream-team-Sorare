@@ -15,11 +15,24 @@ import { StartingXIMonitorModal } from './components/StartingXIMonitorModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { useStartingXIMonitor } from './hooks/useStartingXIMonitor';
 import { StorageService } from './utils/storage';
-import { optimizeLineup, generateFourDistinctLineups, getPlayerUniqueKey, calculatePlayerProjectedScore } from './utils/optimizer';
+import { 
+  optimizeLineup, 
+  generateFourDistinctLineups, 
+  getPlayerUniqueKey, 
+  calculatePlayerProjectedScore, 
+  sanitizeLineupNoDuplicatePlayers, 
+  isPlayerNonStarter, 
+  computePlayerPlayingStatus,
+  enforceSingleStarterPerClub,
+  validateLineup, 
+  validateLineupDuringOptimization 
+} from './utils/optimizer';
 
-import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters, PlayingStatus } from './types';
+import { SorareCard, Lineup, StrategyType, LineupOptimizationFilters, PlayingStatus, OfficialLineupStatus } from './types';
 import { getCurrentGameWeekNumber } from './data/fixturesData';
 import { CheckCircle2, AlertCircle, ShieldAlert, Sparkles, RefreshCw, Share2 } from 'lucide-react';
+
+import { Toaster } from 'sonner';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'pitch' | 'gallery' | 'matchups' | 'live' | 'ai-coach' | 'admin'>('pitch');
@@ -77,6 +90,45 @@ export default function App() {
     compositions,
     currentLineup: lineup,
   });
+
+  // Synchroniser dynamiquement les prédictions de titularisation et alertes dans les cartes
+  useEffect(() => {
+    if (playerStatusMap && Object.keys(playerStatusMap).length > 0) {
+      setCards(prevCards => {
+        let changed = false;
+        const updated = prevCards.map(c => {
+          const key = getPlayerUniqueKey(c);
+          const info = playerStatusMap[key];
+          if (info) {
+            let newStatus = c.status;
+            let newConf = c.starterConfidence;
+            if (info.lineupStatus === 'CONFIRMED_BENCH' || info.playingStatus === 'SUBSTITUTE' || info.playingStatus === 'BENCH') {
+              newStatus = 'SUBSTITUTE';
+              newConf = 20;
+            } else if (info.lineupStatus === 'CONFIRMED_OUT' || info.playingStatus === 'NOT_PLAYING') {
+              newStatus = 'NOT_PLAYING';
+              newConf = 0;
+            } else if (info.lineupStatus === 'CONFIRMED_STARTER' || info.playingStatus === 'STARTER') {
+              newStatus = 'STARTER';
+              newConf = 100;
+            }
+            if (newStatus !== c.status || newConf !== c.starterConfidence || info.lineupStatus !== c.lineupStatus) {
+              changed = true;
+              return {
+                ...c,
+                status: newStatus as any,
+                starterConfidence: newConf,
+                playingStatus: info.playingStatus as any,
+                lineupStatus: info.lineupStatus as any,
+              };
+            }
+          }
+          return c;
+        });
+        return changed ? updated : prevCards;
+      });
+    }
+  }, [playerStatusMap]);
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
@@ -248,7 +300,15 @@ export default function App() {
               const newCards = prevCards.map(c => {
                 if (data.confirmedSlugs.includes(c.slug)) {
                   changed = true;
-                  return { ...c, status: 'STARTER' as PlayingStatus, starterConfidence: 100 };
+                  return { 
+                    ...c, 
+                    status: 'STARTER' as PlayingStatus, 
+                    playingStatus: 'STARTER' as PlayingStatus,
+                    lineupStatus: 'CONFIRMED_STARTER' as OfficialLineupStatus,
+                    isStarter: true,
+                    confirmed_starter: true,
+                    starterConfidence: 100 
+                  };
                 }
                 return c;
               });
@@ -557,6 +617,23 @@ export default function App() {
   const handleOptimizeAI = async (strategy: StrategyType = 'BALANCED') => {
     setIsOptimizing(true);
     try {
+      // 1. Extraire les cartes et joueurs des compositions VERROUILLÉES pour ne pas réutiliser leurs joueurs
+      const lockedUsedCardIds = new Set<string>();
+      const lockedUsedPlayerKeys = new Set<string>();
+      compositions.forEach((comp) => {
+        if (comp && comp.isLocked && comp.slots) {
+          Object.values(comp.slots).forEach((c) => {
+            if (c) {
+              lockedUsedCardIds.add(c.id);
+              lockedUsedPlayerKeys.add(getPlayerUniqueKey(c));
+            }
+          });
+        }
+      });
+
+      // 2. Filtrer les cartes disponibles en excluant rigoureusement les remplaçants et non-joueurs
+      const availableCardsForOptimization = cards.filter(c => !isPlayerNonStarter(c) && !lockedUsedCardIds.has(c.id));
+
       const appToken = StorageService.getAppToken();
       const response = await fetch('/api/ai/optimize-lineup', {
         method: 'POST',
@@ -565,7 +642,7 @@ export default function App() {
           ...(appToken ? { 'x-app-token': appToken } : {})
         },
         body: JSON.stringify({
-          cards,
+          cards: availableCardsForOptimization.length > 0 ? availableCardsForOptimization : cards,
           strategy,
           gameWeek: gameWeek,
           filters,
@@ -578,18 +655,31 @@ export default function App() {
           const aiData = resJson.data;
           const rec = aiData.recommendedLineup;
 
-          const gk = cards.find(c => c.id === rec.gkId) || cards.find(c => c.positionCode === 'GK') || null;
-          const def = cards.find(c => c.id === rec.defId) || cards.find(c => c.positionCode === 'DEF') || null;
-          const mid = cards.find(c => c.id === rec.midId) || cards.find(c => c.positionCode === 'MID') || null;
-          const fwd = cards.find(c => c.id === rec.fwdId) || cards.find(c => c.positionCode === 'FWD') || null;
-          const extra = cards.find(c => c.id === rec.extraId) || cards.find(c => c.positionCode !== 'GK' && c.id !== gk?.id && c.id !== def?.id && c.id !== mid?.id && c.id !== fwd?.id) || null;
+          const findValidSlotCard = (cardId: string, pos: string) => {
+            const byId = cards.find(c => c.id === cardId);
+            if (byId && !isPlayerNonStarter(byId) && !lockedUsedCardIds.has(byId.id)) return byId;
+            return cards.find(c => (pos === 'EXTRA' ? c.positionCode !== 'GK' : c.positionCode === pos) && !isPlayerNonStarter(c) && !lockedUsedCardIds.has(c.id)) || null;
+          };
+
+          const rawGk = findValidSlotCard(rec.gkId, 'GK');
+          const rawDef = findValidSlotCard(rec.defId, 'DEF');
+          const rawMid = findValidSlotCard(rec.midId, 'MID');
+          const rawFwd = findValidSlotCard(rec.fwdId, 'FWD');
+          const rawExtra = findValidSlotCard(rec.extraId, 'EXTRA');
+
+          const proposedValidation = validateLineup({ gk: rawGk, def: rawDef, mid: rawMid, fwd: rawFwd, extra: rawExtra });
+          if (!proposedValidation.isValid) {
+            console.log('[AI Optimization Validation] Lineup rejected non-starters or duplicates:', proposedValidation.rejectionReasons);
+          }
+
+          const sanitizedSlots = sanitizeLineupNoDuplicatePlayers({ gk: rawGk, def: rawDef, mid: rawMid, fwd: rawFwd, extra: rawExtra }, cards);
 
           const primaryLineup: Lineup = {
             id: `lineup-gemini-${Date.now()}`,
             name: `Compo 1`,
             strategy,
             gameWeek: gameWeek,
-            slots: { gk, def, mid, fwd, extra },
+            slots: sanitizedSlots,
             captainSlot: (rec.captainSlot as any) || 'fwd',
             projectedTotal: aiData.projectedTotalScore || 340,
             projectedTotalWithCaptain: aiData.projectedTotalScore || 375,
@@ -612,8 +702,8 @@ export default function App() {
             createdAt: new Date().toISOString(),
           };
 
-          // Generate 4 distinct lineups using filter constraints
-          const otherLineups = generateFourDistinctLineups(cards, strategy, gameWeek, filters);
+          // Générer 4 équipes distinctes en tenant compte des joueurs verrouillés
+          const otherLineups = generateFourDistinctLineups(cards, strategy, gameWeek, filters, lockedUsedCardIds, lockedUsedPlayerKeys);
           const fourTeams = [
             { ...primaryLineup, name: 'Compo 1' },
             { ...(otherLineups[1] || otherLineups[0]), name: 'Compo 2' },
@@ -621,21 +711,58 @@ export default function App() {
             { ...(otherLineups[3] || otherLineups[0]), name: 'Compo 4' },
           ];
 
-          setCompositions(fourTeams);
-          setLineup(fourTeams[0]);
-          setSelectedCompoIndex(0);
-          showToast('4 équipes optimisées avec succès par Gemini avec vos filtres !', 'success');
+          setCompositions(prevComps => {
+            const merged = fourTeams.map((newCompo, idx) => {
+              const existing = prevComps[idx];
+              if (existing && existing.isLocked) {
+                return existing; // Conserver la composition verrouillée !
+              }
+              return {
+                ...newCompo,
+                name: existing?.name || newCompo.name,
+                isLocked: false,
+              };
+            });
+            setLineup(merged[selectedCompoIndex] || merged[0]);
+            return merged;
+          });
+
+          showToast('4 équipes optimisées par Gemini (compos verrouillées préservées) !', 'success');
           return;
         }
       }
       throw new Error('Erreur API IA');
     } catch (e: any) {
       console.warn('Fallback to deterministic 4 SO5 lineups with filters', e);
-      const fourTeams = generateFourDistinctLineups(cards, strategy, gameWeek, filters);
-      setCompositions(fourTeams);
-      setLineup(fourTeams[0]);
-      setSelectedCompoIndex(0);
-      showToast('4 équipes optimisées avec succès selon vos filtres !', 'success');
+      const lockedUsedCardIds = new Set<string>();
+      const lockedUsedPlayerKeys = new Set<string>();
+      compositions.forEach((comp) => {
+        if (comp && comp.isLocked && comp.slots) {
+          Object.values(comp.slots).forEach((c) => {
+            if (c) {
+              lockedUsedCardIds.add(c.id);
+              lockedUsedPlayerKeys.add(getPlayerUniqueKey(c));
+            }
+          });
+        }
+      });
+      const fourTeams = generateFourDistinctLineups(cards, strategy, gameWeek, filters, lockedUsedCardIds, lockedUsedPlayerKeys);
+      setCompositions(prevComps => {
+        const merged = fourTeams.map((newCompo, idx) => {
+          const existing = prevComps[idx];
+          if (existing && existing.isLocked) {
+            return existing; // Conserver la composition verrouillée !
+          }
+          return {
+            ...newCompo,
+            name: existing?.name || newCompo.name,
+            isLocked: false,
+          };
+        });
+        setLineup(merged[selectedCompoIndex] || merged[0]);
+        return merged;
+      });
+      showToast('Compositions optimisées selon vos filtres (compos verrouillées préservées) !', 'success');
     } finally {
       setIsOptimizing(false);
     }
@@ -659,10 +786,10 @@ export default function App() {
     let updatedLineup: Lineup | null = null;
 
     setLineup(prev => {
-      const updatedSlots = {
+      const updatedSlots = enforceSingleStarterPerClub({
         ...prev.slots,
         [resolvedSlot]: player,
-      };
+      }, cards);
 
       const getSlotPlayerScore = (card: SorareCard | null) => {
         if (!card) return 0;
@@ -741,10 +868,10 @@ export default function App() {
       if (!copy[compoIndex]) return comps;
       
       const compo = copy[compoIndex];
-      const updatedSlots = {
+      const updatedSlots = enforceSingleStarterPerClub({
         ...compo.slots,
         [slot]: player,
-      };
+      }, cards);
 
       const getSlotPlayerScore = (c: SorareCard | null) => {
         if (!c) return 0;
@@ -904,6 +1031,7 @@ export default function App() {
       onTouchEnd={handleGlobalTouchEnd}
       className="min-h-screen w-full max-w-full overflow-x-hidden bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-slate-950"
     >
+      <Toaster theme="dark" position="top-center" richColors />
       {/* Pull to Refresh Mobile Indicator */}
       {isPulling && pullDistance > 8 && (
         <div

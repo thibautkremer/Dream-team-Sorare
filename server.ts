@@ -1,6 +1,8 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
+import { getMatchPredictions, getMatchOdds } from './src/services/apiFootball';
+
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { MOCK_GALLERY } from './src/data/mockGallery';
@@ -570,6 +572,13 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
               displayName
               slug
               playingStatus
+              activeInjuries { active }
+              activeSuspensions { active }
+              nextClassicFixturePlayingStatusOdds {
+                starterOddsBasisPoints
+                substituteOddsBasisPoints
+                nonPlayingOddsBasisPoints
+              }
               position
               squaredPictureUrl
               pictureUrl
@@ -1932,6 +1941,13 @@ app.post('/api/lineups/starting-xi-check', async (req, res) => {
               slug
               displayName
               playingStatus
+              activeInjuries { active }
+              activeSuspensions { active }
+              nextClassicFixturePlayingStatusOdds {
+                starterOddsBasisPoints
+                substituteOddsBasisPoints
+                nonPlayingOddsBasisPoints
+              }
               activeClub {
                 name
                 slug
@@ -1976,6 +1992,31 @@ app.post('/api/lineups/starting-xi-check', async (req, res) => {
         const kickoffMs = kickoffDate ? new Date(kickoffDate).getTime() : 0;
         const minutesUntilKickoff = kickoffMs > 0 ? Math.round((kickoffMs - nowMs) / (60 * 1000)) : null;
 
+        const hasActiveInjury = Array.isArray(player.activeInjuries) && player.activeInjuries.some((inj: any) => inj.active === true);
+        const hasActiveSuspension = Array.isArray(player.activeSuspensions) && player.activeSuspensions.some((susp: any) => susp.active === true);
+        const statusOdds = player.nextClassicFixturePlayingStatusOdds;
+
+        let starterConfidence = 50;
+        if (hasActiveInjury || hasActiveSuspension) {
+          starterConfidence = 0;
+        } else if (statusOdds) {
+          starterConfidence = Math.round(statusOdds.starterOddsBasisPoints / 100);
+        } else {
+          // Look at live player.playingStatus from GraphQL response
+          const livePlayingStatus = (player.playingStatus || '').toUpperCase();
+          if (livePlayingStatus === 'STARTER') {
+            starterConfidence = 90;
+          } else if (livePlayingStatus === 'REGULAR') {
+            starterConfidence = 45; // ROTATIONAL - not starter
+          } else if (livePlayingStatus === 'SUBSTITUTE' || livePlayingStatus === 'SUPER_SUBSTITUTE') {
+            starterConfidence = 15;
+          } else if (livePlayingStatus === 'NOT_PLAYING') {
+            starterConfidence = 0;
+          } else {
+            starterConfidence = inputPlayer?.starterConfidence !== undefined ? inputPlayer.starterConfidence : 50;
+          }
+        }
+
         const rawStatus = (player.playingStatus || inputPlayer?.status || '').toUpperCase();
         const gameStatus = (upcomingGame?.statusTyped || '').toLowerCase();
         const isGameInProgressOrRecent = gameStatus === 'live' || gameStatus === 'in_play' || gameStatus === 'ht' || gameStatus === 'completed';
@@ -1986,26 +2027,57 @@ app.post('/api/lineups/starting-xi-check', async (req, res) => {
         let lineupStatus: 'CONFIRMED_STARTER' | 'CONFIRMED_BENCH' | 'CONFIRMED_OUT' | 'PENDING' = 'PENDING';
         let isStarter = false;
 
+        const isStarterStatus = 
+          rawStatus.includes('STARTER') || 
+          rawStatus.includes('STARTING') || 
+          rawStatus.includes('START') || 
+          rawStatus.includes('TITULAIRE') || 
+          rawStatus === 'CONFIRMED' || 
+          rawStatus === 'CONFIRMED_STARTER' ||
+          (statusOdds ? false : (inputPlayer?.status === 'STARTER' || inputPlayer?.isStarter === true)) ||
+          starterConfidence >= 75;
+
+        const isBenchStatus = 
+          rawStatus.includes('SUB') || 
+          rawStatus.includes('BENCH') || 
+          rawStatus.includes('RESERVE') || 
+          rawStatus === 'SUPER_SUBSTITUTE' || 
+          rawStatus === 'SUBSTITUTE' ||
+          inputPlayer?.status === 'SUBSTITUTE' ||
+          inputPlayer?.status === 'BENCH' ||
+          (!isStarterStatus && starterConfidence >= 5 && starterConfidence < 75);
+
+        const isOutStatus = 
+          hasActiveInjury ||
+          hasActiveSuspension ||
+          rawStatus.includes('NOT_PLAYING') || 
+          rawStatus.includes('DNP') || 
+          rawStatus.includes('OUT') || 
+          rawStatus.includes('INJUR') || 
+          rawStatus.includes('SUSPEND') ||
+          inputPlayer?.injuryStatus === 'INJURED' ||
+          inputPlayer?.injuryStatus === 'SUSPENDED' ||
+          starterConfidence < 5;
+
         if (isLineupAnnounced) {
-          if (rawStatus.includes('STARTER') || rawStatus === 'CONFIRMED') {
-            lineupStatus = 'CONFIRMED_STARTER';
-            isStarter = true;
-          } else if (rawStatus.includes('SUB') || rawStatus.includes('BENCH')) {
-            lineupStatus = 'CONFIRMED_BENCH';
-            isStarter = false;
-          } else if (rawStatus.includes('NOT_PLAYING') || rawStatus.includes('DNP') || rawStatus.includes('OUT') || rawStatus.includes('INJUR') || rawStatus.includes('SUSPEND')) {
+          if (isOutStatus) {
             lineupStatus = 'CONFIRMED_OUT';
             isStarter = false;
-          } else if (rawStatus === 'REGULAR' || (inputPlayer?.starterConfidence && inputPlayer.starterConfidence >= 75)) {
+          } else if (isBenchStatus) {
+            lineupStatus = 'CONFIRMED_BENCH';
+            isStarter = false;
+          } else if (isStarterStatus) {
             lineupStatus = 'CONFIRMED_STARTER';
             isStarter = true;
           } else {
-            lineupStatus = 'CONFIRMED_BENCH';
-            isStarter = false;
+            // Si la compo officielle est annoncée et aucun statut négatif n'est détecté, conserver le statut titulaire par précaution si starterConfidence >= 50%
+            const isProbable = (starterConfidence >= 50) && inputPlayer?.status !== 'SUBSTITUTE';
+            lineupStatus = isProbable ? 'CONFIRMED_STARTER' : 'CONFIRMED_BENCH';
+            isStarter = isProbable;
           }
         } else {
           lineupStatus = 'PENDING';
-          isStarter = rawStatus.includes('STARTER') || rawStatus === 'REGULAR' || (inputPlayer?.starterConfidence && inputPlayer.starterConfidence >= 70);
+          isStarter = !isBenchStatus && !isOutStatus && isStarterStatus;
         }
 
         const homeTeamName = upcomingGame?.homeTeam?.name || '';
@@ -2031,6 +2103,62 @@ app.post('/api/lineups/starting-xi-check', async (req, res) => {
         };
       });
     }
+
+    // --- GOALKEEPER STARTER DEDUPLICATION PASS FOR LIVE CHECK ---
+    // If a club has multiple GKs in the monitored pool, ensure only one can be the starter.
+    const liveGkByClub: Record<string, any[]> = {};
+    Object.values(playerStatusMap).forEach((info: any) => {
+      const inputPlayer = slugMap.get(info.playerSlug);
+      const isGK = inputPlayer?.positionCode === 'GK' || 
+                   (inputPlayer?.positionName || '').toLowerCase().includes('gardien') || 
+                   (inputPlayer?.position || '').toLowerCase().includes('goal');
+      if (isGK && info.clubName) {
+        const clubKey = info.clubName.toLowerCase().trim();
+        if (!liveGkByClub[clubKey]) {
+          liveGkByClub[clubKey] = [];
+        }
+        liveGkByClub[clubKey].push(info);
+      }
+    });
+
+    Object.keys(liveGkByClub).forEach((clubKey) => {
+      const gks = liveGkByClub[clubKey];
+      if (gks.length > 1) {
+        // Sort to determine the primary starting goalkeeper
+        gks.sort((a, b) => {
+          if (a.lineupStatus === 'CONFIRMED_STARTER' && b.lineupStatus !== 'CONFIRMED_STARTER') return -1;
+          if (b.lineupStatus === 'CONFIRMED_STARTER' && a.lineupStatus !== 'CONFIRMED_STARTER') return 1;
+
+          if ((a.lineupStatus === 'CONFIRMED_OUT' || a.lineupStatus === 'CONFIRMED_BENCH') && 
+              (b.lineupStatus !== 'CONFIRMED_OUT' && b.lineupStatus !== 'CONFIRMED_BENCH')) return 1;
+          if ((b.lineupStatus === 'CONFIRMED_OUT' || b.lineupStatus === 'CONFIRMED_BENCH') && 
+              (a.lineupStatus !== 'CONFIRMED_OUT' && a.lineupStatus !== 'CONFIRMED_BENCH')) return -1;
+
+          if (a.isStarter && !b.isStarter) return -1;
+          if (b.isStarter && !a.isStarter) return 1;
+
+          const inputA = slugMap.get(a.playerSlug);
+          const inputB = slugMap.get(b.playerSlug);
+          const confA = inputA?.starterConfidence ?? 0;
+          const confB = inputB?.starterConfidence ?? 0;
+          if (confA !== confB) return confB - confA;
+
+          return (inputB?.scores?.l15 ?? 0) - (inputA?.scores?.l15 ?? 0);
+        });
+
+        const winner = gks[0];
+        
+        // All other goalkeepers of this club must be demoted
+        for (let i = 1; i < gks.length; i++) {
+          const backup = gks[i];
+          if (backup.lineupStatus !== 'CONFIRMED_STARTER') {
+            backup.isStarter = false;
+            backup.lineupStatus = 'CONFIRMED_BENCH';
+            backup.status = 'SUBSTITUTE';
+          }
+        }
+      }
+    });
 
     // 2. Evaluate all compositions to detect any non-starter
     const alerts: any[] = [];
@@ -2124,6 +2252,240 @@ app.get('/api/sports/starting-xi', (req, res) => {
     source: 'sorare_live_lineups',
     timestamp: new Date().toISOString(),
   });
+});
+
+// --- API-FOOTBALL PROXY ROUTES ---
+const API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io';
+
+const getApiFootballHeaders = () => {
+  const key = process.env.API_FOOTBALL_KEY;
+  if (!key) {
+    throw new Error('API_FOOTBALL_KEY environment variable is missing.');
+  }
+  return {
+    'x-apisports-key': key,
+    'Accept': 'application/json'
+  };
+};
+
+app.get('/api/football/fixtures', async (req, res) => {
+  try {
+    const { date, league, season, live } = req.query;
+    if (!process.env.API_FOOTBALL_KEY) {
+      return res.json({
+        success: true,
+        isSimulated: true,
+        response: []
+      });
+    }
+    const url = new URL(`${API_FOOTBALL_BASE_URL}/fixtures`);
+    if (date) url.searchParams.append('date', date as string);
+    if (league) url.searchParams.append('league', league as string);
+    if (season) url.searchParams.append('season', season as string);
+    if (live) url.searchParams.append('live', live as string);
+
+    const response = await fetch(url.toString(), { headers: getApiFootballHeaders() });
+    if (!response.ok) throw new Error(`API-Football error: ${response.status}`);
+    const data = await response.json();
+    res.json({ success: true, ...data });
+  } catch (error: any) {
+    res.json({ success: false, isSimulated: true, error: error.message, response: [] });
+  }
+});
+
+app.get('/api/football/lineups', async (req, res) => {
+  try {
+    const { fixture } = req.query;
+    if (!fixture) return res.status(400).json({ error: 'fixture parameter is required' });
+
+    if (!process.env.API_FOOTBALL_KEY) {
+      return res.json({ success: true, isSimulated: true, response: [] });
+    }
+
+    const url = new URL(`${API_FOOTBALL_BASE_URL}/fixtures/lineups`);
+    url.searchParams.append('fixture', fixture as string);
+
+    const response = await fetch(url.toString(), { headers: getApiFootballHeaders() });
+    if (!response.ok) throw new Error(`API-Football error: ${response.status}`);
+    const data = await response.json();
+    res.json({ success: true, ...data });
+  } catch (error: any) {
+    res.json({ success: false, isSimulated: true, error: error.message, response: [] });
+  }
+});
+
+app.get('/api/football/team', async (req, res) => {
+  const { name } = req.query;
+  if (!name) return res.status(400).json({ error: 'name requis' });
+  try {
+    const { searchTeam } = require('./src/services/apiFootball');
+    const team = await searchTeam(name.toString());
+    return res.json({ success: true, team: team || { id: 50, name: name.toString() } });
+  } catch (err: any) {
+    return res.json({ success: true, isSimulated: true, team: { id: 50, name: name.toString() } });
+  }
+});
+
+app.get('/api/football/fixture/upcoming', async (req, res) => {
+  const { teamId } = req.query;
+  if (!teamId) return res.status(400).json({ error: 'teamId requis' });
+  try {
+    const { searchUpcomingFixture } = require('./src/services/apiFootball');
+    const fixture = await searchUpcomingFixture(teamId.toString());
+    return res.json({ success: true, fixture });
+  } catch (err: any) {
+    return res.json({ success: true, isSimulated: true, fixture: null });
+  }
+});
+
+app.get('/api/football/injuries', async (req, res) => {
+  const { fixtureId, teamId } = req.query;
+  try {
+    const { getInjuries } = require('./src/services/apiFootball');
+    const injuries = await getInjuries(fixtureId ? fixtureId.toString() : '0', teamId ? teamId.toString() : undefined);
+    return res.json({ success: true, injuries: injuries || [] });
+  } catch (err: any) {
+    return res.json({ success: true, isSimulated: true, injuries: [] });
+  }
+});
+
+app.get('/api/football/predictions', async (req, res) => {
+  try {
+    const fixture = req.query.fixture || req.query.fixtureId;
+    if (!fixture) return res.status(400).json({ error: 'fixture or fixtureId parameter is required' });
+
+    if (!process.env.API_FOOTBALL_KEY) {
+      return res.json({
+        success: true,
+        isSimulated: true,
+        predictions: {
+          predictions: {
+            winner: { name: 'Home Team', comment: 'Légèrement favori à domicile' },
+            win_or_draw: true,
+            goals: { home: '1.85', away: '0.95' },
+            percent: { home: '55%', draw: '25%', away: '20%' }
+          },
+          teams: {
+            home: { last_5: { form: 'WDWWD' } },
+            away: { last_5: { form: 'LLDWL' } }
+          }
+        }
+      });
+    }
+
+    const url = new URL(`${API_FOOTBALL_BASE_URL}/predictions`);
+    url.searchParams.append('fixture', fixture as string);
+
+    const response = await fetch(url.toString(), { headers: getApiFootballHeaders() });
+    if (!response.ok) throw new Error(`API-Football error: ${response.status}`);
+    const data = await response.json();
+    res.json({ success: true, ...data });
+  } catch (error: any) {
+    res.json({ success: false, isSimulated: true, error: error.message });
+  }
+});
+
+app.get('/api/football/odds', async (req, res) => {
+  try {
+    const { date, league, season } = req.query;
+    const fixture = req.query.fixture || req.query.fixtureId;
+    if (!process.env.API_FOOTBALL_KEY) {
+      return res.json({
+        success: true,
+        isSimulated: true,
+        odds: {
+          bookmakers: [
+            {
+              id: 8,
+              name: 'Bet365',
+              bets: [
+                {
+                  id: 1,
+                  name: 'Match Winner',
+                  values: [
+                    { value: 'Home', odd: '1.65' },
+                    { value: 'Draw', odd: '3.80' },
+                    { value: 'Away', odd: '5.25' }
+                  ]
+                },
+                {
+                  id: 2,
+                  name: 'Both Teams to Score',
+                  values: [
+                    { value: 'Yes', odd: '1.75' },
+                    { value: 'No', odd: '2.05' }
+                  ]
+                },
+                {
+                  id: 3,
+                  name: 'Clean Sheet - Home',
+                  values: [
+                    { value: 'Yes', odd: '2.30' },
+                    { value: 'No', odd: '1.55' }
+                  ]
+                },
+                {
+                  id: 8,
+                  name: 'Anytime Goalscorer',
+                  values: [
+                    { value: 'Star Player', odd: '2.10' },
+                    { value: 'Winger', odd: '3.40' }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      });
+    }
+
+    const url = new URL(`${API_FOOTBALL_BASE_URL}/odds`);
+    if (fixture) url.searchParams.append('fixture', fixture as string);
+    if (date) url.searchParams.append('date', date as string);
+    if (league) url.searchParams.append('league', league as string);
+    if (season) url.searchParams.append('season', season as string);
+
+    const response = await fetch(url.toString(), { headers: getApiFootballHeaders() });
+    if (!response.ok) throw new Error(`API-Football error: ${response.status}`);
+    const data = await response.json();
+    res.json({ success: true, ...data });
+  } catch (error: any) {
+    res.json({ success: false, isSimulated: true, error: error.message });
+  }
+});
+
+app.get('/api/football/events', async (req, res) => {
+  try {
+    const { fixtureId } = req.query;
+    if (!fixtureId) return res.status(400).json({ error: 'fixtureId requis' });
+    const { getFixtureEvents } = require('./src/services/apiFootball');
+    const events = await getFixtureEvents(fixtureId.toString());
+    return res.json({ success: true, events });
+  } catch (err: any) {
+    return res.json({ success: true, isSimulated: true, events: [] });
+  }
+});
+
+app.get('/api/football/statistics', async (req, res) => {
+  try {
+    const { fixtureId } = req.query;
+    if (!fixtureId) return res.status(400).json({ error: 'fixtureId requis' });
+    const { getFixtureStatistics } = require('./src/services/apiFootball');
+    const statistics = await getFixtureStatistics(fixtureId.toString());
+    return res.json({ success: true, statistics });
+  } catch (err: any) {
+    return res.json({ success: true, isSimulated: true, statistics: [] });
+  }
+});
+
+app.get('/api/football/live', async (req, res) => {
+  try {
+    const { getLiveFixtures } = require('./src/services/apiFootball');
+    const live = await getLiveFixtures();
+    return res.json({ success: true, live });
+  } catch (err: any) {
+    return res.json({ success: true, isSimulated: true, live: [] });
+  }
 });
 
 function cleanSlug(input: string): string {
@@ -3157,7 +3519,7 @@ async function fetchGeminiRealMatchOdds(homeTeam: string, awayTeam: string, play
 
   // Check store cache if refreshed within 2 hours
   const existing = realMatchOddsStore.get(matchKey);
-  if (existing && Date.now() - new Date(existing.updatedAt).getTime() < 2 * 60 * 60 * 1000) {
+  if (existing && existing.sourceType !== 'estimated_mirror' && Date.now() - new Date(existing.updatedAt).getTime() < 2 * 60 * 60 * 1000) {
     return existing;
   }
 
@@ -3339,282 +3701,202 @@ async function fetchGeminiBatchRealMatchOdds(
   matchups.forEach(m => {
     const normHome = normalizeClubName(m.homeTeam);
     const normAway = normalizeClubName(m.awayTeam);
-    const isValidTeam = (t: string) => 
-      t && 
-      t !== 'Club Non Renseigné' && 
-      t !== 'Adversaire Inconnu' && 
-      !t.toLowerCase().includes('non renseign') && 
-      !t.toLowerCase().includes('inconnu');
-
-    if (!isValidTeam(normHome) || !isValidTeam(normAway) || normHome === normAway) {
-      return;
-    }
-
     const matchKey = makeMatchKey(normHome, normAway);
     const existing = realMatchOddsStore.get(matchKey);
-    if (existing && Date.now() - new Date(existing.updatedAt).getTime() < 2 * 60 * 60 * 1000) {
+    // reduce cache time to 1 min for debugging/testing
+    if (existing && existing.sourceType !== 'estimated_mirror' && Date.now() - new Date(existing.updatedAt).getTime() < 1 * 60 * 1000) {
       results.push(existing);
     } else {
       toFetch.push({ homeTeam: normHome, awayTeam: normAway, players: m.players || [], matchKey });
     }
   });
 
-  if (toFetch.length === 0) {
-    return results;
-  }
+  if (toFetch.length === 0) return results;
 
-  // If quota cooldown active or no API key, fallback immediately to verified bookmaker catalog
-  if (!process.env.GEMINI_API_KEY || (Date.now() - lastQuotaExhaustedTime < QUOTA_COOLDOWN_MS)) {
-    toFetch.forEach(m => {
-      const resolved = getResolvedMatchOdds(m.homeTeam, m.awayTeam, true);
-      const entry: RealMatchOddsEntry = {
-        matchKey: m.matchKey,
-        homeTeam: m.homeTeam,
-        awayTeam: m.awayTeam,
-        odds: {
-          homeWin: resolved.bookmakerData.win,
-          draw: resolved.bookmakerData.draw,
-          awayWin: resolved.bookmakerData.loss,
-        },
-        probabilities: {
-          homeWinPercent: resolved.bookmakerData.winProbability || 50,
-          drawPercent: Math.round((100 - (resolved.bookmakerData.winProbability || 50)) / 2),
-          awayWinPercent: Math.max(10, 100 - (resolved.bookmakerData.winProbability || 50) - Math.round((100 - (resolved.bookmakerData.winProbability || 50)) / 2)),
-        },
-        cleanSheetProbabilities: {
-          homeCleanSheetPercent: resolved.bookmakerData.cleanSheetProb,
-          awayCleanSheetPercent: Math.max(10, 60 - resolved.bookmakerData.cleanSheetProb),
-        },
-        expectedGoals: {
-          homeXG: resolved.bookmakerData.goalExpectancy,
-          awayXG: resolved.bookmakerData.opponentGoalExpectancy || 1.1,
-        },
-        difficultyRatings: {
-          homeFDR: resolved.diffRating,
-          awayFDR: 6 - resolved.diffRating,
-        },
-        topScorers: resolved.bookmakerData.topScorers || [],
-        topAssisters: resolved.bookmakerData.topAssisters || [],
-        source: resolved.bookmakerData.source || 'Winamax & Betclic (Cotes Vérifiées)',
-        sourceType: 'verified_bookmaker',
-        updatedAt: new Date().toISOString(),
-      };
-      realMatchOddsStore.set(m.matchKey, entry);
-      results.push(entry);
-    });
-    return results;
-  }
+  const apiFootballKey = process.env.API_FOOTBALL_KEY;
+  if (apiFootballKey) {
+    console.log(`[API-Football] Fetching odds for ${toFetch.length} matchups...`);
+    try {
+      const datesToFetch = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date();
+        d.setDate(d.getDate() + i - 1);
+        return d.toISOString().split('T')[0];
+      });
 
-  const ai = getAI();
-  const BATCH_SIZE = 4; // Process 3-4 matches per prompt to optimize tokens and request quotas
-
-  for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
-    const chunk = toFetch.slice(i, i + BATCH_SIZE);
-    
-    const chunkPromptList = chunk.map((m, idx) => {
-      const pStr = m.players.length > 0 ? `Joueurs clés à évaluer pour cotes buteurs & passeurs : ${m.players.slice(0, 6).join(', ')}` : '';
-      return `MATCH ${idx + 1}:
-- Domicile : "${m.homeTeam}"
-- Extérieur : "${m.awayTeam}"
-${pStr}`;
-    }).join('\n\n');
-
-    const prompt = `Tu es un expert analyste de données sportives spécialisé dans les cotes des bookmakers (Winamax, Betclic, Unibet, Oddschecker) et les probabilités de football (xG, Clean Sheet, Buteurs, Passeurs).
-
-Recherche en direct sur le web via Google Search les véritables cotes officielles des bookmakers et métriques prédictives pour ce lot de ${chunk.length} matchs :
-
-${chunkPromptList}
-
-Exigences impératives pour CHAQUE match du lot :
-1. "odds" : Cotes réelles 1 / N / 2 du marché bookmaker actuel (homeWin, draw, awayWin, ex: 1.62 / 4.10 / 5.50).
-2. "probabilities" : Pourcentages normalisés de chance de Gagner (homeWinPercent), Nul (drawPercent), Perdre (awayWinPercent) (la somme homeWinPercent + drawPercent + awayWinPercent doit faire 100).
-3. "expectedGoals" : Espérance de buts attendus xG de chaque équipe (homeXG, awayXG, ex: 1.85 / 0.90).
-4. "cleanSheetProbabilities" : Pourcentage de probabilité de Clean Sheet pour la défense et le gardien (homeCleanSheetPercent, awayCleanSheetPercent).
-5. "difficultyRatings" : FDR (Fixture Difficulty Rating de 1 à 5) en miroir pour les 2 équipes (ex: 2 pour le favori, 4 pour l'adversaire).
-6. "topScorers" : Cotes "Buteur au cours du match" pour les joueurs clés demandés ou buteurs vedettes.
-7. "topAssisters" : Cotes "Passeur décisif au cours du match" pour les créateurs de jeu clés.
-
-Réponds UNIQUEMENT par un JSON valide respectant cette structure exacte :
-{
-  "matches": [
-    {
-      "homeTeam": "Nom Domicile",
-      "awayTeam": "Nom Extérieur",
-      "odds": { "homeWin": 1.62, "draw": 4.10, "awayWin": 5.50 },
-      "probabilities": { "homeWinPercent": 58, "drawPercent": 24, "awayWinPercent": 18 },
-      "expectedGoals": { "homeXG": 1.85, "awayXG": 0.90 },
-      "cleanSheetProbabilities": { "homeCleanSheetPercent": 45, "awayCleanSheetPercent": 18 },
-      "difficultyRatings": { "homeFDR": 2, "awayFDR": 4 },
-      "topScorers": [
-        { "name": "Nom Joueur", "team": "Nom Équipe", "anytimeScorerOdds": 2.20 }
-      ],
-      "topAssisters": [
-        { "name": "Nom Joueur", "team": "Nom Équipe", "anytimeAssistOdds": 3.40 }
-      ]
-    }
-  ]
-}`;
-
-    let batchSuccess = false;
-
-    for (const modelName of GEMINI_CASCADE_MODELS) {
-      try {
-        console.log(`[Gemini Batch Real Odds] Processing lot of ${chunk.length} matches with model "${modelName}"...`);
-        const startTime = Date.now();
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: prompt,
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
-        });
-        const durationMs = Date.now() - startTime;
-
-        const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-        const groundingUrls = groundingChunks.map((c: any) => c.web?.uri).filter(Boolean);
-
-        const rawText = response.text || '';
-        const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-          throw new Error(`Réponse JSON absente pour le modèle ${modelName}`);
-        }
-
-        const parsed = JSON.parse(jsonMatch[0]);
-        const parsedMatches: any[] = Array.isArray(parsed.matches) ? parsed.matches : (parsed.homeTeam ? [parsed] : []);
-
-        if (parsedMatches.length === 0) {
-          throw new Error('Aucun match valide trouvé dans le JSON renvoyé');
-        }
-
-        chunk.forEach(m => {
-          const found = parsedMatches.find(p => 
-            normalizeClubName(p.homeTeam).includes(m.homeTeam) || 
-            m.homeTeam.includes(normalizeClubName(p.homeTeam)) ||
-            normalizeClubName(p.awayTeam).includes(m.awayTeam) ||
-            m.awayTeam.includes(normalizeClubName(p.awayTeam))
-          ) || parsedMatches[0];
-
-          const homeWin = Math.round((Number(found?.odds?.homeWin) || 2.0) * 100) / 100;
-          const draw = Math.round((Number(found?.odds?.draw) || 3.4) * 100) / 100;
-          const awayWin = Math.round((Number(found?.odds?.awayWin) || 3.4) * 100) / 100;
-
-          const hwProb = Math.round(Number(found?.probabilities?.homeWinPercent) || Math.round(100 / homeWin / 1.1));
-          const drProb = Math.round(Number(found?.probabilities?.drawPercent) || Math.round(100 / draw / 1.1));
-          const awProb = Math.max(5, 100 - hwProb - drProb);
-
-          const entry: RealMatchOddsEntry = {
-            matchKey: m.matchKey,
-            homeTeam: m.homeTeam,
-            awayTeam: m.awayTeam,
-            odds: { homeWin, draw, awayWin },
-            probabilities: {
-              homeWinPercent: hwProb,
-              drawPercent: drProb,
-              awayWinPercent: awProb,
-            },
-            cleanSheetProbabilities: {
-              homeCleanSheetPercent: Math.round(Number(found?.cleanSheetProbabilities?.homeCleanSheetPercent) || 35),
-              awayCleanSheetPercent: Math.round(Number(found?.cleanSheetProbabilities?.awayCleanSheetPercent) || 20),
-            },
-            expectedGoals: {
-              homeXG: Math.round((Number(found?.expectedGoals?.homeXG) || 1.65) * 100) / 100,
-              awayXG: Math.round((Number(found?.expectedGoals?.awayXG) || 1.10) * 100) / 100,
-            },
-            difficultyRatings: (() => {
-              let homeFDR = Number(found?.difficultyRatings?.homeFDR) || (hwProb >= 60 ? 1 : hwProb >= 54 ? 2 : hwProb <= 25 ? 5 : hwProb <= 38 ? 4 : 3);
-              if (homeFDR < 1) homeFDR = 1;
-              if (homeFDR > 5) homeFDR = 5;
-              return {
-                homeFDR,
-                awayFDR: 6 - homeFDR,
-              };
-            })(),
-            topScorers: Array.isArray(found?.topScorers) ? found.topScorers : [],
-            topAssisters: Array.isArray(found?.topAssisters) ? found.topAssisters : [],
-            source: `Bookmakers Réels (Google Search - ${modelName})`,
-            sourceType: 'gemini_search',
-            groundingUrls,
-            updatedAt: new Date().toISOString(),
-          };
-
-          realMatchOddsStore.set(m.matchKey, entry);
-          realMatchOddsStore.set(makeMatchKey(m.awayTeam, m.homeTeam), entry);
-          results.push(entry);
-        });
-
-        addApiLog({
-          description: `Gemini Batch Search (${modelName}): ${chunk.length} Matchs synchronisés`,
-          service: 'Gemini AI',
-          method: `generateContent (${modelName} + googleSearch)`,
-          status: 'SUCCESS',
-          statusCode: 200,
-          durationMs,
-          requestSummary: { model: modelName, matchCount: chunk.length, matches: chunk.map(c => `${c.homeTeam} vs ${c.awayTeam}`) },
-          responseSummary: { parsedCount: parsedMatches.length },
-        });
-
-        console.log(`[Gemini Batch Real Odds] Successfully fetched & cached ${chunk.length} matches with model "${modelName}"`);
-        batchSuccess = true;
-        break; // Batch completed successfully, break cascade loop
-      } catch (err: any) {
-        const errStatus = err?.status || (err?.error && err?.error?.code);
-        const errMsg = String(err?.message || '');
-        const isQuota = errStatus === 429 || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota') || errMsg.includes('Quota exceeded');
-
-        if (isQuota) {
-          console.log(`[Gemini Batch Real Odds] Model "${modelName}" hit quota limit (429). Cascading to next model...`);
-        } else {
-          console.log(`[Gemini Batch Real Odds] Model "${modelName}" error (${errMsg}). Cascading to next model...`);
-        }
+      let allApiFixtures: any[] = [];
+      for (const date of datesToFetch) {
+        try {
+          const res = await fetch(`https://v3.football.api-sports.io/fixtures?date=${date}`, {
+            headers: { 'x-apisports-key': apiFootballKey, 'Accept': 'application/json' }
+          });
+          const data = await res.json();
+          if (data.response) allApiFixtures.push(...data.response);
+        } catch (e) {}
       }
-    }
 
-    // Fallback to verified catalog if all models failed for this chunk
-    if (!batchSuccess) {
-      console.log(`[Gemini Batch Real Odds] All cascade models exhausted for this batch. Using verified bookmaker catalog.`);
-      chunk.forEach(m => {
-        const resolved = getResolvedMatchOdds(m.homeTeam, m.awayTeam, true);
+      const normString = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      const isTeamMatch = (apiTeam: string, sorTeam: string) => {
+        const a = normString(apiTeam);
+        const b = normString(sorTeam);
+        if (a.length < 3 || b.length < 3) return a === b;
+        return a.includes(b) || b.includes(a);
+      };
+
+      for (const m of toFetch) {
+        // Try strict match first (allowing home/away reversal)
+        let matched = allApiFixtures.find(f => 
+          (isTeamMatch(f.teams.home.name, m.homeTeam) && isTeamMatch(f.teams.away.name, m.awayTeam)) ||
+          (isTeamMatch(f.teams.home.name, m.awayTeam) && isTeamMatch(f.teams.away.name, m.homeTeam))
+        );
+
+        let homeWinOdd = 0, drawOdd = 0, awayWinOdd = 0;
+        let homeProb = 50, drawProb = 25, awayProb = 25;
+        let homeXG = 1.3, awayXG = 1.1;
+        let bookmakerName = "Winamax";
+
+        if (matched) {
+          try {
+            const isReversed = !isTeamMatch(matched.teams.home.name, m.homeTeam);
+            const oddsRes = await fetch(`https://v3.football.api-sports.io/odds?fixture=${matched.fixture.id}`, {
+              headers: { 'x-apisports-key': apiFootballKey, 'Accept': 'application/json' }
+            });
+            const oddsData = await oddsRes.json();
+            const bookmaker = oddsData.response?.[0]?.bookmakers?.[0]; 
+            
+            if (bookmaker) {
+              bookmakerName = bookmaker.name;
+              const winBets = bookmaker.bets.find((b: any) => b.id === 1)?.values || [];
+              const rawHome = parseFloat(winBets.find((v: any) => v.value === 'Home')?.odd || '0');
+              const rawAway = parseFloat(winBets.find((v: any) => v.value === 'Away')?.odd || '0');
+              
+              if (isReversed) {
+                homeWinOdd = rawAway;
+                awayWinOdd = rawHome;
+              } else {
+                homeWinOdd = rawHome;
+                awayWinOdd = rawAway;
+              }
+              drawOdd = parseFloat(winBets.find((v: any) => v.value === 'Draw')?.odd || '0');
+
+              if (homeWinOdd && drawOdd && awayWinOdd) {
+                const totalMargin = (1/homeWinOdd) + (1/drawOdd) + (1/awayWinOdd);
+                homeProb = Math.round(((1/homeWinOdd) / totalMargin) * 100);
+                drawProb = Math.round(((1/drawOdd) / totalMargin) * 100);
+                awayProb = Math.round(((1/awayWinOdd) / totalMargin) * 100);
+              }
+
+              const goalsBets = bookmaker.bets.find((b: any) => b.id === 5 || b.id === 6)?.values || [];
+              const over25Odd = parseFloat(goalsBets.find((v: any) => v.value === 'Over 2.5' || v.value === 'Over 1.5')?.odd || '0');
+              const under25Odd = parseFloat(goalsBets.find((v: any) => v.value === 'Under 2.5' || v.value === 'Under 1.5')?.odd || '0');
+              
+              if (over25Odd && under25Odd) {
+                 const margin = (1/over25Odd) + (1/under25Odd);
+                 const probOver = (1/over25Odd) / margin;
+                 const totalXgEst = probOver * 3.5 + 1.0; 
+                 homeXG = (homeProb / 100) * totalXgEst;
+                 awayXG = (awayProb / 100) * totalXgEst;
+              }
+            }
+          } catch (e) {}
+        }
+
+        const resolvedFbk = getResolvedMatchOdds(m.homeTeam, m.awayTeam, true);
+        
+        if (!homeWinOdd) {
+            homeWinOdd = resolvedFbk.bookmakerData.win;
+            drawOdd = resolvedFbk.bookmakerData.draw;
+            awayWinOdd = resolvedFbk.bookmakerData.loss;
+            homeProb = resolvedFbk.bookmakerData.winProbability || 50;
+            drawProb = Math.round((100 - homeProb) / 2);
+            awayProb = 100 - homeProb - drawProb;
+            homeXG = resolvedFbk.bookmakerData.goalExpectancy;
+            awayXG = resolvedFbk.bookmakerData.opponentGoalExpectancy || 1.1;
+        }
+
+        // Generate player prop odds based on team strength
+        const topScorers = m.players.map(p => ({
+            name: p,
+            team: m.homeTeam,
+            anytimeScorerOdds: Math.round((2.5 + (100 - homeProb) / 20) * 10) / 10
+        }));
+
+        const topAssisters = m.players.map(p => ({
+            name: p,
+            team: m.homeTeam,
+            anytimeAssistOdds: Math.round((3.5 + (100 - homeProb) / 15) * 10) / 10
+        }));
+
         const entry: RealMatchOddsEntry = {
           matchKey: m.matchKey,
           homeTeam: m.homeTeam,
           awayTeam: m.awayTeam,
-          odds: {
-            homeWin: resolved.bookmakerData.win,
-            draw: resolved.bookmakerData.draw,
-            awayWin: resolved.bookmakerData.loss,
-          },
-          probabilities: {
-            homeWinPercent: resolved.bookmakerData.winProbability || 50,
-            drawPercent: Math.round((100 - (resolved.bookmakerData.winProbability || 50)) / 2),
-            awayWinPercent: Math.max(10, 100 - (resolved.bookmakerData.winProbability || 50) - Math.round((100 - (resolved.bookmakerData.winProbability || 50)) / 2)),
-          },
+          odds: { homeWin: homeWinOdd, draw: drawOdd, awayWin: awayWinOdd },
+          probabilities: { homeWinPercent: homeProb, drawPercent: drawProb, awayWinPercent: awayProb },
           cleanSheetProbabilities: {
-            homeCleanSheetPercent: resolved.bookmakerData.cleanSheetProb,
-            awayCleanSheetPercent: Math.max(10, 60 - resolved.bookmakerData.cleanSheetProb),
+            homeCleanSheetPercent: Math.max(5, Math.min(85, Math.round(Math.exp(-awayXG) * 100))),
+            awayCleanSheetPercent: Math.max(5, Math.min(85, Math.round(Math.exp(-homeXG) * 100))),
           },
           expectedGoals: {
-            homeXG: resolved.bookmakerData.goalExpectancy,
-            awayXG: resolved.bookmakerData.opponentGoalExpectancy || 1.1,
+            homeXG: Math.round(homeXG * 100) / 100,
+            awayXG: Math.round(awayXG * 100) / 100,
           },
+          topScorers,
+          topAssisters,
           difficultyRatings: {
-            homeFDR: resolved.diffRating,
-            awayFDR: 6 - resolved.diffRating,
+            homeFDR: resolvedFbk.diffRating || 3,
+            awayFDR: 6 - (resolvedFbk.diffRating || 3),
           },
-          topScorers: resolved.bookmakerData.topScorers || [],
-          topAssisters: resolved.bookmakerData.topAssisters || [],
-          source: resolved.bookmakerData.source || 'Winamax & Betclic (Cotes Vérifiées)',
-          sourceType: 'verified_bookmaker',
           updatedAt: new Date().toISOString(),
+          sourceType: homeWinOdd === resolvedFbk.bookmakerData.win ? 'estimated_mirror' : 'odds_api',
+          source: homeWinOdd === resolvedFbk.bookmakerData.win ? 'Estimation interne (aucune cote trouvée sur API-Football)' : `API-Football (${bookmakerName})`
         };
+
         realMatchOddsStore.set(m.matchKey, entry);
         realMatchOddsStore.set(makeMatchKey(m.awayTeam, m.homeTeam), entry);
         results.push(entry);
-      });
+      }
+      
+      return results;
+    } catch (err) {
+      console.error("[API-Football] Error syncing odds:", err);
     }
-
-    // Brief delay between batches
-    await new Promise(r => setTimeout(r, 400));
   }
+
+  // Fallback if no API key
+  toFetch.forEach(m => {
+    const resolved = getResolvedMatchOdds(m.homeTeam, m.awayTeam, true);
+    const entry: RealMatchOddsEntry = {
+      matchKey: m.matchKey,
+      homeTeam: m.homeTeam,
+      awayTeam: m.awayTeam,
+      odds: { homeWin: resolved.bookmakerData.win, draw: resolved.bookmakerData.draw, awayWin: resolved.bookmakerData.loss },
+      probabilities: {
+        homeWinPercent: resolved.bookmakerData.winProbability || 50,
+        drawPercent: Math.round((100 - (resolved.bookmakerData.winProbability || 50)) / 2),
+        awayWinPercent: Math.max(10, 100 - (resolved.bookmakerData.winProbability || 50) - Math.round((100 - (resolved.bookmakerData.winProbability || 50)) / 2)),
+      },
+      cleanSheetProbabilities: {
+        homeCleanSheetPercent: resolved.bookmakerData.cleanSheetProb,
+        awayCleanSheetPercent: Math.max(10, 60 - resolved.bookmakerData.cleanSheetProb),
+      },
+      expectedGoals: {
+        homeXG: resolved.bookmakerData.goalExpectancy,
+        awayXG: resolved.bookmakerData.opponentGoalExpectancy || 1.1,
+      },
+      difficultyRatings: {
+        homeFDR: resolved.diffRating || 3,
+        awayFDR: 6 - (resolved.diffRating || 3),
+      },
+      topScorers: [],
+      topAssisters: [],
+      updatedAt: new Date().toISOString(),
+      sourceType: 'estimated_mirror',
+      source: 'Estimation Interne',
+    };
+    realMatchOddsStore.set(m.matchKey, entry);
+        realMatchOddsStore.set(makeMatchKey(m.awayTeam, m.homeTeam), entry);
+        results.push(entry);
+  });
 
   return results;
 }
@@ -4197,6 +4479,13 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                 }
                 ... on Player {
                   playingStatus
+                  activeInjuries { active }
+                  activeSuspensions { active }
+                  nextClassicFixturePlayingStatusOdds {
+                    starterOddsBasisPoints
+                    substituteOddsBasisPoints
+                    nonPlayingOddsBasisPoints
+                  }
                   country {
                     slug
                   }
@@ -4281,6 +4570,13 @@ app.get('/api/sorare/user-cards', async (req, res) => {
                 }
                 ... on Player {
                   playingStatus
+                  activeInjuries { active }
+                  activeSuspensions { active }
+                  nextClassicFixturePlayingStatusOdds {
+                    starterOddsBasisPoints
+                    substituteOddsBasisPoints
+                    nonPlayingOddsBasisPoints
+                  }
                   l5: averageScore(type: LAST_FIVE_SO5_AVERAGE_SCORE)
                   l15: averageScore(type: LAST_FIFTEEN_SO5_AVERAGE_SCORE)
                   l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
@@ -4568,80 +4864,140 @@ app.get('/api/sorare/user-cards', async (req, res) => {
         let starterConfidence = 70;
         let injuryStatus: 'FIT' | 'DOUBTFUL' | 'QUESTIONABLE' | 'INJURED' | 'SUSPENDED' = 'FIT';
 
-        const rawPlayingStatus = (c.anyPlayer?.playingStatus || '').toUpperCase();
+        const hasActiveInjury = Array.isArray(player?.activeInjuries) && player.activeInjuries.some((inj: any) => inj.active === true);
+        const hasActiveSuspension = Array.isArray(player?.activeSuspensions) && player.activeSuspensions.some((susp: any) => susp.active === true);
+        const statusOdds = player?.nextClassicFixturePlayingStatusOdds;
 
-        // Check direct prediction / playingStatus from Sorare API if available
-        if (rawPlayingStatus.includes('STARTER') || rawPlayingStatus.includes('STARTING')) {
-          status = 'STARTER';
-          starterConfidence = 95;
-        } else if (rawPlayingStatus.includes('INJUR') || rawPlayingStatus === 'INJURED') {
+        if (hasActiveInjury) {
           injuryStatus = 'INJURED';
           status = 'NOT_PLAYING';
           starterConfidence = 0;
-        } else if (rawPlayingStatus.includes('SUSPEND') || rawPlayingStatus === 'SUSPENDED') {
+        } else if (hasActiveSuspension) {
           injuryStatus = 'SUSPENDED';
           status = 'NOT_PLAYING';
           starterConfidence = 0;
-        } else if (rawPlayingStatus.includes('OUT') || rawPlayingStatus.includes('UNAVAILABLE')) {
-          status = 'NOT_PLAYING';
-          starterConfidence = 0;
-        } else if (rawPlayingStatus.includes('DOUBT') || rawPlayingStatus === 'DOUBTFUL') {
-          injuryStatus = 'DOUBTFUL';
-          starterConfidence = 20;
-        } else if (rawPlayingStatus.includes('QUESTION') || rawPlayingStatus === 'QUESTIONABLE') {
-          injuryStatus = 'QUESTIONABLE';
-          starterConfidence = 45;
-        } else if (rawPlayingStatus.includes('SUB') || rawPlayingStatus.includes('BENCH') || rawPlayingStatus.includes('RESERVE')) {
-          // Guard for club matches: if it's a club match and the player is an established club player or GK, override national team BENCH prediction
-          if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28 || l5 >= 28) : (l15 >= 42 || l40 >= 42))) {
+        } else if (statusOdds) {
+          // Utilisation directe du pourcentage de titularisation de l'API Sorare (odds)
+          starterConfidence = Math.round(statusOdds.starterOddsBasisPoints / 100);
+          if (starterConfidence >= 75) {
             status = 'STARTER';
-            starterConfidence = 90;
-          } else {
+          } else if (starterConfidence >= 35) {
+            status = 'REGULAR';
+          } else if (starterConfidence >= 5) {
             status = 'SUBSTITUTE';
-            starterConfidence = 25;
+          } else {
+            status = 'NOT_PLAYING';
           }
         } else {
-          // Fallback: Calculate status from recent L5 match history
-          if (relevantL5Matches.length === 0) {
-            if (!upcomingIsNational) {
-              if (posCode === 'GK' || l15 > 38 || l40 > 38) {
-                status = 'STARTER';
-                starterConfidence = 90;
-              } else {
-                status = 'REGULAR';
-                starterConfidence = 50;
-              }
+          const rawPlayingStatus = (c.anyPlayer?.playingStatus || '').toUpperCase();
+
+          // Check direct prediction / playingStatus from Sorare API if available
+          if (rawPlayingStatus.includes('STARTER') || rawPlayingStatus.includes('STARTING')) {
+            status = 'STARTER';
+            starterConfidence = 95;
+          } else if (rawPlayingStatus.includes('INJUR') || rawPlayingStatus === 'INJURED') {
+            injuryStatus = 'INJURED';
+            status = 'NOT_PLAYING';
+            starterConfidence = 0;
+          } else if (rawPlayingStatus.includes('SUSPEND') || rawPlayingStatus === 'SUSPENDED') {
+            injuryStatus = 'SUSPENDED';
+            status = 'NOT_PLAYING';
+            starterConfidence = 0;
+          } else if (rawPlayingStatus.includes('OUT') || rawPlayingStatus.includes('UNAVAILABLE')) {
+            status = 'NOT_PLAYING';
+            starterConfidence = 0;
+          } else if (rawPlayingStatus.includes('DOUBT') || rawPlayingStatus === 'DOUBTFUL') {
+            injuryStatus = 'DOUBTFUL';
+            starterConfidence = 20;
+          } else if (rawPlayingStatus.includes('QUESTION') || rawPlayingStatus === 'QUESTIONABLE') {
+            injuryStatus = 'QUESTIONABLE';
+            starterConfidence = 45;
+          } else if (rawPlayingStatus.includes('SUB') || rawPlayingStatus.includes('BENCH') || rawPlayingStatus.includes('RESERVE')) {
+            // Guard for club matches: if it's a club match and the player is an established club player or GK, override national team BENCH prediction
+            if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28 || l5 >= 28) : (l15 >= 42 || l40 >= 42))) {
+              status = 'STARTER';
+              starterConfidence = 90;
             } else {
-              status = 'NOT_PLAYING';
-              starterConfidence = 0;
+              status = 'SUBSTITUTE';
+              starterConfidence = 25;
             }
-          } else {
-            if (playedCountRelevantL5 === 0) {
-              if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28) : (l15 >= 42 || l40 >= 42))) {
-                status = 'STARTER';
-                starterConfidence = 90;
-              } else {
+          } else if (rawPlayingStatus.includes('REGULAR')) {
+            // Player is a squad regular but not classified as a solid STARTER.
+            // Let's analyze their recent matches conservatively.
+            if (relevantL5Matches.length === 0) {
+              status = 'REGULAR';
+              starterConfidence = 40;
+            } else {
+              if (playedCountRelevantL5 === 0) {
                 status = 'NOT_PLAYING';
                 starterConfidence = 0;
                 injuryStatus = 'DOUBTFUL';
-              }
-            } else if (playedCountRelevantL5 === 1) {
-              if (!upcomingIsNational && (posCode === 'GK' ? (l15 >= 28 || l40 >= 28) : (l15 >= 42 || l40 >= 42))) {
-                status = 'STARTER';
-                starterConfidence = 85;
-              } else {
+              } else if (playedCountRelevantL5 === 1) {
                 status = 'SUBSTITUTE';
                 starterConfidence = 20;
+              } else if (playedCountRelevantL5 === 2 || playedCountRelevantL5 === 3) {
+                status = 'REGULAR';
+                starterConfidence = 45;
+              } else if (playedCountRelevantL5 >= 4) {
+                if (playedLastRelevantMatch) {
+                  // High participation but still categorized as "REGULAR" by Sorare (often rotated or subbed)
+                  status = 'REGULAR';
+                  starterConfidence = 65;
+                } else {
+                  status = 'REGULAR';
+                  starterConfidence = 40;
+                }
               }
-            } else if (playedCountRelevantL5 === 2 || playedCountRelevantL5 === 3) {
-              status = (!upcomingIsNational && posCode === 'GK' && (l15 >= 28 || l40 >= 28)) ? 'STARTER' : 'REGULAR';
-              starterConfidence = 70;
-            } else if (playedCountRelevantL5 >= 4 && playedLastRelevantMatch) {
-              status = 'STARTER';
-              starterConfidence = 90;
-            } else if (playedCountRelevantL5 >= 4 && !playedLastRelevantMatch) {
-              status = (!upcomingIsNational && posCode === 'GK' && (l15 >= 28 || l40 >= 28)) ? 'STARTER' : 'REGULAR';
-              starterConfidence = 70;
+            }
+          } else {
+            // Fallback: Calculate status from recent L5 match history
+            if (relevantL5Matches.length === 0) {
+              if (!upcomingIsNational) {
+                if (posCode === 'GK') {
+                  status = 'REGULAR';
+                  starterConfidence = 50;
+                } else {
+                  status = 'REGULAR';
+                  starterConfidence = 30;
+                }
+              } else {
+                status = 'NOT_PLAYING';
+                starterConfidence = 0;
+              }
+            } else {
+              if (playedCountRelevantL5 === 0) {
+                status = 'NOT_PLAYING';
+                starterConfidence = 0;
+                injuryStatus = 'DOUBTFUL';
+              } else if (playedCountRelevantL5 === 1) {
+                if (posCode === 'GK' && !upcomingIsNational && (l15 >= 28 || l40 >= 28)) {
+                  status = 'STARTER';
+                  starterConfidence = 75;
+                } else {
+                  // Outfield players are extremely unlikely to be solid starters if they only played 1 match
+                  status = 'SUBSTITUTE';
+                  starterConfidence = 20;
+                }
+              } else if (playedCountRelevantL5 === 2 || playedCountRelevantL5 === 3) {
+                if (posCode === 'GK' && !upcomingIsNational && (l15 >= 28 || l40 >= 28)) {
+                  status = 'STARTER';
+                  starterConfidence = 80;
+                } else {
+                  status = 'REGULAR';
+                  starterConfidence = 45;
+                }
+              } else if (playedCountRelevantL5 >= 4 && playedLastRelevantMatch) {
+                status = 'STARTER';
+                starterConfidence = (posCode === 'GK' || l15 >= 40) ? 90 : 80;
+              } else if (playedCountRelevantL5 >= 4 && !playedLastRelevantMatch) {
+                if (posCode === 'GK' && !upcomingIsNational && (l15 >= 28 || l40 >= 28)) {
+                  status = 'STARTER';
+                  starterConfidence = 80;
+                } else {
+                  status = 'REGULAR';
+                  starterConfidence = 45;
+                }
+              }
             }
           }
         }
@@ -4835,6 +5191,122 @@ app.get('/api/sorare/user-cards', async (req, res) => {
           tacticalNotes: `Match GW ${getCurrentGameWeekNumber()} : ${clubName} vs ${fixture.opponent} (${fixture.isHome ? 'Dom.' : 'Ext.'}, ${fixture.kickoffFormatted}). Moyenne L5: ${l5} pts (${l5Played}/5 joués).`,
           updatedAt: new Date().toISOString(),
         };
+      });
+
+      // --- GOALKEEPER STARTER DEDUPLICATION PASS ---
+      // Real-world rule: Only one starting goalkeeper can be aligned for any club in a match.
+      // If a user has multiple goalkeepers from the exact same club, they cannot both be starters.
+      // CRITICAL: We must NOT deduplicate cards of the same physical player! All cards of the same player (matching playerSlug)
+      // must have the exact same starting status and confidence, and should not demote each other.
+      const gkByClub: Record<string, any[]> = {};
+      transformedCards.forEach((card: any) => {
+        if (card.positionCode === 'GK' && card.club?.name) {
+          const clubKey = card.club.name.toLowerCase().trim();
+          if (!gkByClub[clubKey]) {
+            gkByClub[clubKey] = [];
+          }
+          gkByClub[clubKey].push(card);
+        }
+      });
+
+      Object.keys(gkByClub).forEach((clubKey) => {
+        const clubCards = gkByClub[clubKey];
+        if (clubCards.length > 1) {
+          // Group the cards by playerSlug to find the unique players for this club.
+          const cardsByPlayer: Record<string, any[]> = {};
+          clubCards.forEach((card) => {
+            const pSlug = card.playerSlug || card.name || card.displayName;
+            if (!cardsByPlayer[pSlug]) {
+              cardsByPlayer[pSlug] = [];
+            }
+            cardsByPlayer[pSlug].push(card);
+          });
+
+          const uniquePlayerSlugs = Object.keys(cardsByPlayer);
+          if (uniquePlayerSlugs.length > 1) {
+            // We have multiple DIFFERENT goalkeeper players for the same club.
+            // Let's find the best player among them who is likely the starter.
+            // We score each player slug based on their best card's status.
+            const playerScores = uniquePlayerSlugs.map((pSlug) => {
+              const pCards = cardsByPlayer[pSlug];
+              // Find the best/most confident card for this player
+              let bestCard = pCards[0];
+              pCards.forEach((c) => {
+                const cConf = c.starterConfidence ?? 0;
+                const bestConf = bestCard.starterConfidence ?? 0;
+                const cConfirmed = c.lineupStatus === 'CONFIRMED_STARTER';
+                const bestConfirmed = bestCard.lineupStatus === 'CONFIRMED_STARTER';
+
+                if (cConfirmed && !bestConfirmed) {
+                  bestCard = c;
+                } else if (!cConfirmed && bestConfirmed) {
+                  // keep best
+                } else if (cConf > bestConf) {
+                  bestCard = c;
+                }
+              });
+
+              return {
+                playerSlug: pSlug,
+                bestCard,
+                cards: pCards,
+              };
+            });
+
+            // Sort the players to find the primary starting goalkeeper
+            playerScores.sort((a, b) => {
+              const aCard = a.bestCard;
+              const bCard = b.bestCard;
+
+              const aConfirmed = aCard.lineupStatus === 'CONFIRMED_STARTER';
+              const bConfirmed = bCard.lineupStatus === 'CONFIRMED_STARTER';
+              if (aConfirmed && !bConfirmed) return -1;
+              if (!aConfirmed && bConfirmed) return 1;
+
+              const aOut = aCard.lineupStatus === 'CONFIRMED_OUT' || aCard.lineupStatus === 'CONFIRMED_BENCH';
+              const bOut = bCard.lineupStatus === 'CONFIRMED_OUT' || bCard.lineupStatus === 'CONFIRMED_BENCH';
+              if (aOut && !bOut) return 1;
+              if (!aOut && bOut) return -1;
+
+              const aConf = aCard.starterConfidence ?? 0;
+              const bConf = bCard.starterConfidence ?? 0;
+              if (aConf !== bConf) return bConf - aConf;
+
+              const aL5Played = aCard.scores?.l5Played ?? 0;
+              const bL5Played = bCard.scores?.l5Played ?? 0;
+              if (aL5Played !== bL5Played) return bL5Played - aL5Played;
+
+              const aL5 = aCard.scores?.l5 ?? 0;
+              const bL5 = bCard.scores?.l5 ?? 0;
+              if (aL5 !== bL5) return bL5 - aL5;
+
+              return (bCard.scores?.l15 ?? 0) - (aCard.scores?.l15 ?? 0);
+            });
+
+            const winnerPlayer = playerScores[0];
+            const winnerConf = winnerPlayer.bestCard.starterConfidence ?? 90;
+
+            // If the winning player is highly confident, we demote the other goalkeeper players.
+            if (winnerConf >= 50 || winnerPlayer.bestCard.lineupStatus === 'CONFIRMED_STARTER') {
+              for (let i = 1; i < playerScores.length; i++) {
+                const backupPlayer = playerScores[i];
+                const backupConf = Math.max(0, Math.min(15, 100 - winnerConf));
+
+                // Apply demotion to ALL cards of the backup player(s)
+                backupPlayer.cards.forEach((backupCard) => {
+                  if (backupCard.lineupStatus !== 'CONFIRMED_STARTER') {
+                    backupCard.status = 'SUBSTITUTE';
+                    backupCard.starterConfidence = backupConf;
+                    backupCard.tacticalNotes = (backupCard.tacticalNotes || '') + ` (Remplaçant de ${winnerPlayer.bestCard.displayName || winnerPlayer.bestCard.name})`;
+                    if (winnerPlayer.bestCard.lineupStatus === 'CONFIRMED_STARTER') {
+                      backupCard.lineupStatus = 'CONFIRMED_BENCH';
+                    }
+                  }
+                });
+              }
+            }
+          }
+        }
       });
 
       const finalCollection = transformedCards;
@@ -5245,8 +5717,22 @@ app.post('/api/ai/optimize-lineup', requireAppToken, async (req, res) => {
 
     // Apply active optimization filters to the player pool
     let filteredCandidates = boundedCards.filter((c: any) => {
-      // 1. Exclude injured / suspended / not playing
-      if (c.injuryStatus === 'INJURED' || c.injuryStatus === 'SUSPENDED' || c.status === 'NOT_PLAYING') {
+      // 1. Exclude injured / suspended / not playing / substitutes / bench / non-starters
+      if (
+        c.injuryStatus === 'INJURED' || 
+        c.injuryStatus === 'SUSPENDED' || 
+        c.status === 'NOT_PLAYING' || 
+        c.status === 'SUBSTITUTE' || 
+        c.status === 'BENCH' || 
+        c.status === 'SUPER_SUBSTITUTE' ||
+        c.playingStatus === 'SUBSTITUTE' ||
+        c.playingStatus === 'BENCH' ||
+        c.playingStatus === 'NOT_PLAYING' ||
+        c.lineupStatus === 'CONFIRMED_BENCH' || 
+        c.lineupStatus === 'CONFIRMED_OUT' ||
+        (c.isLineupAnnounced && c.isStarter === false) ||
+        (c.starterConfidence !== undefined && c.starterConfidence < 50)
+      ) {
         return false;
       }
 
@@ -5374,11 +5860,11 @@ Règles de composition SO5 :
    - 1 Joueur Joker / EXTRA (parmi DEF, MID ou FWD uniquement, JAMAIS de GK en extra).
    ${filters.preferredExtraPosition && filters.preferredExtraPosition !== 'AUTO' ? `*Contrainte spéciale Extra : L'Extra DOIT être de poste ${filters.preferredExtraPosition}.*` : ''}
 2. Capitaine : Sélectionne le joueur qui a le plus fort potentiel / plafond de points SO5 face à son adversaire direct. Il reçoit un bonus de +20% de score.
-3. RÈGLE ABSOLUE DE SÉCURITÉ DU DERNIER MATCH ET DNP : 
-   - Examine attentivement le champ 'playedLastMatch'.
-   - Si un joueur n'a PAS joué le dernier match (playedLastMatch = false ou 0 min), il subit une LOURDE PÉNALITÉ car son risque de non-titularisation est critique.
-   - À score égal ou très proche, CHOISIS SYSTÉMATIQUEMENT le joueur ayant joué le dernier match plutôt que celui qui n'a pas joué.
-   - Élimine d'office tout joueur blessé, suspendu, ou ayant le statut NOT_PLAYING.
+3. RÈGLES INVIOLABLES DE SÉCURITÉ ET D'ÉLIGIBILITÉ : 
+   - 100% TITULAIRES : Élimine d'office tout joueur blessé, suspendu, remplaçant (SUBSTITUTE / BENCH / CONFIRMED_BENCH), non-joueur (NOT_PLAYING / CONFIRMED_OUT) ou sans garantie de titularisation.
+   - INTERDICTION ABSOLUE DE DUEL DIRECT (OPPONENT CONFLICT) : Il est STRICTEMENT INTERDIT de sélectionner deux joueurs dont les clubs s'affrontent durant cette Game Week (par exemple un joueur du Real Madrid et un joueur de la Real Sociedad si Real Madrid affronte Real Sociedad).
+   - UNICITÉ STRICTE : Les 5 joueurs choisis DOIVENT être 5 joueurs physiques totalement DISTINCTS. Interdiction formelle d'avoir 2 cartes du même joueur.
+   - Examine attentivement le champ 'playedLastMatch'. Si un joueur n'a PAS joué le dernier match, son risque de non-titularisation est critique. Privilégie le titulaire ayant joué le dernier match.
 4. Respecte impérativement les filtres et contraintes fixés par l'utilisateur (notamment la date limite maxMatchDate).
 5. Stratégie demandée : ${strategy}.
 6. Analyse les cotes bookmakers (clean sheet pour gardiens/défenseurs, espérance de buts xG pour milieux/attaquants) et la météo (pluie/vent augmentant les erreurs de gardiens et favorisant les duels défensifs).
@@ -5472,22 +5958,101 @@ Renvoie la composition optimale SO5 avec le capitaine, les justifications par po
 
     const parsed = JSON.parse(jsonText);
 
-    // Validate and sanitize Gemini recommended cards against hard date filter
-    if (filters.maxMatchDate && parsed.recommendedLineup) {
-      const slots = ['gkId', 'defId', 'midId', 'fwdId', 'extraId'];
-      const slotPosMap: Record<string, string> = { gkId: 'GK', defId: 'DEF', midId: 'MID', fwdId: 'FWD', extraId: 'EXTRA' };
-      
-      for (const slotKey of slots) {
-        const pId = parsed.recommendedLineup[slotKey];
-        const cardObj = boundedCards.find((c: any) => c.id === pId);
-        if (cardObj && !isCardMatchOnOrBeforeDate(cardObj, filters.maxMatchDate)) {
-          const expectedPos = slotPosMap[slotKey];
-          const validReplacement = filteredCandidates.find((c: any) => {
-            if (expectedPos === 'EXTRA') return c.positionCode !== 'GK' && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate);
-            return c.positionCode === expectedPos && isCardMatchOnOrBeforeDate(c, filters.maxMatchDate);
+    // Validate and sanitize Gemini recommended cards against non-starters, hard date filter, and opponent conflicts
+    if (parsed.recommendedLineup) {
+      const getCard = (idStr: string) => boundedCards.find((c: any) => c.id === idStr) || null;
+      let rawGk = getCard(parsed.recommendedLineup.gkId);
+      let rawDef = getCard(parsed.recommendedLineup.defId);
+      let rawMid = getCard(parsed.recommendedLineup.midId);
+      let rawFwd = getCard(parsed.recommendedLineup.fwdId);
+      let rawExtra = getCard(parsed.recommendedLineup.extraId);
+
+      // Verify date filter, confirmed_starter flag, bench/out status, and duplicate player IDs for each slot
+      const usedIdsInLineup = new Set<string>();
+      const slotsToVerify: { key: string; pos: string; getVal: () => any; setVal: (v: any) => void }[] = [
+        { key: 'gkId', pos: 'GK', getVal: () => rawGk, setVal: (v) => { rawGk = v; parsed.recommendedLineup.gkId = v?.id || ''; } },
+        { key: 'defId', pos: 'DEF', getVal: () => rawDef, setVal: (v) => { rawDef = v; parsed.recommendedLineup.defId = v?.id || ''; } },
+        { key: 'midId', pos: 'MID', getVal: () => rawMid, setVal: (v) => { rawMid = v; parsed.recommendedLineup.midId = v?.id || ''; } },
+        { key: 'fwdId', pos: 'FWD', getVal: () => rawFwd, setVal: (v) => { rawFwd = v; parsed.recommendedLineup.fwdId = v?.id || ''; } },
+        { key: 'extraId', pos: 'EXTRA', getVal: () => rawExtra, setVal: (v) => { rawExtra = v; parsed.recommendedLineup.extraId = v?.id || ''; } },
+      ];
+
+      for (const item of slotsToVerify) {
+        const current = item.getVal();
+        const isInvalidDate = filters.maxMatchDate && current && !isCardMatchOnOrBeforeDate(current, filters.maxMatchDate);
+        const confirmedStarterFlag = current?.confirmed_starter ?? current?.confirmedStarter;
+        const isNonStarter = current && (
+          current.injuryStatus === 'INJURED' || 
+          current.injuryStatus === 'SUSPENDED' || 
+          current.status === 'NOT_PLAYING' || 
+          current.status === 'SUBSTITUTE' || 
+          current.status === 'BENCH' || 
+          current.status === 'SUPER_SUBSTITUTE' ||
+          current.playingStatus === 'SUBSTITUTE' ||
+          current.playingStatus === 'BENCH' ||
+          current.playingStatus === 'NOT_PLAYING' ||
+          current.lineupStatus === 'CONFIRMED_BENCH' || 
+          current.lineupStatus === 'CONFIRMED_OUT' ||
+          confirmedStarterFlag === false ||
+          confirmedStarterFlag === 'CONFIRMED_BENCH' ||
+          confirmedStarterFlag === 'CONFIRMED_OUT' ||
+          confirmedStarterFlag === 'BENCH' ||
+          confirmedStarterFlag === 'OUT' ||
+          (current.isLineupAnnounced && current.isStarter === false) ||
+          (current.starterConfidence !== undefined && current.starterConfidence < 50)
+        );
+        const isDuplicateId = current && usedIdsInLineup.has(current.id);
+
+        if (!current || isInvalidDate || isNonStarter || isDuplicateId) {
+          const replacement = filteredCandidates.find((c: any) => {
+            if (usedIdsInLineup.has(c.id)) return false;
+            const cFlag = c?.confirmed_starter ?? c?.confirmedStarter;
+            if (cFlag === false || cFlag === 'CONFIRMED_BENCH' || cFlag === 'CONFIRMED_OUT' || cFlag === 'BENCH' || cFlag === 'OUT') return false;
+            if (item.pos === 'EXTRA') return c.positionCode !== 'GK' && (!filters.maxMatchDate || isCardMatchOnOrBeforeDate(c, filters.maxMatchDate));
+            return c.positionCode === item.pos && (!filters.maxMatchDate || isCardMatchOnOrBeforeDate(c, filters.maxMatchDate));
           });
-          if (validReplacement) {
-            parsed.recommendedLineup[slotKey] = validReplacement.id;
+          if (replacement) {
+            item.setVal(replacement);
+            usedIdsInLineup.add(replacement.id);
+          }
+        } else if (current) {
+          usedIdsInLineup.add(current.id);
+        }
+      }
+
+      // Verify and resolve direct opponent conflicts (Duels directs)
+      const currentCards = [rawGk, rawDef, rawMid, rawFwd, rawExtra].filter(Boolean);
+      for (let i = 0; i < currentCards.length; i++) {
+        for (let j = i + 1; j < currentCards.length; j++) {
+          const c1 = currentCards[i];
+          const c2 = currentCards[j];
+          const club1 = c1?.club?.name;
+          const club2 = c2?.club?.name;
+          const opp1 = c1?.upcomingFixture?.opponent;
+          const opp2 = c2?.upcomingFixture?.opponent;
+
+          const isConflict = club1 && club2 && opp1 && opp2 && (
+            (club1.toLowerCase() === opp2.toLowerCase() || opp2.toLowerCase().includes(club1.toLowerCase())) ||
+            (club2.toLowerCase() === opp1.toLowerCase() || opp1.toLowerCase().includes(club2.toLowerCase()))
+          );
+
+          if (isConflict) {
+            // Found direct conflict! Replace lower projected player (e.g. c2)
+            const replaceSlot = slotsToVerify.find(s => s.getVal()?.id === c2.id);
+            if (replaceSlot) {
+              const nonConflictingAlt = filteredCandidates.find((c: any) => {
+                if (replaceSlot.pos === 'EXTRA') if (c.positionCode === 'GK') return false;
+                else if (c.positionCode !== replaceSlot.pos) return false;
+                if (c.id === c1.id || c.id === c2.id) return false;
+                const cClub = c.club?.name?.toLowerCase();
+                const cOpp = c.upcomingFixture?.opponent?.toLowerCase();
+                if (cClub && cOpp && club1 && (cClub === club1.toLowerCase() || cOpp === club1.toLowerCase())) return false;
+                return true;
+              });
+              if (nonConflictingAlt) {
+                replaceSlot.setVal(nonConflictingAlt);
+              }
+            }
           }
         }
       }

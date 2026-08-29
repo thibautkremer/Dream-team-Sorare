@@ -678,8 +678,8 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
           const drawProb = sumInv > 0 ? Math.round((invDraw / sumInv) * 100) : 0;
           const lossProb = sumInv > 0 ? Math.round((invLoss / sumInv) * 100) : 0;
 
-          const cleanSheetValue = bm?.cleanSheetProb || (card.positionCode === 'GK' || card.positionCode === 'DEF' ? 35 : 25);
-          const goalExpValue = bm?.goalExpectancy || 1.45;
+          const cleanSheetValue = bm?.cleanSheetProb || (card.upcomingFixture.isHome ? 38 : 28);
+          const goalExpValue = bm?.goalExpectancy || (card.upcomingFixture.isHome ? 1.6 : 1.2);
           const concededExpValue = Math.max(0.4, Math.round((1.8 - (cleanSheetValue / 45)) * 10) / 10);
 
           // Specific player match in topScorers / topAssisters

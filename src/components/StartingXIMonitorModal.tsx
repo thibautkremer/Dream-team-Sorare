@@ -17,6 +17,7 @@ import {
   Users 
 } from 'lucide-react';
 import { SorareCard, Lineup, NonStarterAlert, StartingXIPlayerInfo } from '../types';
+import { getPlayerUniqueKey } from '../utils/optimizer';
 import { NotificationService } from '../utils/notifications';
 import { formatKickoffDate } from '../utils/optimizer';
 
@@ -308,10 +309,10 @@ export const StartingXIMonitorModal: React.FC<StartingXIMonitorModalProps> = ({
                           );
                         }
 
-                        const pSlug = (player.playerSlug || player.slug || player.displayName || '').toLowerCase();
+                        const pKey = getPlayerUniqueKey(player).toLowerCase();
                         // Look up in playerStatusMap
                         const info = Object.values(playerStatusMap).find(
-                          (i) => i.playerSlug.toLowerCase() === pSlug || i.displayName.toLowerCase() === player.displayName.toLowerCase()
+                          (i) => i.playerSlug.toLowerCase() === pKey || (i.displayName && player.displayName && i.displayName.toLowerCase() === player.displayName.toLowerCase())
                         );
 
                         const isStarter = info?.isStarter ?? (player.status === 'STARTER' || player.status === 'CONFIRMED');

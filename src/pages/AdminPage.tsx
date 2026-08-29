@@ -41,10 +41,23 @@ export const AdminPage: React.FC<AdminPageProps> = ({ cards: propCards, gameWeek
   const [activeTab, setActiveTab] = useState<'stats' | 'logs'>('stats');
   
   // Cards and gameweek state
-  const cards = useMemo(() => {
+  const rawCards = useMemo(() => {
     if (propCards && propCards.length > 0) return propCards;
     return StorageService.getCards();
   }, [propCards]);
+
+  // Filter out players where L5, L15, and L40 scores are all zero, ensuring only active playing squad members influence statistics
+  const cards = useMemo(() => {
+    return rawCards.filter((card) => {
+      if (!card) return false;
+      const l5 = typeof card.scores?.l5 === 'number' ? card.scores.l5 : 0;
+      const l15 = typeof card.scores?.l15 === 'number' ? card.scores.l15 : 0;
+      const l40 = typeof card.scores?.l40 === 'number' ? card.scores.l40 : 0;
+      // Exclude players where L5, L15, and L40 are all zero (or <= 0)
+      const hasAnyValidScore = l5 > 0 || l15 > 0 || l40 > 0;
+      return hasAnyValidScore;
+    });
+  }, [rawCards]);
 
   const currentGW = propGameWeek || getCurrentGameWeekNumber();
 
@@ -250,12 +263,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({ cards: propCards, gameWeek
                     </span>
                     {accuracyData.totalCardsExcluded > 0 && (
                       <span className="rounded bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[10px] px-2 py-0.5 font-bold">
-                        {accuracyData.totalCardsExcluded} Exclus (L40=0 / L5=0 & L15=0 / sans score)
+                        {accuracyData.totalCardsExcluded} Exclus (L5=0 & L15=0 & L40=0 / inactifs)
                       </span>
                     )}
                   </h3>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    Compare les scores projetés bruts pré-match face aux résultats SO5 réels, à la titularisation et aux issues de matchs. <em>Exclut automatiquement les joueurs inactifs (L40 = 0, L5 = 0 & L15 = 0, ou sans score).</em>
+                    Compare les scores projetés bruts pré-match face aux résultats SO5 réels, à la titularisation et aux issues de matchs. <em>Exclut automatiquement les joueurs inactifs (L5 = 0, L15 = 0 et L40 = 0, ou sans score).</em>
                   </p>
                 </div>
               </div>

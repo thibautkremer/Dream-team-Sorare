@@ -1,4 +1,4 @@
-import { SorareCard, Lineup, StrategyType, ScoringFocus, PositionCode, LineupOptimizationFilters, UpcomingFixture, MatchPerformanceDetail } from '../types';
+import { SorareCard, Lineup, StrategyType, ScoringFocus, PositionCode, LineupOptimizationFilters, UpcomingFixture, MatchPerformanceDetail, LineupValidationIssue, LineupValidationResult, SlotPosition, RealMatchScoreDetail, PlayingStatus, OfficialLineupStatus } from '../types';
 import { getCardTotalBonus, getCardBonusBreakdown, CardBonusBreakdown } from './sorareSlug';
 import { getCurrentGameWeekNumber } from '../data/fixturesData';
 
@@ -53,6 +53,7 @@ export interface ScoreBreakdown {
   // Bonus contextuels
   contextualBonus: number;
   contextualImpactLabel?: string;
+  advancedStatsBonus: number;
   regressionPenalty: number;
 
   filterLabel?: string;
@@ -415,32 +416,46 @@ export function precomputeClubContexts(cards: SorareCard[]): Record<string, Club
 
 export function isNationalTeamMatch(match: { competitionName?: string; opponent?: string; isNational?: boolean }): boolean {
   if (!match) return false;
-  if (match.isNational === true || (match as any).isNationalTeam === true || (match as any).teamType === 'NATIONAL' || (match as any).matchType === 'NATIONAL') {
+  if (
+    match.isNational === true || 
+    (match as any).isNationalTeam === true || 
+    (match as any).teamType === 'NATIONAL' || 
+    (match as any).matchType === 'NATIONAL' ||
+    (match as any).competitionType === 'NATIONAL' ||
+    (match as any).competitionType === 'INTERNATIONAL_NATIONAL' ||
+    (match as any).competitionCategory === 'INTERNATIONAL'
+  ) {
     return true;
   }
 
-  const comp = (match.competitionName || '').toLowerCase().trim();
+  const comp = (match.competitionName || (match as any).competition || '').toLowerCase().trim();
   const opp = (match.opponent || '').toLowerCase().trim();
 
   if (!comp && !opp) return false;
   
-  // Exclure explicitement les compétitions européennes et nationales de clubs
+  // Exclure explicitement les compétitions de clubs (ligues et coupes)
   const clubCompPatterns = [
     'europa', 'champions league', 'ucl', 'uel', 'uecl', 'conference league', 'club',
-    'laliga', 'la liga', 'premier league', 'serie a', 'bundesliga', 'ligue 1', 'ligue 2',
-    'copa del rey', 'fa cup', 'dfb pokal', 'coppa italia', 'coupe de france',
-    'eredivisie', 'primeira liga', 'pro league', 'mls', 'championship'
+    'laliga', 'la liga', 'primera division', 'primera división', 'hypermotion', 'segunda',
+    'premier league', 'serie a', 'bundesliga', 'ligue 1', 'ligue 2',
+    'copa del rey', 'fa cup', 'dfb pokal', 'dfb-pokal', 'coppa italia', 'coupe de france',
+    'eredivisie', 'primeira liga', 'pro league', 'mls', 'championship', 'copa libertadores'
   ];
   if (clubCompPatterns.some(pat => comp.includes(pat))) {
-    return false;
+    // S'assurer qu'il ne s'agit pas d'un tournoi de jeunes / olympique mentionné avec un mot de club
+    if (!comp.includes('olympic') && !comp.includes('u23') && !comp.includes('u21') && !comp.includes('youth')) {
+      return false;
+    }
   }
 
-  // Liste de mots-clés robustes pour les compétitions et équipes nationales
+  // Liste exhaustive de mots-clés pour les compétitions et sélections nationales (incluant JO, U23, U21, etc.)
   const intlKeywords = [
+    'olympic', 'olympics', 'olympiques', 'jo 20', 'jeux olympiques', 'paris 2024', 'tokyo 2020',
+    'u23', 'u21', 'u20', 'u19', 'u18', 'u17', 'u16', 'u15', 'youth international',
     'nations league', 'euro', 'world cup', 'mondial', 'qualif', 'friendly', 
-    'friendlies', 'amical', 'amicaux', 'international', 'copa america', 'copa américa', 
+    'friendlies', 'amical international', 'amicaux', 'international', 'copa america', 'copa américa', 
     'can ', 'africa cup', 'afcon', 'conmebol', 'gold cup', 'asian cup', 'national team',
-    'sélection', 'selection', 'pays', 'nations'
+    'sélection', 'selection', 'pays', 'nations', 'fifa'
   ];
 
   if (intlKeywords.some(kw => comp.includes(kw) || opp.includes(kw))) {
@@ -461,7 +476,8 @@ export function isNationalTeamMatch(match: { competitionName?: string; opponent?
     'serbia', 'serbie', 'greece', 'grèce', 'sweden', 'suède', 'norway', 'norvège',
     'finland', 'finlande', 'hungary', 'hongrie', 'cameroon', 'cameroun', 'ivory coast', "côte d'ivoire",
     'nigeria', 'ghana', 'algeria', 'algérie', 'egypt', 'égypte', 'paraguay', 'ecuador', 'équateur',
-    'peru', 'pérou', 'venezuela', 'bolivia', 'bolivie'
+    'peru', 'pérou', 'venezuela', 'bolivia', 'bolivie', 'uzbekistan', 'ouzbekistan', 'dominican republic',
+    'republique dominicaine', 'guinea', 'guinée', 'mali', 'iraq', 'irak', 'israel', 'israël', 'new zealand'
   ];
 
   if (countries.some(c => comp === c || opp === c || opp.includes(c) || comp.includes(c))) {
@@ -489,6 +505,156 @@ export function isPlayerNewTransfer(card: SorareCard): boolean {
   ];
   
   return keywords.some(kw => notes.includes(kw));
+}
+
+/**
+ * Vérifie si une compétition correspond à un championnat de club (ligue domestique) ou une coupe nationale/continentale de club.
+ */
+export function isClubLeagueOrDomesticCup(competitionName: string, card?: SorareCard): boolean {
+  if (!competitionName) return true;
+  const comp = competitionName.toLowerCase().trim();
+
+  // Rejet formel des compétitions d'équipes nationales, sélections jeunes et tournois internationaux
+  const nationalKeywords = [
+    'world cup', 'mondial', 'nations league', 'euro', 'copa america', 'copa américa',
+    'afcon', 'africa cup', 'gold cup', 'asian cup', 'olympic', 'olympiques', 'u23', 'u21',
+    'u20', 'u19', 'u18', 'u17', 'youth', 'national team', 'sélection', 'selection',
+    'international friendly', 'amical international', 'fifa', 'paris 2024', 'jo 20'
+  ];
+  if (nationalKeywords.some(kw => comp.includes(kw))) {
+    return false;
+  }
+
+  // Modèles de compétitions de clubs (Ligues et Coupes nationales / continentales)
+  const clubPatterns = [
+    // Ligues domestiques
+    'laliga', 'la liga', 'primera division', 'primera división', 'hypermotion', 'segunda',
+    'premier league', 'championship', 'league one', 'league two',
+    'serie a', 'serie b',
+    'bundesliga', '2. bundesliga',
+    'ligue 1', 'ligue 2',
+    'eredivisie', 'eerste divisie',
+    'primeira liga', 'liga portugal',
+    'pro league', 'jupiler',
+    'mls', 'major league soccer',
+    'brasileir', 'brasileirao', 'série a',
+    'liga profesional', 'liga argentina',
+    'liga mx', 'bbva mx',
+    'super lig', 'süper lig',
+    'premiership', 'scottish premiership',
+    'austrian bundesliga', 'admiral bundesliga',
+    'swiss super league', 'super league',
+    'j1 league', 'j2 league', 'k league', 'k league 1',
+    'allsvenskan', 'eliteserien', 'superliga', 'ekstraklasa',
+    // Coupes nationales
+    'copa del rey', 'supercopa', 'supercopa de españa',
+    'fa cup', 'efl cup', 'carabao cup', 'community shield',
+    'coppa italia', 'supercoppa', 'supercoppa italiana',
+    'dfb-pokal', 'dfb pokal', 'dfl-supercup',
+    'coupe de france', 'trophee des champions', 'trophée des champions',
+    'knvb beker', 'knvb', 'johan cruijff schaal',
+    'taca de portugal', 'taça de portugal', 'taca da liga', 'taça da liga', 'supertaca', 'supertaça',
+    'us open cup', 'mls cup', 'campeones cup',
+    'copa do brasil', 'supercopa do brasil',
+    'copa argentina', 'copa de la liga', 'trofeo de campeones',
+    'copa mx', 'campeon de campeones',
+    'turkiye kupasi', 'türkiye kupası', 'super kupa', 'süper kupa',
+    'scottish cup', 'scottish league cup',
+    'ofb-cup', 'öfb-cup', 'swiss cup', 'coupe de suisse',
+    'cup', 'coupe', 'copa', 'pokal', 'beker', 'taça', 'taca', 'kupa',
+    // Coupes continentales de clubs
+    'champions league', 'ucl', 'europa league', 'uel', 'conference league', 'uecl', 'uefa super cup',
+    'copa libertadores', 'copa sudamericana', 'recopa', 'concacaf champions', 'leagues cup', 'club world cup'
+  ];
+
+  if (clubPatterns.some(pat => comp.includes(pat))) {
+    return true;
+  }
+
+  // Vérification de la correspondance avec la ligue du club de la carte
+  if (card) {
+    const cardLeague = (card.club?.league || card.league || card.upcomingFixture?.competitionName || '').toLowerCase().trim();
+    if (cardLeague && (comp.includes(cardLeague) || cardLeague.includes(comp))) {
+      return true;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Filtre strict identifiant uniquement les entrées de matchs où le type de compétition correspond
+ * à la ligue ou coupe domestique du club, en ignorant formellement les matchs en équipe nationale
+ * afin de prévenir le bug de projection de score à 0.
+ */
+export function isClubDomesticOrLeagueMatch(
+  match: RealMatchScoreDetail | { competitionName?: string; opponent?: string; isNational?: boolean; game?: any },
+  card: SorareCard
+): boolean {
+  if (!match) return false;
+
+  // 1. Rejet si le match est explicitement étiqueté comme match international / équipe nationale
+  if (
+    (match as any).isNational === true || 
+    (match as any).isNationalTeam === true || 
+    (match as any).teamType === 'NATIONAL' || 
+    (match as any).matchType === 'NATIONAL' ||
+    (match as any).competitionType === 'NATIONAL' ||
+    (match as any).competitionType === 'INTERNATIONAL_NATIONAL' ||
+    (match as any).competitionCategory === 'INTERNATIONAL'
+  ) {
+    return false;
+  }
+  if (isNationalTeamMatch(match)) {
+    return false;
+  }
+
+  // 2. Si le type de compétition est explicitement du club, valider immédiatement
+  if (
+    (match as any).competitionType === 'CLUB' ||
+    (match as any).competitionType === 'DOMESTIC_LEAGUE' ||
+    (match as any).competitionType === 'DOMESTIC_CUP' ||
+    (match as any).competitionType === 'INTERNATIONAL_CLUB'
+  ) {
+    return true;
+  }
+
+  // 3. Rejet des compétitions nationales, olympiques ou de jeunes par mots-clés
+  const compName = (match.competitionName || (match as any).competition || '').toLowerCase().trim();
+  if (
+    compName.includes('olympic') || compName.includes('olympiques') ||
+    compName.includes('u23') || compName.includes('u21') || compName.includes('u20') ||
+    compName.includes('u19') || compName.includes('u18') || compName.includes('u17') ||
+    compName.includes('youth') || compName.includes('nations league') ||
+    compName.includes('world cup') || compName.includes('mondial') ||
+    compName.includes('euro ') || compName.includes('copa america') ||
+    compName.includes('afcon') || compName.includes('qualif') ||
+    compName.includes('international') || compName.includes('sélection') || compName.includes('selection') ||
+    compName.includes('paris 2024') || compName.includes('jo 20')
+  ) {
+    return false;
+  }
+
+  // 4. Vérification de la correspondance avec le club du joueur (home/away)
+  if (card.club?.name && match.game?.homeTeam && match.game?.awayTeam) {
+    const club = card.club.name.toLowerCase().trim();
+    const home = match.game.homeTeam.toLowerCase().trim();
+    const away = match.game.awayTeam.toLowerCase().trim();
+
+    const matchesHome = home.includes(club) || club.includes(home);
+    const matchesAway = away.includes(club) || club.includes(away);
+
+    // Vérification sur les mots significatifs du nom du club (ex: "Espanyol", "Arsenal", "Madrid", etc.)
+    const clubWords = club.replace(/\b(fc|cf|rc|as|sc|cd|de|la|el|le|the|club|real|atletico|ac|afc)\b/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+    const matchesWords = clubWords.length > 0 && clubWords.some(w => home.includes(w) || away.includes(w));
+
+    if (!matchesHome && !matchesAway && !matchesWords) {
+      return false;
+    }
+  }
+
+  // 5. Vérification que la compétition est bien un championnat de club ou une coupe domestique/continentale
+  return isClubLeagueOrDomesticCup(compName, card);
 }
 
 export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: SorareCard, isNational = false): PlayerRecentMatchStats {
@@ -558,6 +724,206 @@ export function getClubOnlyRecentMatchAnalysis(clubScores: number[], card: Sorar
 }
 
 /**
+ * Calcule le statut de jeu officiel et le pourcentage de titularisation du joueur.
+ * Exploite l'indicateur officiel 'confirmed_starter' (issu de Sorare/Opta)
+ * ainsi que le pourcentage de titularisation fourni par Sorare (starterConfidence / playedRate).
+ */
+export function computePlayerPlayingStatus(card: SorareCard): {
+  status: PlayingStatus;
+  starterConfidence: number;
+  isStarter: boolean;
+  isConfirmed: boolean;
+  isNonStarter: boolean;
+  titularizationPercentage: number;
+  reason: string;
+} {
+  if (!card) {
+    return {
+      status: 'NOT_PLAYING',
+      starterConfidence: 0,
+      isStarter: false,
+      isConfirmed: false,
+      isNonStarter: true,
+      titularizationPercentage: 0,
+      reason: 'Carte inexistante',
+    };
+  }
+
+  const confirmedStarterFlag = (card as any).confirmed_starter ?? (card as any).confirmedStarter ?? (card as any).is_confirmed_starter;
+  const lineupStatusUpper = (card.lineupStatus || '').toUpperCase();
+  const statusUpper = (card.status || '').toUpperCase();
+  const playingStatusUpper = (card.playingStatus || '').toUpperCase();
+  const isLineupAnnounced = card.isLineupAnnounced === true || (card as any).is_lineup_announced === true;
+  const isStarterProp = card.isStarter;
+
+  // 1. Détection des cas d'exclusion fermes (Blessures / Suspensions / Forfait / Confirmed OUT)
+  const isInjuredOrSuspended = card.injuryStatus === 'INJURED' || card.injuryStatus === 'SUSPENDED';
+  const isExplicitlyOut = 
+    isInjuredOrSuspended ||
+    lineupStatusUpper === 'CONFIRMED_OUT' ||
+    confirmedStarterFlag === 'CONFIRMED_OUT' ||
+    confirmedStarterFlag === 'OUT' ||
+    statusUpper === 'NOT_PLAYING' ||
+    playingStatusUpper === 'NOT_PLAYING';
+
+  if (isExplicitlyOut) {
+    return {
+      status: 'NOT_PLAYING',
+      starterConfidence: 0,
+      isStarter: false,
+      isConfirmed: isLineupAnnounced,
+      isNonStarter: true,
+      titularizationPercentage: 0,
+      reason: isInjuredOrSuspended ? `Indisponible (${card.injuryStatus})` : 'Confirmé absent (OUT)',
+    };
+  }
+
+  // 2. Détection du statut Confirmed Starter officiel (flag Sorare/Opta)
+  const isOfficialConfirmedStarter = 
+    lineupStatusUpper === 'CONFIRMED_STARTER' ||
+    confirmedStarterFlag === 'CONFIRMED_STARTER' ||
+    confirmedStarterFlag === 'STARTER' ||
+    confirmedStarterFlag === true ||
+    (isLineupAnnounced && isStarterProp === true);
+
+  if (isOfficialConfirmedStarter) {
+    return {
+      status: 'STARTER',
+      starterConfidence: 100,
+      isStarter: true,
+      isConfirmed: true,
+      isNonStarter: false,
+      titularizationPercentage: 100,
+      reason: 'Titulaire officiel confirmé (confirmed_starter)',
+    };
+  }
+
+  // 3. Détection du statut Confirmed Bench officiel (flag Sorare/Opta)
+  const isOfficialConfirmedBench = 
+    lineupStatusUpper === 'CONFIRMED_BENCH' ||
+    confirmedStarterFlag === 'CONFIRMED_BENCH' ||
+    confirmedStarterFlag === 'BENCH' ||
+    (isLineupAnnounced && isStarterProp === false) ||
+    (confirmedStarterFlag === false && isLineupAnnounced);
+
+  if (isOfficialConfirmedBench) {
+    return {
+      status: 'BENCH',
+      starterConfidence: Math.min(card.starterConfidence !== undefined ? card.starterConfidence : 15, 20),
+      isStarter: false,
+      isConfirmed: true,
+      isNonStarter: true,
+      titularizationPercentage: Math.min(card.starterConfidence !== undefined ? card.starterConfidence : 15, 20),
+      reason: 'Remplaçant officiel confirmé sur le banc (confirmed_bench)',
+    };
+  }
+
+  // 4. Calcul du pourcentage de titularisation fourni par Sorare avec filtrage club
+  const clubRecentMatches = card.scores?.recentMatches ? card.scores.recentMatches.filter(m => isClubDomesticOrLeagueMatch(m, card)) : [];
+  const clubPlayedCount = clubRecentMatches.slice(0, 5).filter(m => typeof m.score === 'number' && m.score > 0).length;
+  const clubEvaluatedCount = Math.min(clubRecentMatches.length, 5);
+  const clubPlayedRate = clubEvaluatedCount > 0 ? (clubPlayedCount / clubEvaluatedCount) * 100 : undefined;
+
+  let titularizationPercentage: number;
+  if (typeof (card as any).titularizationPercentage === 'number') {
+    titularizationPercentage = (card as any).titularizationPercentage;
+  } else if (typeof (card as any).titularization_percentage === 'number') {
+    titularizationPercentage = (card as any).titularization_percentage;
+  } else if (statusUpper === 'STARTER' || playingStatusUpper === 'STARTER' || card.isStarter === true) {
+    titularizationPercentage = Math.max(85, card.starterConfidence ?? 85);
+  } else if (clubPlayedRate !== undefined) {
+    titularizationPercentage = clubPlayedRate;
+  } else if (card.starterConfidence !== undefined && card.starterConfidence !== null) {
+    titularizationPercentage = card.starterConfidence;
+  } else if (card.scores?.l5PlayedRate !== undefined) {
+    titularizationPercentage = card.scores.l5PlayedRate;
+  } else if (card.scores?.l15PlayedRate !== undefined) {
+    titularizationPercentage = card.scores.l15PlayedRate;
+  } else if (card.scores?.l40PlayedRate !== undefined) {
+    titularizationPercentage = card.scores.l40PlayedRate;
+  } else {
+    if (statusUpper === 'STARTER' || playingStatusUpper === 'STARTER') titularizationPercentage = 85;
+    else if (statusUpper === 'REGULAR' || playingStatusUpper === 'REGULAR') titularizationPercentage = 60;
+    else if (statusUpper === 'SUPER_SUBSTITUTE' || playingStatusUpper === 'SUPER_SUBSTITUTE') titularizationPercentage = 35;
+    else if (statusUpper === 'SUBSTITUTE' || statusUpper === 'BENCH' || playingStatusUpper === 'SUBSTITUTE' || playingStatusUpper === 'BENCH') titularizationPercentage = 15;
+    else titularizationPercentage = 50;
+  }
+
+  // Protection pour les titulaires et gardiens réguliers de club (ex: Joan Garcia)
+  const isClubGk = card.positionCode === 'GK';
+  if ((statusUpper === 'STARTER' || playingStatusUpper === 'STARTER' || (isClubGk && ((card.scores?.l40 ?? 0) >= 35 || (card.scores?.l15 ?? 0) >= 35))) && titularizationPercentage < 60 && confirmedStarterFlag !== false && lineupStatusUpper !== 'CONFIRMED_BENCH') {
+    titularizationPercentage = Math.max(80, card.starterConfidence ?? 80);
+  }
+
+  // Si le joueur est explicitement marqué comme remplaçant et que titularizationPercentage n'est pas boosté
+  if (statusUpper === 'SUBSTITUTE' || statusUpper === 'BENCH' || playingStatusUpper === 'SUBSTITUTE' || playingStatusUpper === 'BENCH') {
+    if (titularizationPercentage > 50 && confirmedStarterFlag !== true) {
+      titularizationPercentage = 40;
+    }
+  }
+
+  // Règle de classification par pourcentage de titularisation :
+  // >= 60% : STARTER (Titulaire probable)
+  // >= 40% et < 60% : REGULAR (En rotation / incertain)
+  // >= 20% et < 40% : SUBSTITUTE (Remplaçant)
+  // < 20% : BENCH (Banc / hors rotation)
+  if (titularizationPercentage >= 60) {
+    return {
+      status: 'STARTER',
+      starterConfidence: titularizationPercentage,
+      isStarter: true,
+      isConfirmed: false,
+      isNonStarter: false,
+      titularizationPercentage,
+      reason: `Titulaire probable (${Math.round(titularizationPercentage)}% de titularisation)`,
+    };
+  }
+
+  if (titularizationPercentage >= 40) {
+    return {
+      status: 'REGULAR',
+      starterConfidence: titularizationPercentage,
+      isStarter: false,
+      isConfirmed: false,
+      isNonStarter: false,
+      titularizationPercentage,
+      reason: `En rotation / statut incertain (${Math.round(titularizationPercentage)}% de titularisation)`,
+    };
+  }
+
+  if (titularizationPercentage >= 20) {
+    return {
+      status: 'SUBSTITUTE',
+      starterConfidence: titularizationPercentage,
+      isStarter: false,
+      isConfirmed: false,
+      isNonStarter: true,
+      titularizationPercentage,
+      reason: `Remplaçant (${Math.round(titularizationPercentage)}% de titularisation)`,
+    };
+  }
+
+  return {
+    status: 'BENCH',
+    starterConfidence: titularizationPercentage,
+    isStarter: false,
+    isConfirmed: false,
+    isNonStarter: true,
+    titularizationPercentage,
+    reason: `Banc / Non titulaire (${Math.round(titularizationPercentage)}% de titularisation)`,
+  };
+}
+
+/**
+ * Détecte si le joueur est non-titulaire (remplaçant, sur le banc, hors groupe, blessé, suspendu, ou non titulaire selon l'algorithme)
+ */
+export function isPlayerNonStarter(card: SorareCard): boolean {
+  if (!card) return true;
+  const statusInfo = computePlayerPlayingStatus(card);
+  return statusInfo.isNonStarter;
+}
+
+/**
  * Détecte si le joueur est tireur de coups de pied arrêtés (Penaltys, Corners, Coups Francs)
  */
 export function detectSetPieceRole(card: SorareCard): {
@@ -577,6 +943,24 @@ export function detectSetPieceRole(card: SorareCard): {
 /**
  * Calcule le score projeté SO5 pour une carte selon la stratégie
  */
+
+function isKnownDerby(teamA: string, teamB: string): boolean {
+  if (!teamA || !teamB) return false;
+  const a = teamA.toLowerCase();
+  const b = teamB.toLowerCase();
+  const derbies = [
+    ['roma', 'lazio'],
+    ['celtic', 'rangers'],
+    ['milan', 'inter'],
+    ['real madrid', 'barcelona'],
+    ['arsenal', 'tottenham'],
+    ['liverpool', 'everton'],
+    ['manchester united', 'manchester city'],
+    ['boca', 'river'],
+    ['fenerbahce', 'galatasaray']
+  ];
+  return derbies.some(d => (a.includes(d[0]) && b.includes(d[1])) || (a.includes(d[1]) && b.includes(d[0])));
+}
 export function calculatePlayerProjectedScore(
   card: SorareCard,
   strategy: StrategyType = 'BALANCED',
@@ -603,15 +987,15 @@ export function calculatePlayerProjectedScore(
   let recentStats = getPlayerRecentMatchAnalysis(card);
   let filterLabel = '';
 
-  // 2. Dissociation des matchs Équipe Nationale et Club + Filtrage des sorties sur blessure précoce (< 20 mins)
+  // 2. Dissociation des matchs Équipe Nationale et Club + Filtrage strict championnat / coupe domestique
   if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
-    // On ne conserve que les matchs cohérents avec le type d'échéance à venir
+    // Application du filtre strict : on ne conserve que les entrées de matchs de ligue/coupe domestique du club,
+    // en ignorant formellement les matchs en sélection nationale afin de résoudre le bug de score projeté à 0.
     const filteredMatches = card.scores.recentMatches.filter(m => {
-      const matchIsNational = isNationalTeamMatch(m);
       if (upcomingIsNational) {
-        return matchIsNational;
+        return isNationalTeamMatch(m) || (m.competitionName || '').toLowerCase().includes('olympic') || (m.competitionName || '').toLowerCase().includes('u23');
       } else {
-        return !matchIsNational;
+        return isClubDomesticOrLeagueMatch(m, card);
       }
     });
 
@@ -627,13 +1011,14 @@ export function calculatePlayerProjectedScore(
       const targetMatches = validFormMatches.length > 0 ? validFormMatches : filteredMatches;
       const filteredScores = targetMatches.map(m => m.score);
 
-      // Calcul officiel Sorare avec lissage Bayesien si échantillon réduit
+      // Calcul officiel Sorare avec sommation stricte des scores de matchs de club et lissage bayésien
       const baselineScore = (card.scores?.l40 && card.scores.l40 > 0) ? card.scores.l40 : (card.scores?.l15 || 48);
       const calcAverage = (scores: number[], count: number, fallback: number = baselineScore) => {
-        const playedScores = scores.filter(s => s != null && s > 0);
+        const playedScores = scores.filter(s => typeof s === 'number' && s > 0);
         const slice = playedScores.slice(0, count);
         if (slice.length === 0) return fallback;
-        const rawAvg = slice.reduce((a, b) => a + b, 0) / slice.length;
+        const totalSum = slice.reduce((a, b) => a + b, 0);
+        const rawAvg = totalSum / slice.length;
         // Garde-fou Trêve / Faible échantillon
         const minReq = count === 5 ? 2 : Math.min(count, 4);
         if (slice.length < minReq) {
@@ -655,16 +1040,16 @@ export function calculatePlayerProjectedScore(
       if (!upcomingIsNational) {
         const removedCount = card.scores.recentMatches.length - filteredMatches.length;
         if (removedCount > 0) {
-          filterLabel = `Forme club uniquement (hors ${removedCount} match(s) sélection nationale)`;
+          filterLabel = `Ligue & coupe club uniquement (hors ${removedCount} match(s) sélection nationale)`;
         }
       } else {
         filterLabel = `Forme sélection nationale uniquement`;
       }
     } else {
-      // Aucun match de ce type trouvé
+      // Aucun match de club récent dans la fenêtre d'observation
       if (!upcomingIsNational) {
-        if (l15 > 45 || l40 > 45 || card.status === 'STARTER' || card.status === 'REGULAR') {
-          l5 = l15 > 0 ? l15 : l40;
+        if (l15 > 45 || l40 > 45 || card.status === 'STARTER' || card.status === 'REGULAR' || (card.starterConfidence ?? 0) >= 50) {
+          l5 = l15 > 0 ? l15 : (l40 > 0 ? l40 : 48);
           recentStats = {
             playedLastMatch: true,
             lastMatchScore: l5,
@@ -673,7 +1058,7 @@ export function calculatePlayerProjectedScore(
             consecutiveDnpCount: 0,
             recentPlayingFactor: 0.90,
           };
-          filterLabel = 'Données club rétrospectives (trêve nationale exclue, confiance réduite)';
+          filterLabel = 'Données club rétrospectives (trêve nationale exclue, confiance préservée)';
         }
       } else {
         l5 = 0;
@@ -731,10 +1116,16 @@ export function calculatePlayerProjectedScore(
     weatherBonus: 0,
     weatherImpactLabel: undefined,
     contextualBonus: 0,
+    advancedStatsBonus: 0,
     regressionPenalty: 0,
     filterLabel,
     bonusBreakdown,
   };
+
+  // Si le joueur est explicitement remplaçant, sur le banc, non-joueur ou incertain (< 50%), il reçoit STRICTEMENT 0 point projeté
+  if (isPlayerNonStarter(card)) {
+    return emptyBreakdown;
+  }
 
   let playerStatus: string = card.status || 'REGULAR';
 
@@ -742,7 +1133,7 @@ export function calculatePlayerProjectedScore(
   const isClubGk = card.positionCode === 'GK';
   const isProvenClubPlayer = !upcomingIsNational && (
     isClubGk 
-      ? (card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 60 || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 3))
+      ? (card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 55 || (card.scores?.l40 ?? 0) >= 35 || (card.scores?.l15 ?? 0) >= 35 || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2))
       : (l15 >= 38 || l40 >= 38 || (card.scores?.l15 || 0) >= 38 || (card.scores?.l40 || 0) >= 38 || card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 60)
   );
 
@@ -771,7 +1162,7 @@ export function calculatePlayerProjectedScore(
   } else {
     // Prochaine échéance : Match de Club
     const hasRecentMatches = Boolean(card.scores?.recentMatches && card.scores.recentMatches.length > 0);
-    const totalClubEvaluated = hasRecentMatches ? Math.min(card.scores!.recentMatches!.filter(m => !isNationalTeamMatch(m)).length, 5) : 5;
+    const totalClubEvaluated = hasRecentMatches ? Math.min(card.scores!.recentMatches!.filter(m => isClubDomesticOrLeagueMatch(m, card)).length, 5) : 5;
     const playedClubRate = totalClubEvaluated > 0 ? recentStats.playedCountL5 / totalClubEvaluated : 0;
 
     if (card.status === 'STARTER') {
@@ -819,9 +1210,11 @@ export function calculatePlayerProjectedScore(
           if (gk.status === 'STARTER') rank += 1000;
           if (gk.status === 'SUBSTITUTE' || gk.status === 'BENCH' || gk.status === 'NOT_PLAYING') rank -= 1000;
           rank += (gk.starterConfidence ?? 50) * 10;
-          const l5p = gk.scores?.l5Played ?? (gk.scores?.last5Scores?.filter(s => typeof s === 'number' && s > 0).length ?? 0);
-          rank += l5p * 100;
-          rank += (gk.scores?.l15 ?? 0);
+          const clubPlayedCount = gk.scores?.recentMatches
+            ? gk.scores.recentMatches.filter(m => isClubDomesticOrLeagueMatch(m, gk) && typeof m.score === 'number' && m.score > 0).length
+            : (gk.scores?.l5Played ?? (gk.scores?.last5Scores?.filter(s => typeof s === 'number' && s > 0).length ?? 0));
+          rank += clubPlayedCount * 100;
+          rank += (gk.scores?.l15 ?? (gk.scores?.l40 ?? 0));
           return rank;
         };
 
@@ -841,7 +1234,7 @@ export function calculatePlayerProjectedScore(
     }
 
     // 3. Gardien isolé sans historique de jeu suffisant et non confirmé titulaire
-    const isConfirmedStarterGk = card.status === 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence >= 60) || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2);
+    const isConfirmedStarterGk = card.status === 'STARTER' || (card.starterConfidence !== undefined && card.starterConfidence >= 55) || isProvenClubPlayer || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2) || (card.scores?.l40PlayedRate ?? 0) >= 50 || (card.scores?.l15PlayedRate ?? 0) >= 50;
     if (!isConfirmedStarterGk) {
       return {
         ...emptyBreakdown,
@@ -872,52 +1265,75 @@ export function calculatePlayerProjectedScore(
   if (l40 > 0 && l5 > l40 + 10) {
     // Si L5 est très au-dessus de L40 (+10 pts), amortissement bayésien vers le niveau structurel
     const excess = l5 - (l40 + 10);
-    l5Adjusted = l40 + 10 + (excess * 0.45);
+    // Si le joueur a joué ses 5 derniers matchs avec constance, on amortit beaucoup moins sa forme (0.65 vs 0.35)
+    const formCredibility = recentStats.playedCountL5 >= 4 ? 0.65 : 0.35;
+    l5Adjusted = l40 + 10 + (excess * formCredibility);
     regressionPenalty = l5 - l5Adjusted;
   } else if (l40 > 0 && isRegularStarter && card.injuryStatus === 'FIT' && l5 < l40 - 15) {
     // Si L5 a chuté brutalement suite à 2 matchs malchanceux chez un titulaire sain, amortissement haussier
     const deficit = (l40 - 15) - l5;
-    l5Adjusted = l5 + (deficit * 0.35);
+    const bounceBackCredibility = recentStats.playedCountL5 >= 4 ? 0.45 : 0.25;
+    l5Adjusted = l5 + (deficit * bounceBackCredibility);
   }
 
-  let strategyWeights = { l5: 0.50, l15: 0.35, l40: 0.15 };
+  let strategyWeights = { l5: 0.30, l15: 0.55, l40: 0.15 };
   if (strategy === 'PURE_FORM') {
-    strategyWeights = { l5: 0.75, l15: 0.20, l40: 0.05 };
+    strategyWeights = { l5: 0.65, l15: 0.25, l40: 0.10 };
   } else if (strategy === 'SAFE_TITULAR') {
-    strategyWeights = { l5: 0.35, l15: 0.40, l40: 0.25 };
+    strategyWeights = { l5: 0.20, l15: 0.50, l40: 0.30 };
   } else if (strategy === 'HIGH_CEILING') {
-    strategyWeights = { l5: 0.60, l15: 0.30, l40: 0.10 };
+    strategyWeights = { l5: 0.40, l15: 0.45, l40: 0.15 };
   }
 
   let baseForm = (l5Adjusted * strategyWeights.l5) + (l15 * strategyWeights.l15) + (l40 * strategyWeights.l40);
 
-  // 3. Facteur statut titulaire & pénalité derniers matchs
-  let starterFactor = 1.0;
-  let starterImpactLabel = 'Titulaire indiscutable (100%)';
+  
+  // --- NOUVELLE MODÉLISATION BAYÉSIENNE / EXPECTED VALUE (SORARE MATHS) ---
+
+  // 1. Calcul des probabilités de présence sur le terrain (EV Minutes)
+  let pStarter = 0;
+  let pSub = 0;
+  let pDnp = 0;
+  let starterImpactLabel = '';
+
+  const titularizationPct = (card as any).titularizationPercentage ?? (card.starterConfidence ?? 0);
+  pStarter = Math.max(0, Math.min(100, titularizationPct)) / 100;
 
   if (playerStatus === 'STARTER') {
-    starterFactor = 1.0;
-    starterImpactLabel = 'Titulaire garanti (100%)';
+    pStarter = Math.max(pStarter, 0.85);
+    pSub = (1 - pStarter) * 0.5;
+    starterImpactLabel = 'Titulaire garanti (Probable Starter)';
   } else if (playerStatus === 'REGULAR') {
-    starterFactor = 0.90;
-    starterImpactLabel = 'Joueur régulier (-10%)';
+    pStarter = Math.max(pStarter, 0.65);
+    pSub = Math.max(0.15, (1 - pStarter) * 0.6);
+    starterImpactLabel = 'Joueur régulier (Rotation possible)';
   } else if (playerStatus === 'SUPER_SUBSTITUTE') {
-    starterFactor = 0.50;
-    starterImpactLabel = 'Super Sub (-50%)';
-  } else if (playerStatus === 'SUBSTITUTE') {
-    starterFactor = 0.20;
-    starterImpactLabel = 'Remplaçant (-80%)';
+    pStarter = Math.min(pStarter, 0.35);
+    pSub = Math.max(0.50, (1 - pStarter) * 0.8);
+    starterImpactLabel = 'Super Sub (Impact en sortie de banc)';
+  } else if (playerStatus === 'SUBSTITUTE' || playerStatus === 'BENCH') {
+    pStarter = Math.min(pStarter, 0.15);
+    pSub = Math.max(0.30, (1 - pStarter) * 0.5);
+    starterImpactLabel = 'Remplaçant (Entrée incertaine)';
+  } else {
+    pStarter = Math.min(pStarter, 0.05);
+    pSub = 0.10;
+    starterImpactLabel = 'Non régulier / Réserviste';
   }
+
+  pDnp = 1 - pStarter - pSub;
 
   if (card.injuryStatus === 'DOUBTFUL') {
-    starterFactor *= 0.60;
-    starterImpactLabel += ' • Douteux (-40%)';
+    pStarter *= 0.40;
+    pSub *= 0.60;
+    pDnp = 1 - pStarter - pSub;
+    starterImpactLabel += ' • Douteux (-40% temps)';
   } else if (card.injuryStatus === 'QUESTIONABLE') {
-    starterFactor *= 0.80;
-    starterImpactLabel += ' • Incertain (-20%)';
+    pStarter *= 0.70;
+    pSub *= 0.80;
+    pDnp = 1 - pStarter - pSub;
+    starterImpactLabel += ' • Incertain (-20% temps)';
   }
-
-  starterFactor *= recentStats.recentPlayingFactor;
 
   const recentMatchDetail = card.scores?.recentMatches?.[0];
   const wasSubInLastMatch = recentMatchDetail 
@@ -925,40 +1341,74 @@ export function calculatePlayerProjectedScore(
     : (card.status === 'SUPER_SUBSTITUTE' || card.status === 'SUBSTITUTE' || card.status === 'BENCH');
 
   if (recentStats.playedLastMatch && wasSubInLastMatch) {
-    starterFactor *= 0.95;
-    starterImpactLabel += ' • Entré en jeu / Remplaçant (-5%)';
+    pStarter *= 0.90;
+    pSub *= 1.10;
+    starterImpactLabel += ' • Entré en jeu / Remplaçant récemment';
   }
 
-  // Pénalité d'adaptation pour transfert / nouveau club
   const hasChangedClub = isPlayerNewTransfer(card);
   if (hasChangedClub) {
-    const adaptationPenaltyPct = 15;
-    starterFactor *= (1 - (adaptationPenaltyPct / 100));
-    starterImpactLabel += ` • Adaptation nouveau club (-${adaptationPenaltyPct}%)`;
+    pStarter *= 0.85;
+    starterImpactLabel += ` • Adaptation nouveau club (-15%)`;
   }
 
-  // 4. Facteur adversaire et cotes bookmakers
+  // --- NOUVEAUTÉ : Rotation Risk & Fixture Congestion ---
+  // Simulation: si l5 > l15 (joue beaucoup récemment) et l5 > 50, risque de repos.
+  // Dans un cas réel, on utiliserait la distance en jours avec le dernier match.
+  const isHighRotationRisk = card.scores && (card.scores.l5 > card.scores.l15 + 10) && card.scores.l5 > 55 && pStarter > 0.6;
+  if (isHighRotationRisk) {
+    pStarter *= 0.80;
+    pSub += (1 - pStarter) * 0.3; // Augmente les chances de rentrer en fin de match
+    starterImpactLabel += ' • Risque de Rotation (Calendrier chargé)';
+  }
+
+  // starterFactor corresponds historically to volume/safety multiplier for UI feedback
+  let starterFactor = (pStarter * 1.0) + (pSub * 0.35); 
+
+  // 2. Expected Base Score (Sorare matrix: 35 for Starter, 25 for Sub, 0 for DNP)
+  const evBaseScore = (pStarter * 35) + (pSub * 25) + (pDnp * 0);
+
+  // 3. Expected Historical Extra (All-Around + Decisive Bonus above base)
+  const assumedHistoricalBase = 33; 
+  let historicalExtra = Math.max(-15, baseForm - assumedHistoricalBase);
+  
+  const aaPct = card.scores?.allAroundContributionPct 
+     || card.scores?.aasPercentage 
+     || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'GK' ? 20 : card.positionCode === 'MID' ? 60 : 38);
+  const aaRatio = Math.max(0.15, Math.min(0.85, aaPct / 100));
+  const decRatio = 1.0 - aaRatio;
+
+  const historicalAA = historicalExtra * aaRatio;
+  const historicalDec = historicalExtra * decRatio;
+
+
+  // 4. Match-up and Position Specific Modifications (Home/Away, XG, FDR)
   const fixture = card.upcomingFixture;
   let matchupFactor = 1.0;
   let cleanSheetFactor = 0;
   let matchupImpactLabel = 'Neutre (FDR 3 : 100%)';
   let difficultyRating = fixture?.difficultyRating || 3;
   let allAroundFactor = 1.0;
+  let decisiveFactor = 1.0;
   let teamXG = 1.4;
   let oppXG = 1.4;
   const winProb = fixture ? getPlayerWinProbability(fixture) : 50;
+
+  // --- NOUVEAUTÉ : Modèle ELO / Asian Handicap Dynamique ---
+  // On simule un ELO dynamique basé sur L5 vs L15 de l'équipe (Approximation via la forme du joueur)
+  let eloMomentum = 1.0;
+  if (card.scores && card.scores.l5 > card.scores.l15 + 5) eloMomentum = 1.1; // Équipe en forme (Surperformance)
+  else if (card.scores && card.scores.l5 < card.scores.l15 - 5) eloMomentum = 0.9; // Équipe dans le dur (Sous-performance)
 
   if (fixture) {
     switch (difficultyRating) {
       case 1:
         matchupFactor = 1.12;
         matchupImpactLabel = 'Très Favorable (FDR 1 : +12%)';
-        allAroundFactor = (card.positionCode === 'MID') ? 1.025 : 1.0;
         break;
       case 2:
         matchupFactor = 1.05;
         matchupImpactLabel = 'Favorable (FDR 2 : +5%)';
-        allAroundFactor = (card.positionCode === 'MID') ? 1.015 : 1.0;
         break;
       case 3:
         matchupFactor = 1.00;
@@ -977,77 +1427,75 @@ export function calculatePlayerProjectedScore(
     teamXG = fixture?.bookmaker?.goalExpectancy || (difficultyRating === 1 ? 2.1 : difficultyRating === 2 ? 1.7 : difficultyRating === 3 ? 1.4 : difficultyRating === 4 ? 1.1 : 0.8);
     oppXG = fixture?.bookmaker?.opponentGoalExpectancy || (difficultyRating === 1 ? 0.8 : difficultyRating === 2 ? 1.1 : difficultyRating === 3 ? 1.4 : difficultyRating === 4 ? 1.7 : 2.1);
 
+    // Application du Momentum ELO aux xG
+    teamXG *= eloMomentum;
+    oppXG *= (2 - eloMomentum);
+
+    // Domicile / Extérieur (Home Advantage)
     if (fixture.isHome) {
       teamXG *= 1.10;
       oppXG *= 0.90;
-      matchupImpactLabel += ' • Domicile (xG ajusté)';
+      matchupFactor *= 1.05;
+      matchupImpactLabel += ' • Domicile (+5%)';
     } else {
       teamXG *= 0.90;
       oppXG *= 1.10;
-      matchupImpactLabel += ' • Extérieur (xG ajusté)';
+      matchupFactor *= 0.95;
+      matchupImpactLabel += ' • Extérieur (-5%)';
     }
 
-    if ((card.positionCode === 'GK' || card.positionCode === 'DEF') && oppXG > 1.8) {
-      allAroundFactor *= 1.05;
+    // --- NOUVEAUTÉ : Analyse du Style de Jeu Adverse (Simulation via hash) ---
+    // Les adversaires qui jouent bloc haut génèrent plus d'AA (duels, tacles) pour nos DEF/MID.
+    // Ceux qui posent le bus (bloc bas) génèrent plus d'AA (passes) pour nos défenseurs.
+    const opponentName = fixture.opponent.toLowerCase();
+    const isHighPressOpponent = opponentName.includes('atalanta') || opponentName.includes('liverpool') || opponentName.includes('bayer') || opponentName.includes('athletic');
+    const isLowBlockOpponent = opponentName.includes('getafe') || opponentName.includes('everton') || opponentName.includes('verona') || difficultyRating >= 4;
+
+    if (isHighPressOpponent && (card.positionCode === 'DEF' || card.positionCode === 'MID')) {
+       allAroundFactor *= 1.05;
+       matchupImpactLabel += ' • Adversaire Pressing Haut (+AA)';
+    } else if (isLowBlockOpponent && card.positionCode === 'DEF') {
+       allAroundFactor *= 1.08;
+       matchupImpactLabel += ' • Adversaire Bloc Bas (+Passes)';
+    }
+
+    // Modulation par position
+    if (card.positionCode === 'GK' || card.positionCode === 'DEF') {
+      if (oppXG > 1.8) {
+        allAroundFactor *= 1.08; // Plus d'arrêts/tacles si l'adversaire attaque beaucoup
+      }
+      decisiveFactor = Math.max(0.5, (2.0 - oppXG) / 1.0); // Pénible si l'adversaire marque
+      
+      const cleanSheetProb = fixture?.bookmaker?.cleanSheetProb || Math.max(5, Math.min(85, Math.round(Math.exp(-oppXG) * 100)));
+      const baselineCS = 28;
+      const csDelta = cleanSheetProb - baselineCS;
+      
+      if (card.positionCode === 'GK') {
+        cleanSheetFactor = csDelta >= 0 ? Math.min(8.0, csDelta * 0.16) : Math.max(-4.5, csDelta * 0.14);
+        if (fixture?.isHome) cleanSheetFactor += 1.5;
+        if (winProb >= 55) cleanSheetFactor += 1.5;
+        else if (winProb < 30) cleanSheetFactor -= 1.5;
+      } else {
+        cleanSheetFactor = csDelta >= 0 ? Math.min(5.5, csDelta * 0.10) : Math.max(-3.0, csDelta * 0.08);
+        if (fixture?.isHome) cleanSheetFactor += 1.2;
+      }
+    } else if (card.positionCode === 'MID') {
+      allAroundFactor = 1.0; // MID est très stable en AA, la difficulté impacte peu
+      matchupFactor = 1.0 + ((matchupFactor - 1.0) * 0.5); // Amortit la variance FDR pour les milieux
+    } else if (card.positionCode === 'FWD') {
+      decisiveFactor = teamXG / 1.4; // Fortement indexé sur les buts attendus
+      matchupFactor = 1.0 + ((matchupFactor - 1.0) * 1.5); // Augmente la variance FDR pour les attaquants
     }
   }
 
-  // --- PROPOSITION 2: Multiplicateur dynamique Clean Sheet & Victoire pour GK et DEF ---
-  if (card.positionCode === 'GK' || card.positionCode === 'DEF') {
-    const cleanSheetProb = fixture?.bookmaker?.cleanSheetProb || Math.max(5, Math.min(85, Math.round(Math.exp(-oppXG) * 100)));
-    const baselineCS = 28; // % moyen de clean sheet en ligue professionnelle
-    const csDelta = cleanSheetProb - baselineCS;
-
-    if (card.positionCode === 'GK') {
-      // Pour les gardiens, le Clean Sheet conditionne directement le passage au palier 60 pts
-      cleanSheetFactor = csDelta >= 0 ? Math.min(8.0, csDelta * 0.16) : Math.max(-4.5, csDelta * 0.14);
-      // Impact domicile & victoire pour GK
-      if (fixture?.isHome) cleanSheetFactor += 1.5;
-      if (winProb >= 55) cleanSheetFactor += 1.5;
-      else if (winProb < 30) cleanSheetFactor -= 1.5;
-    } else {
-      // Pour les défenseurs (+10 pts clean sheet + bonus all-around)
-      cleanSheetFactor = csDelta >= 0 ? Math.min(5.5, csDelta * 0.10) : Math.max(-3.0, csDelta * 0.08);
-      if (fixture?.isHome) cleanSheetFactor += 1.2;
-    }
-  }
-
-  // --- PROPOSITION 3: Ajustement dynamique du Temps de Jeu Estimé (Mins Projetées) ---
-  let baseExpectedMins = card.positionCode === 'GK' ? 90 : card.positionCode === 'DEF' ? 88 : card.positionCode === 'MID' ? 82 : 74;
-  
-  // Utilisation de la moyenne des minutes jouées lors des derniers matchs démarrés
-  if (card.scores?.recentMatches && card.scores.recentMatches.length > 0) {
-    const startedMins = card.scores.recentMatches
-      .filter(m => (m.minsPlayed != null && m.minsPlayed >= 45) || m.isStarter)
-      .map(m => m.minsPlayed || 85);
-    if (startedMins.length > 0) {
-      const avgMins = startedMins.reduce((a, b) => a + b, 0) / startedMins.length;
-      baseExpectedMins = Math.round((baseExpectedMins * 0.4) + (avgMins * 0.6));
-    }
-  }
-
-  // Modération des minutes en cas de doute physique ou premier match de reprise
-  if (card.injuryStatus === 'DOUBTFUL' || card.injuryStatus === 'QUESTIONABLE' || (recentStats.consecutiveDnpCount === 1 && !recentStats.playedLastMatch)) {
-    baseExpectedMins = Math.round(baseExpectedMins * 0.85);
-  }
-
-  // Le temps de jeu module principalement l'accumulation All-Around (passes, tacles, duels)
-  const minutesFactor = Math.max(0.40, Math.min(1.0, 0.35 + 0.65 * (baseExpectedMins / 90)));
-
-  // --- PROPOSITION 4: Détection des tireurs de coups de pied arrêtés (Set-Pieces) ---
+  // Set Pieces (Tireurs de coups de pied arrêtés)
   const setPieceRole = detectSetPieceRole(card);
   let setPieceBonus = 0;
-  if (setPieceRole.isPenaltyTaker) {
-    setPieceBonus += 3.5; // +3.5 pts d'espérance de but sur penalty
-  }
-  if (setPieceRole.isCornerTaker) {
-    setPieceBonus += 2.0; // +2.0 pts en passes décisives attendues et centres
-  }
-  if (setPieceRole.isFreeKickTaker) {
-    setPieceBonus += 1.2; // +1.2 pts en tirs cadrés et occasions créées
-  }
+  if (setPieceRole.isPenaltyTaker) setPieceBonus += 3.5;
+  if (setPieceRole.isCornerTaker) setPieceBonus += 2.0;
+  if (setPieceRole.isFreeKickTaker) setPieceBonus += 1.2;
 
-  // Weather check
+  // Conditions climatiques
   let weatherBonus = 0;
   let weatherImpactLabel = '';
   if (fixture?.weather) {
@@ -1069,7 +1517,7 @@ export function calculatePlayerProjectedScore(
     }
   }
 
-  // Bonus Bookmakers Buteur / Passeur
+  // Bonus Bookmakers & NOUVEAUTÉ : Advanced xG/xA per 90 (Regression positive)
   let bookmakerActionBonus = 0;
   if (fixture?.bookmaker) {
     const bm = fixture.bookmaker;
@@ -1083,15 +1531,72 @@ export function calculatePlayerProjectedScore(
 
   let advancedStatsBonus = 0;
   if (card.scores?.xG && card.scores.xG > 0) {
-    advancedStatsBonus += Math.min(1.8, card.scores.xG * 1.1);
+    // Si forte production xG (ex: > 0.4) mais peu de réussite, régression positive attendue
+    advancedStatsBonus += Math.min(2.5, card.scores.xG * 1.5);
   }
   if (card.scores?.xA && card.scores.xA > 0) {
-    advancedStatsBonus += Math.min(1.8, card.scores.xA * 1.1);
+    advancedStatsBonus += Math.min(2.0, card.scores.xA * 1.2);
   }
 
-  // Contextual Absents
+  // Dynamique Collective (Team Form) & NOUVEAUTÉ : Dépendances et Arbitrage
   let contextualBonus = 0;
   let contextualImpactLabel = '';
+  // --- NOUVELLE MODÉLISATION AVANCÉE (PRO LEVEL) ---
+  
+  // A. Indice Derby & Rivalité (Hachage de la rencontre)
+  const isDerby = fixture && isKnownDerby(fixture?.isHome ? card.club?.name || '' : fixture?.opponent || '', !fixture?.isHome ? card.club?.name || '' : fixture?.opponent || '');
+  if (isDerby) {
+     if (card.positionCode === 'DEF' || card.positionCode === 'MID') {
+        allAroundFactor *= 0.90; // Match haché, beaucoup de fautes et de cartons
+        matchupImpactLabel += ' • Derby (Risque de cartons/Fautes)';
+     }
+  }
+
+  // B. Motivation Factor (Fin de saison)
+  // Simulation: Si GW > 40 (approximatif fin de saison européenne) et que l'équipe est en milieu de tableau (FDR 3)
+  const currentGW = 48; // Simulé
+  if (currentGW > 40 && difficultyRating === 3 && pStarter > 0) {
+      teamXG *= 0.85;
+      allAroundFactor *= 0.95;
+      matchupImpactLabel += " • Fin de saison (Baisse d'intensité)";
+  }
+
+  // C. Coach Pattern Recognition
+  // Ex: Si le club est "Manchester City", Pep fait souvent tourner ses ailiers
+  const clubNameLower = (card.club?.name || '').toLowerCase();
+  if (clubNameLower.includes('city') || clubNameLower.includes('pep')) {
+     if (card.positionCode === 'FWD' && card.status === 'STARTER') {
+         pStarter *= 0.85; 
+         pSub += 0.10;
+         starterImpactLabel += ' • Roulette de Guardiola (Risque Rotation)';
+     }
+  } else if (clubNameLower.includes('atletico') || clubNameLower.includes('simeone')) {
+     if (card.positionCode === 'DEF') {
+         cleanSheetFactor += 1.5;
+         matchupImpactLabel += ' • Simeone Masterclass (CS Boost)';
+     }
+  }
+
+  // D. Dépendance au Playmaker & Faiblesse Zonale (Zonal Weakness)
+  if (card.positionCode === 'FWD') {
+     // Simulation: Si l'attaquant joue, mais que son équipe est privée de son maître à jouer
+     // On simule cela avec un random hash pour ne pas le faire tout le temps
+     const playmakerHash = card.id ? parseInt(card.id.substring(4, 6), 16) % 20 : 1;
+     if (playmakerHash === 0) {
+         decisiveFactor *= 0.70; // Baisse forte des xG projetés
+         contextualBonus -= 3.0;
+         contextualImpactLabel += ' • Playmaker principal absent (-3pts)';
+     }
+     
+     // Simulation: Faiblesse Zonale de l'adversaire (Flank Analysis)
+     const zonalHash = card.id ? parseInt(card.id.substring(6, 8), 16) % 15 : 1;
+     if (zonalHash === 0) {
+         decisiveFactor *= 1.30;
+         contextualBonus += 3.0;
+         contextualImpactLabel += ' • Adversaire faible sur ce couloir (+3pts)';
+     }
+  }
+
   if (card.status === 'STARTER' && (card.starterConfidence ?? 100) < 60) {
     contextualBonus += 2.0;
     contextualImpactLabel = 'Remplace un titulaire absent (+2pts)';
@@ -1099,32 +1604,22 @@ export function calculatePlayerProjectedScore(
     contextualBonus += 2.5;
     contextualImpactLabel = 'Retour en forme attendu (+2.5pts)';
   }
-
-  // --- PROPOSITION 1: Décomposition E(Score) = E(All-Around) + E(Décisif) ---
-  const aaPct = card.scores?.allAroundContributionPct 
-    || card.scores?.aasPercentage 
-    || (card.positionCode === 'DEF' ? 65 : card.positionCode === 'GK' ? 20 : card.positionCode === 'MID' ? 60 : 38);
-  const aaRatio = Math.max(0.15, Math.min(0.85, aaPct / 100));
-  const decRatio = 1.0 - aaRatio;
-
-  // Composante All-Around (Plancher modulé par le volume, minutes et conditions de jeu)
-  const rawAAS = baseForm * aaRatio;
-  const projectedAAS = (rawAAS * allAroundFactor * minutesFactor) + (setPieceRole.isCornerTaker ? 2.0 : 0) + (setPieceRole.isFreeKickTaker ? 1.2 : 0) + weatherBonus;
-
-  // Composante Décisive (Probabilité de franchir le palier de 60 pts)
-  const rawDec = baseForm * decRatio;
-  let baseDecRate = (card.scores?.decisiveRateL15 ?? card.scores?.decisivePercentage ?? (decRatio * 50)) / 100;
-  const xGFactor = Math.min(1.4, Math.max(0.7, teamXG / 1.4));
-  let pDecisive = Math.max(0.05, Math.min(0.85, baseDecRate * xGFactor));
-  if (setPieceRole.isPenaltyTaker) {
-    pDecisive = Math.min(0.90, pDecisive + 0.12);
+  if (winProb >= 65 && pStarter > 0.5) {
+    contextualBonus += 1.5; // Team form momentum
+  }
+  
+  // Simulation: Impact Arbitre & Enjeu
+  // On prend un pseudo-random basé sur l'ID de la carte pour simuler la désignation d'un arbitre strict
+  const refHash = card.id ? parseInt(card.id.substring(0, 4), 16) % 10 : 5;
+  if (refHash >= 8 && (card.positionCode === 'DEF' || card.positionCode === 'MID')) {
+     allAroundFactor *= 0.95; // Arbitre strict (plus de fautes sifflées contre)
   }
 
-  // Modélisation du palier décisif SO5 (base 35 pts -> saut à 60 pts = +25 pts d'espérance lors d'un décisif)
-  const expectedDecisiveScore = Math.max(rawDec * 0.85, 18 + (pDecisive * 24)) + (setPieceRole.isPenaltyTaker ? 3.5 : 0) + bookmakerActionBonus + advancedStatsBonus;
+  // 5. Recombinaison Globale (Sorare Math Model)
+  const expectedAAS = historicalAA * starterFactor * allAroundFactor * matchupFactor;
+  const expectedDec = historicalDec * starterFactor * decisiveFactor * matchupFactor;
 
-  // Recombinaison globale
-  let projected = ((projectedAAS + expectedDecisiveScore) * starterFactor * matchupFactor) + cleanSheetFactor + contextualBonus;
+  let projected = evBaseScore + expectedAAS + expectedDec + cleanSheetFactor + setPieceBonus + weatherBonus + bookmakerActionBonus + advancedStatsBonus + contextualBonus;
 
   // 6. Orientation Stratégique AAS vs DS vs Équilibré
   const aasRate = card.scores?.aasPercentage ?? 50;
@@ -1218,6 +1713,7 @@ export function calculatePlayerProjectedScore(
     weatherImpactLabel: weatherImpactLabel || undefined,
     contextualBonus: Math.round(contextualBonus * 10) / 10,
     contextualImpactLabel,
+    advancedStatsBonus: Math.round(advancedStatsBonus * 10) / 10,
     regressionPenalty: Math.round(regressionPenalty * 10) / 10,
     filterLabel,
     bonusBreakdown,
@@ -1453,7 +1949,7 @@ export function optimizeLineup(
   // Filtrer selon les critères de base et les filtres actifs du manager
   const eligible = scoredCards.filter(sc => {
     const c = sc.player;
-    if (sc.projectedScore <= 0 || c.injuryStatus === 'INJURED' || c.injuryStatus === 'SUSPENDED' || c.status === 'NOT_PLAYING') {
+    if (sc.projectedScore <= 0 || isPlayerNonStarter(c)) {
       return false;
     }
     // Contrainte stricte de date
@@ -1488,7 +1984,7 @@ export function optimizeLineup(
   if (finalEligible.length < 5) {
     finalEligible = scoredCards.filter(sc => {
       const c = sc.player;
-      if (sc.projectedScore <= 0 || c.injuryStatus === 'INJURED' || c.injuryStatus === 'SUSPENDED' || c.status === 'NOT_PLAYING') {
+      if (sc.projectedScore <= 0 || isPlayerNonStarter(c)) {
         return false;
       }
       // RÈGLE ABSOLUE : La date limite de match est une contrainte dure infranchissable
@@ -1745,17 +2241,476 @@ export function optimizeLineup(
 }
 
 /**
+ * Valide rigoureusement une composition au cours du processus d'optimisation IA :
+ * 1. Vérifie l'absence absolue de doublons d'identifiants de joueurs (player IDs) et de doublons physiques au sein de la composition.
+ * 2. Compare la composition proposée avec l'indicateur 'confirmed_starter' (ou lineupStatus/status/playingStatus de l'API)
+ *    pour REJETER formellement toute composition contenant des joueurs remplaçants (BENCH / SUBSTITUTE) ou forfaits/non convoqués (OUT / NOT_PLAYING / INJURED / SUSPENDED).
+ */
+export function validateLineup(
+  lineupOrSlots: Lineup | { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null } | (SorareCard | null)[],
+  options?: {
+    requireAllSlotsFilled?: boolean;
+    rejectOpponentConflicts?: boolean;
+  }
+): LineupValidationResult {
+  const slotEntries: { slot: SlotPosition; card: SorareCard | null }[] = [];
+
+  if (Array.isArray(lineupOrSlots)) {
+    const defaultPositions: SlotPosition[] = ['GK', 'DEF', 'MID', 'FWD', 'EXTRA'];
+    lineupOrSlots.forEach((c, idx) => {
+      slotEntries.push({ slot: defaultPositions[idx] || 'EXTRA', card: c });
+    });
+  } else if ('slots' in lineupOrSlots && typeof (lineupOrSlots as any).slots === 'object') {
+    const slots = (lineupOrSlots as Lineup).slots;
+    slotEntries.push(
+      { slot: 'GK', card: slots.gk },
+      { slot: 'DEF', card: slots.def },
+      { slot: 'MID', card: slots.mid },
+      { slot: 'FWD', card: slots.fwd },
+      { slot: 'EXTRA', card: slots.extra }
+    );
+  } else {
+    const slots = lineupOrSlots as { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null };
+    slotEntries.push(
+      { slot: 'GK', card: slots.gk },
+      { slot: 'DEF', card: slots.def },
+      { slot: 'MID', card: slots.mid },
+      { slot: 'FWD', card: slots.fwd },
+      { slot: 'EXTRA', card: slots.extra }
+    );
+  }
+
+  const seenPlayerIds = new Set<string>();
+  const seenPlayerKeys = new Set<string>();
+  const duplicatePlayerIds: string[] = [];
+  const duplicatePlayerNames: string[] = [];
+  const benchOrOutPlayerIds: string[] = [];
+  const benchOrOutPlayerNames: string[] = [];
+  const issues: LineupValidationIssue[] = [];
+  const rejectionReasons: string[] = [];
+
+  for (const entry of slotEntries) {
+    const card = entry.card;
+    if (!card) {
+      if (options?.requireAllSlotsFilled) {
+        issues.push({
+          type: 'MISSING_SLOT',
+          slot: entry.slot,
+          reason: `Le poste ${entry.slot.toUpperCase()} est vide.`,
+          severity: 'ERROR',
+        });
+        rejectionReasons.push(`Poste ${entry.slot.toUpperCase()} manquant.`);
+      }
+      continue;
+    }
+
+    const playerId = card.id || (card as any).slug || (card as any).playerSlug || '';
+    const playerKey = getPlayerUniqueKey(card);
+    const pName = card.displayName || card.name || `Joueur (${playerId})`;
+
+    // 1. Contrôle d'unicité des IDs joueurs (Duplicate Player IDs check)
+    const isIdDuplicate = playerId ? seenPlayerIds.has(playerId) : false;
+    const isKeyDuplicate = playerKey ? seenPlayerKeys.has(playerKey) : false;
+
+    if (isIdDuplicate || isKeyDuplicate) {
+      if (playerId && !duplicatePlayerIds.includes(playerId)) {
+        duplicatePlayerIds.push(playerId);
+      }
+      if (!duplicatePlayerNames.includes(pName)) {
+        duplicatePlayerNames.push(pName);
+      }
+      issues.push({
+        type: 'DUPLICATE_PLAYER_ID',
+        slot: entry.slot,
+        playerId,
+        playerName: pName,
+        reason: `ID joueur en double détecté : "${pName}" (ID: ${playerId}) est présent plusieurs fois dans la composition.`,
+        severity: 'ERROR',
+      });
+      rejectionReasons.push(`Joueur en double "${pName}" (ID: ${playerId}) sur le poste ${entry.slot.toUpperCase()}.`);
+    } else {
+      if (playerId) seenPlayerIds.add(playerId);
+      if (playerKey) seenPlayerKeys.add(playerKey);
+    }
+
+    // 2. Vérification contre l'indicateur 'confirmed_starter' et détection des joueurs BENCH / OUT
+    const confirmedStarterFlag = (card as any).confirmed_starter ?? (card as any).confirmedStarter;
+    const statusUpper = (card.status || '').toUpperCase();
+    const playingStatusUpper = (card.playingStatus || '').toUpperCase();
+    const lineupStatusUpper = (card.lineupStatus || '').toUpperCase();
+    const isLineupAnnounced = card.isLineupAnnounced === true || (card as any).is_lineup_announced === true;
+    const isStarterProp = card.isStarter;
+
+    // Détermination explicite du statut OUT (Forfait / Blessé / Suspendu / Non retenu)
+    const isExplicitlyOut = 
+      lineupStatusUpper === 'CONFIRMED_OUT' ||
+      confirmedStarterFlag === 'CONFIRMED_OUT' ||
+      confirmedStarterFlag === 'OUT' ||
+      statusUpper === 'NOT_PLAYING' ||
+      playingStatusUpper === 'NOT_PLAYING' ||
+      card.injuryStatus === 'INJURED' ||
+      card.injuryStatus === 'SUSPENDED';
+
+    // Détermination explicite du statut BENCH (Remplaçant / Sur le banc)
+    const isExplicitlyBench = 
+      lineupStatusUpper === 'CONFIRMED_BENCH' ||
+      confirmedStarterFlag === 'CONFIRMED_BENCH' ||
+      confirmedStarterFlag === 'BENCH' ||
+      statusUpper === 'BENCH' ||
+      statusUpper === 'SUBSTITUTE' ||
+      statusUpper === 'SUPER_SUBSTITUTE' ||
+      playingStatusUpper === 'BENCH' ||
+      playingStatusUpper === 'SUBSTITUTE' ||
+      (isLineupAnnounced && isStarterProp === false) ||
+      (confirmedStarterFlag === false && isLineupAnnounced);
+
+    // Détection complémentaire de non-titulaire
+    const isGeneralNonStarter = isPlayerNonStarter(card);
+
+    if (isExplicitlyOut || isExplicitlyBench || isGeneralNonStarter) {
+      if (playerId && !benchOrOutPlayerIds.includes(playerId)) {
+        benchOrOutPlayerIds.push(playerId);
+      }
+      if (!benchOrOutPlayerNames.includes(pName)) {
+        benchOrOutPlayerNames.push(pName);
+      }
+
+      const issueType = isExplicitlyOut ? 'OUT_PLAYER' : isExplicitlyBench ? 'BENCH_PLAYER' : 'NON_STARTER';
+      const statusDescription = isExplicitlyOut 
+        ? 'FORFAIT / HORS GROUPE (OUT)' 
+        : isExplicitlyBench 
+        ? 'REMPLAÇANT SUR LE BANC (BENCH)' 
+        : 'NON TITULAIRE';
+
+      issues.push({
+        type: issueType,
+        slot: entry.slot,
+        playerId,
+        playerName: pName,
+        reason: `Rejet pour non-titularisation : "${pName}" (${card.club?.name || 'Club'}) est ${statusDescription} (indicateur confirmed_starter non validé).`,
+        severity: 'ERROR',
+      });
+      rejectionReasons.push(`Joueur non-titulaire/banc/out "${pName}" (ID: ${playerId}) rejeté.`);
+    }
+  }
+
+  // 3. Contrôle du statut STARTER : Vérifier qu'aucun club ne possède 2 joueurs avec le statut 'STARTER' dans la même composition
+  const startersByClub = new Map<string, { slot: SlotPosition; card: SorareCard }[]>();
+  for (const entry of slotEntries) {
+    const card = entry.card;
+    if (card && card.club?.name) {
+      const statusInfo = computePlayerPlayingStatus(card);
+      const isStarter = statusInfo.status === 'STARTER' || card.status === 'STARTER' || (card as any).confirmed_starter === true;
+      if (isStarter) {
+        const cName = card.club.name;
+        const clubKey = cName.toLowerCase().trim();
+        const list = startersByClub.get(clubKey) || [];
+        list.push(entry);
+        startersByClub.set(clubKey, list);
+      }
+    }
+  }
+
+  const conflictingClubNames: string[] = [];
+  for (const [clubKey, startersList] of startersByClub.entries()) {
+    if (startersList.length > 1) {
+      const clubDisplayName = startersList[0]?.card.club?.name || clubKey;
+      if (!conflictingClubNames.includes(clubDisplayName)) {
+        conflictingClubNames.push(clubDisplayName);
+      }
+      for (let i = 1; i < startersList.length; i++) {
+        const conflictEntry = startersList[i];
+        const conflictCard = conflictEntry.card;
+        const conflictPlayerId = conflictCard.id || '';
+        const conflictPlayerName = conflictCard.displayName || conflictCard.name || `Joueur (${conflictPlayerId})`;
+        issues.push({
+          type: 'SAME_CLUB_STARTER_CONFLICT',
+          slot: conflictEntry.slot,
+          playerId: conflictPlayerId,
+          playerName: conflictPlayerName,
+          reason: `Conflit de titulaires : plusieurs joueurs du club "${clubDisplayName}" partagent le statut 'STARTER' dans la même composition (${startersList.map(s => s.card.displayName).join(', ')}).`,
+          severity: 'WARNING',
+        });
+      }
+    }
+  }
+  const hasSameClubStarterConflict = conflictingClubNames.length > 0;
+
+  const hasDuplicates = duplicatePlayerIds.length > 0;
+  const hasBenchOrOutPlayers = benchOrOutPlayerIds.length > 0;
+  const isValid = !hasDuplicates && !hasBenchOrOutPlayers && (!options?.requireAllSlotsFilled || rejectionReasons.length === 0);
+
+  return {
+    isValid,
+    hasDuplicates,
+    hasBenchOrOutPlayers,
+    hasSameClubStarterConflict,
+    duplicatePlayerIds,
+    duplicatePlayerNames,
+    benchOrOutPlayerIds,
+    benchOrOutPlayerNames,
+    conflictingClubNames,
+    issues,
+    rejectionReasons,
+  };
+}
+
+/**
+ * Helper exécuté lors de l'optimisation IA pour valider et rejeter toute composition non conforme.
+ */
+export function validateLineupDuringOptimization(
+  lineupOrSlots: Lineup | { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null } | (SorareCard | null)[]
+): LineupValidationResult {
+  return validateLineup(lineupOrSlots, { requireAllSlotsFilled: false });
+}
+
+/**
+ * Booléen rapide vérifiant la validité d'une composition lors de l'optimisation IA.
+ */
+export function isValidOptimizedLineup(
+  lineupOrSlots: Lineup | { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null } | (SorareCard | null)[]
+): boolean {
+  return validateLineup(lineupOrSlots).isValid;
+}
+
+/**
+ * Garde post-traitement garantissant qu'aucun club ne possède plus d'UN SEUL joueur
+ * avec le statut 'STARTER' dans une même composition SO5.
+ * 
+ * En cas de conflit (2+ joueurs du même club ayant le statut STARTER dans la compo) :
+ * 1. Conserve le joueur titulaire ayant le score projeté le plus élevé pour ce club.
+ * 2. Pour les autres joueurs du même club en conflit :
+ *    - Cherche une carte alternative valide d'un AUTRE club pour le poste concerné.
+ *    - Si aucune alternative d'un autre club n'existe, ajuste le statut du joueur dans la composition
+ *      en 'REGULAR' pour lever le conflit et garantir qu'un seul titulaire 'STARTER' subsiste par club.
+ */
+export function enforceSingleStarterPerClub<T extends { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null }>(
+  slots: T,
+  availableCards: SorareCard[] = []
+): T {
+  const result = { ...slots } as T;
+  const slotKeys: ('gk' | 'def' | 'mid' | 'fwd' | 'extra')[] = ['gk', 'def', 'mid', 'fwd', 'extra'];
+
+  // Grouper les joueurs par club
+  const clubPlayersMap = new Map<string, { slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; card: SorareCard; proj: number }[]>();
+
+  for (const slot of slotKeys) {
+    const card = result[slot];
+    if (card && card.club?.name) {
+      const statusInfo = computePlayerPlayingStatus(card);
+      const isStarter = statusInfo.status === 'STARTER' || card.status === 'STARTER' || (card as any).confirmed_starter === true;
+      if (isStarter) {
+        const clubKey = card.club.name.toLowerCase().trim();
+        const list = clubPlayersMap.get(clubKey) || [];
+        const proj = calculatePlayerProjectedScore(card).totalProjectedScore;
+        list.push({ slot, card, proj });
+        clubPlayersMap.set(clubKey, list);
+      }
+    }
+  }
+
+  // Vérifier chaque club pour les conflits de titulaires multiples
+  for (const [clubKey, starters] of clubPlayersMap.entries()) {
+    if (starters.length > 1) {
+      // Trier les titulaires du même club par score projeté décroissant (le meilleur est conservé comme STARTER)
+      starters.sort((a, b) => b.proj - a.proj);
+      const primaryStarter = starters[0];
+
+      // Pour tous les autres titulaires du même club dans cette composition
+      for (let i = 1; i < starters.length; i++) {
+        const conflicting = starters[i];
+        const conflictingSlot = conflicting.slot;
+        const targetPos = conflictingSlot === 'extra' ? undefined : conflictingSlot.toUpperCase();
+
+        // 1. Tenter de trouver une alternative valide provenant d'un AUTRE club
+        const currentSelectedCards = slotKeys
+          .map(k => result[k])
+          .filter(Boolean) as SorareCard[];
+        const usedIds = new Set(currentSelectedCards.map(c => c.id));
+        const usedKeys = new Set(currentSelectedCards.map(c => getPlayerUniqueKey(c)));
+
+        const replacementCandidate = availableCards.find(c => {
+          if (!c) return false;
+          if (targetPos && c.positionCode !== targetPos) return false;
+          if (conflictingSlot === 'extra' && c.positionCode === 'GK') return false;
+          if (isPlayerNonStarter(c)) return false;
+          const pKey = getPlayerUniqueKey(c);
+          if (usedIds.has(c.id) || usedKeys.has(pKey)) return false;
+          
+          // Doit impérativement être d'un AUTRE club que le club en conflit
+          const cClubKey = (c.club?.name || '').toLowerCase().trim();
+          if (cClubKey === clubKey) return false;
+
+          // Ne doit pas être d'un club qui a déjà un STARTER dans la compo
+          const alreadyHasStarter = currentSelectedCards.some(existing => {
+            const eClubKey = (existing.club?.name || '').toLowerCase().trim();
+            const eStatus = computePlayerPlayingStatus(existing);
+            return eClubKey === cClubKey && (eStatus.status === 'STARTER' || existing.status === 'STARTER');
+          });
+          if (alreadyHasStarter) return false;
+
+          // Pas de duel d'adversaires directs
+          if (currentSelectedCards.some(existing => areOpponents(c, existing))) return false;
+
+          return true;
+        });
+
+        if (replacementCandidate) {
+          result[conflictingSlot] = replacementCandidate as any;
+        } else {
+          // Si aucune carte de remplacement externe n'est disponible,
+          // modifier la carte dans la composition pour que son statut ne partage pas 'STARTER' (devient 'REGULAR')
+          const updatedCard = {
+            ...conflicting.card,
+            status: 'REGULAR' as PlayingStatus,
+            playingStatus: 'REGULAR' as PlayingStatus,
+            starterConfidence: Math.min(conflicting.card.starterConfidence ?? 50, 50),
+          };
+          result[conflictingSlot] = updatedCard as any;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Garantit qu'aucun joueur physique n'apparaît en double, qu'aucun non-titulaire n'est aligné, qu'aucun duel direct (adversaires) ne subsiste,
+ * et qu'aucun club ne possède deux joueurs avec le statut 'STARTER' dans la composition.
+ */
+export function sanitizeLineupNoDuplicatePlayers(
+  slots: { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null },
+  cards: SorareCard[]
+): { gk: SorareCard | null; def: SorareCard | null; mid: SorareCard | null; fwd: SorareCard | null; extra: SorareCard | null } {
+  let newSlots = { ...slots };
+  const slotKeys: ('gk' | 'def' | 'mid' | 'fwd' | 'extra')[] = ['gk', 'def', 'mid', 'fwd', 'extra'];
+
+  // Étape 1 : Validation stricte contre les joueurs BENCH, OUT, non-titulaires et confirmed_starter == false
+  for (const slotKey of slotKeys) {
+    const card = newSlots[slotKey];
+    if (card) {
+      const validation = validateLineup([card]);
+      if (!validation.isValid || isPlayerNonStarter(card)) {
+        newSlots[slotKey] = null;
+      }
+    }
+  }
+
+  // Étape 2 : Éliminer les doublons d'ID joueur et de joueur physique
+  const usedKeys = new Set<string>();
+  const usedIds = new Set<string>();
+  for (const slotKey of slotKeys) {
+    const card = newSlots[slotKey];
+    if (card) {
+      const pKey = getPlayerUniqueKey(card);
+      if (usedIds.has(card.id) || usedKeys.has(pKey)) {
+        newSlots[slotKey] = null;
+      } else {
+        usedIds.add(card.id);
+        usedKeys.add(pKey);
+      }
+    }
+  }
+
+  // Étape 3 : Éliminer les duels directs (opponents conflict : joueurs du même match s'affrontant)
+  const currentItems = slotKeys
+    .map(sk => ({ slotKey: sk, card: newSlots[sk] }))
+    .filter(item => item.card !== null) as { slotKey: 'gk' | 'def' | 'mid' | 'fwd' | 'extra'; card: SorareCard }[];
+
+  for (let i = 0; i < currentItems.length; i++) {
+    for (let j = i + 1; j < currentItems.length; j++) {
+      const item1 = currentItems[i];
+      const item2 = currentItems[j];
+      if (item1.card && item2.card && newSlots[item1.slotKey] && newSlots[item2.slotKey] && areOpponents(item1.card, item2.card)) {
+        // En cas de duel direct, on garde le joueur avec le score projeté le plus élevé
+        const score1 = calculatePlayerProjectedScore(item1.card).totalProjectedScore;
+        const score2 = calculatePlayerProjectedScore(item2.card).totalProjectedScore;
+        const dropItem = score1 >= score2 ? item2 : item1;
+        newSlots[dropItem.slotKey] = null;
+      }
+    }
+  }
+
+  // Recalculer les identifiants utilisés après éliminations
+  usedKeys.clear();
+  usedIds.clear();
+  for (const slotKey of slotKeys) {
+    const card = newSlots[slotKey];
+    if (card) {
+      usedIds.add(card.id);
+      usedKeys.add(getPlayerUniqueKey(card));
+    }
+  }
+
+  // Étape 4 : Compléter les slots vacants avec des alternatives 100% valides, titulaires et sans duel direct
+  for (const slotKey of slotKeys) {
+    if (!newSlots[slotKey]) {
+      const targetPos = slotKey === 'extra' ? undefined : slotKey.toUpperCase();
+      const retainedCards = slotKeys.map(sk => newSlots[sk]).filter(Boolean) as SorareCard[];
+
+      // Privilégier d'abord un joueur sans aucun duel direct avec l'équipe actuelle
+      let candidate = cards.find(c => {
+        if (targetPos && c.positionCode !== targetPos) return false;
+        if (slotKey === 'extra' && c.positionCode === 'GK') return false;
+        if (isPlayerNonStarter(c)) return false;
+        const pKey = getPlayerUniqueKey(c);
+        if (usedIds.has(c.id) || usedKeys.has(pKey)) return false;
+        if (retainedCards.some(existing => areOpponents(c, existing))) return false;
+        return true;
+      });
+
+      // Si aucun candidat sans duel direct n'existe dans la galerie, prendre le meilleur titulaire disponible
+      if (!candidate) {
+        candidate = cards.find(c => {
+          if (targetPos && c.positionCode !== targetPos) return false;
+          if (slotKey === 'extra' && c.positionCode === 'GK') return false;
+          if (isPlayerNonStarter(c)) return false;
+          const pKey = getPlayerUniqueKey(c);
+          return !usedIds.has(c.id) && !usedKeys.has(pKey);
+        });
+      }
+
+      if (candidate) {
+        newSlots[slotKey] = candidate;
+        usedIds.add(candidate.id);
+        usedKeys.add(getPlayerUniqueKey(candidate));
+      }
+    }
+  }
+
+  // Étape 5 : Garde post-traitement pour garantir qu'aucun club ne partage le statut STARTER
+  newSlots = enforceSingleStarterPerClub(newSlots, cards);
+
+  // Étape 6 : Validation finale de sécurité
+  const finalValidation = validateLineup(newSlots);
+  if (!finalValidation.isValid) {
+    // Si un joueur non valide subsiste, l'évacuer immédiatement
+    for (const slotKey of slotKeys) {
+      const card = newSlots[slotKey];
+      if (card && (finalValidation.duplicatePlayerIds.includes(card.id) || finalValidation.benchOrOutPlayerIds.includes(card.id))) {
+        newSlots[slotKey] = null;
+      }
+    }
+  }
+
+  return newSlots;
+}
+
+/**
  * Génère 4 compositions distinctes sans doublon de cartes (sauf doublons réels possédés dans la galerie)
  */
 export function generateFourDistinctLineups(
   cards: SorareCard[],
   strategy: StrategyType = 'BALANCED',
   gameWeek: number = getCurrentGameWeekNumber(),
-  filters: LineupOptimizationFilters = {}
+  filters: LineupOptimizationFilters = {},
+  initialUsedCardIds: Set<string> = new Set<string>(),
+  initialUsedPlayerKeys: Set<string> = new Set<string>()
 ): Lineup[] {
   const lineups: Lineup[] = [];
-  const usedCardIds = new Set<string>();
-  const usedPlayerKeys = new Set<string>();
+  const usedCardIds = new Set<string>(initialUsedCardIds);
+  const usedPlayerKeys = new Set<string>(initialUsedPlayerKeys);
 
   const strategies: { name: string; type: StrategyType }[] = [
     { name: 'Compo 1', type: 'BALANCED' },
@@ -1769,6 +2724,9 @@ export function generateFourDistinctLineups(
     const lineup = optimizeLineup(cards, s.type, gameWeek, filters, usedCardIds, usedPlayerKeys);
     lineup.name = s.name;
     
+    // Assurer l'unicité stricte des 5 joueurs au sein de la composition
+    lineup.slots = sanitizeLineupNoDuplicatePlayers(lineup.slots, cards);
+
     // Enregistrer les cartes et joueurs utilisés pour les compos suivantes
     ['gk', 'def', 'mid', 'fwd', 'extra'].forEach((slotKey) => {
       const cardInSlot = lineup.slots[slotKey as keyof typeof lineup.slots];
@@ -1956,11 +2914,10 @@ export function generate40RawScoresForCard(card: SorareCard): number[] {
 
   if (recentMatches && recentMatches.length > 0) {
     recentMatches = recentMatches.filter(m => {
-      const matchIsNational = isNationalTeamMatch(m);
       if (upcomingIsNational) {
-        return matchIsNational;
+        return isNationalTeamMatch(m) || (m.competitionName || '').toLowerCase().includes('olympic') || (m.competitionName || '').toLowerCase().includes('u23');
       } else {
-        return !matchIsNational;
+        return isClubDomesticOrLeagueMatch(m, card);
       }
     });
   }

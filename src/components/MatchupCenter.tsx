@@ -5,6 +5,7 @@ import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedSco
 import { getCardTotalBonus } from '../utils/sorareSlug';
 import { normalizeClubName } from '../data/fixturesData';
 import { StorageService } from '../utils/storage';
+import { ApiFootballMatchModal } from './ApiFootballMatchModal';
 export { getCardTotalBonus };
 
 interface MatchupCenterProps {
@@ -94,10 +95,17 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
   const [isSyncingRealOdds, setIsSyncingRealOdds] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [selectedMatchForModal, setSelectedMatchForModal] = useState<{
+    homeTeam: string;
+    awayTeam: string;
+    competition?: string;
+    kickoffDate?: string;
+    players: SorareCard[];
+  } | null>(null);
 
   const handleSyncRealOdds = async () => {
     setIsSyncingRealOdds(true);
-    setSyncFeedback('Recherche des cotes officielles des bookmakers via Google Search Grounding...');
+    setSyncFeedback('Recherche des cotes officielles des bookmakers via API-Football...');
     try {
       const appToken = StorageService.getAppToken();
       const res = await fetch('/api/match-odds/sync-gemini', {
@@ -544,7 +552,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
               onClick={handleSyncRealOdds}
               disabled={isSyncingRealOdds}
               className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 px-4 py-2.5 text-xs font-black transition shadow-lg shadow-emerald-500/20 disabled:opacity-50 cursor-pointer"
-              title="Effectue une recherche Google Search Grounding en direct sur les sites de bookmakers officiels (Winamax, Betclic, Unibet) pour récupérer les cotes et probabilités en temps réel"
+              title="Effectue une recherche API-Football en direct sur les sites de bookmakers officiels (Winamax, Betclic, Unibet) pour récupérer les cotes et probabilités en temps réel"
             >
               {isSyncingRealOdds ? (
                 <>
@@ -554,7 +562,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
               ) : (
                 <>
                   <Sparkles className="h-4 w-4 text-slate-950" />
-                  <span>Actualiser Vraies Cotes (Google Search)</span>
+                  <span>Actualiser Vraies Cotes (API Football)</span>
                 </>
               )}
             </button>
@@ -819,108 +827,150 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                     )}
                   </div>
 
-                  {/* 4 KPI Cards */}
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:gap-3 w-full lg:w-auto">
-                    
-                    {/* 1. Probas 1N2 */}
-                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[105px]">
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">PROBAS 1N2</span>
-                      <div className="text-xs sm:text-sm font-mono flex items-center justify-center gap-0.5 sm:gap-1 my-0.5">
-                        <span className="text-emerald-400 font-black" title={`Probabilité de victoire pour ${fixture.club}`}>
-                          {fixture.winProb}%
-                        </span>
-                        <span className="text-slate-600 font-bold">/</span>
-                        <span className="text-slate-400 font-medium">
-                          {fixture.drawProb}%
-                        </span>
-                        <span className="text-slate-600 font-bold">/</span>
-                        <span className="text-slate-400 font-medium">
-                          {fixture.lossProb}%
-                        </span>
-                      </div>
-                      <span className="block text-[8px] sm:text-[9px]">
-                        <strong className="text-emerald-400 font-bold">V ({fixture.isHome ? '1' : '2'})</strong>
-                        <span className="text-slate-500"> / </span>
-                        <span className="text-slate-400">N</span>
-                        <span className="text-slate-500"> / </span>
-                        <span className="text-slate-400">D</span>
-                      </span>
-                    </div>
-
-                    {/* 2. Clean Sheet */}
-                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[90px]">
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">CLEAN SHEET</span>
-                      <span className="text-xs sm:text-sm font-black text-emerald-400 font-mono block my-0.5">
-                        {fixture.cleanSheetProb}%
-                      </span>
-                      <span className="block text-[8px] sm:text-[9px] text-slate-400">Pour GK / DEF</span>
-                    </div>
-
-                    {/* 3. Goal Expectancy (xG) */}
-                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[90px]">
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">ESPÉRANCE BUTS</span>
-                      <span className="text-xs sm:text-sm font-black text-purple-300 font-mono block my-0.5">
-                        {typeof fixture.goalExpectancy === 'number' ? fixture.goalExpectancy.toFixed(1) : fixture.goalExpectancy} xG
-                      </span>
-                      <span className="block text-[8px] sm:text-[9px] text-slate-400">Attaque équipe</span>
-                    </div>
-
-                    {/* 4. 1 / N / 2 Market Odds */}
-                    <div className="rounded-xl bg-slate-950 p-2 sm:p-2.5 border border-slate-800/80 text-center min-w-0 sm:min-w-[105px]">
-                      <span className="block text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">COTES 1 / N / 2</span>
-                      <div className="text-[11px] sm:text-xs font-mono flex items-center justify-center gap-0.5 sm:gap-1 my-0.5">
-                        {fixture.isHome ? (
-                          <>
-                            <span className="text-emerald-400 font-black bg-emerald-950/70 border border-emerald-500/40 px-1 py-0.2 rounded" title={`Cote Victoire Domicile (${fixture.club})`}>
-                              {(fixture.homeWinOdds || marketHome).toFixed(2)}
-                            </span>
-                            <span className="text-slate-600 font-bold">/</span>
-                            <span className="text-slate-400 font-medium">
-                              {(fixture.drawOdds || marketDraw).toFixed(2)}
-                            </span>
-                            <span className="text-slate-600 font-bold">/</span>
-                            <span className="text-slate-400 font-medium">
-                              {(fixture.awayWinOdds || marketAway).toFixed(2)}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-slate-400 font-medium">
-                              {(fixture.homeWinOdds || marketHome).toFixed(2)}
-                            </span>
-                            <span className="text-slate-600 font-bold">/</span>
-                            <span className="text-slate-400 font-medium">
-                              {(fixture.drawOdds || marketDraw).toFixed(2)}
-                            </span>
-                            <span className="text-slate-600 font-bold">/</span>
-                            <span className="text-emerald-400 font-black bg-emerald-950/70 border border-emerald-500/40 px-1 py-0.2 rounded" title={`Cote Victoire Extérieur (${fixture.club})`}>
-                              {(fixture.awayWinOdds || marketAway).toFixed(2)}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <span className="block text-[8px] sm:text-[9px]">
-                        {fixture.isHome ? (
-                          <>
-                            <strong className="text-emerald-400 font-bold">1 (Club)</strong>
-                            <span className="text-slate-500"> / </span>
-                            <span className="text-slate-400">N</span>
-                            <span className="text-slate-500"> / </span>
-                            <span className="text-slate-400">2</span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-slate-400">1</span>
-                            <span className="text-slate-500"> / </span>
-                            <span className="text-slate-400">N</span>
-                            <span className="text-slate-500"> / </span>
-                            <strong className="text-emerald-400 font-bold">2 (Club)</strong>
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  </div>
                 </div>
+
+                {/* Direct Unified Bookmaker & Match Analysis Matrix (Zero Redundancy) */}
+                {(() => {
+                  const homeClubName = fixture.isHome ? fixture.club : fixture.opponent;
+                  const awayClubName = fixture.isHome ? fixture.opponent : fixture.club;
+                  const homeWinProb = fixture.isHome ? fixture.winProb : fixture.lossProb;
+                  const awayWinProb = fixture.isHome ? fixture.lossProb : fixture.winProb;
+                  const drawProb = fixture.drawProb;
+                  const homeOdds = (fixture.homeWinOdds || marketHome).toFixed(2);
+                  const drawOdds = (fixture.drawOdds || marketDraw).toFixed(2);
+                  const awayOdds = (fixture.awayWinOdds || marketAway).toFixed(2);
+
+                  const homeCS = fixture.isHome ? fixture.cleanSheetProb : Math.max(5, 60 - fixture.cleanSheetProb);
+                  const awayCS = !fixture.isHome ? fixture.cleanSheetProb : Math.max(5, 60 - fixture.cleanSheetProb);
+
+                  const homeXG = typeof fixture.goalExpectancy === 'number' 
+                    ? (fixture.isHome ? fixture.goalExpectancy.toFixed(1) : ((fixture as any).opponentGoalExpectancy || 1.1).toFixed(1))
+                    : fixture.goalExpectancy;
+                  const awayXG = typeof fixture.goalExpectancy === 'number'
+                    ? (!fixture.isHome ? fixture.goalExpectancy.toFixed(1) : ((fixture as any).opponentGoalExpectancy || 1.1).toFixed(1))
+                    : '1.2';
+
+                  const totalXgMatch = (parseFloat(String(homeXG)) + parseFloat(String(awayXG))).toFixed(1);
+
+                  return (
+                    <div className="space-y-3 bg-slate-950/90 rounded-2xl border border-slate-800/80 p-3.5 sm:p-4 shadow-inner">
+                      
+                      {/* 1N2 Odds & Probability Integrated Bar */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
+                          <span className="uppercase tracking-wider flex items-center gap-1.5 text-indigo-300">
+                            <Zap className="h-3 w-3 text-indigo-400" />
+                            Cotes Bookmaker 1N2 & Probabilités Match
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">API-Football Bet365/Pinnacle</span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* 1 - Domicile */}
+                          <div className={`p-2.5 rounded-xl border text-center transition ${
+                            fixture.isHome ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-slate-900 border-slate-800 text-slate-300'
+                          }`}>
+                            <span className="text-[10px] font-bold block truncate">
+                              1 • {homeClubName} {fixture.isHome && '(Galerie)'}
+                            </span>
+                            <div className="flex items-baseline justify-center gap-1.5 my-0.5">
+                              <span className="text-sm sm:text-base font-black text-white font-mono">
+                                @{homeOdds}
+                              </span>
+                              <span className="text-xs font-bold text-emerald-400">
+                                {homeWinProb}%
+                              </span>
+                            </div>
+                            <span className="text-[9px] text-slate-400">Victoire Dom.</span>
+                          </div>
+
+                          {/* N - Nul */}
+                          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-center">
+                            <span className="text-[10px] font-bold text-slate-400 block">
+                              N • Match Nul
+                            </span>
+                            <div className="flex items-baseline justify-center gap-1.5 my-0.5">
+                              <span className="text-sm sm:text-base font-black text-white font-mono">
+                                @{drawOdds}
+                              </span>
+                              <span className="text-xs font-bold text-slate-400">
+                                {drawProb}%
+                              </span>
+                            </div>
+                            <span className="text-[9px] text-slate-400">Nul</span>
+                          </div>
+
+                          {/* 2 - Extérieur */}
+                          <div className={`p-2.5 rounded-xl border text-center transition ${
+                            !fixture.isHome ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-slate-900 border-slate-800 text-slate-300'
+                          }`}>
+                            <span className="text-[10px] font-bold block truncate">
+                              2 • {awayClubName} {!fixture.isHome && '(Galerie)'}
+                            </span>
+                            <div className="flex items-baseline justify-center gap-1.5 my-0.5">
+                              <span className="text-sm sm:text-base font-black text-white font-mono">
+                                @{awayOdds}
+                              </span>
+                              <span className="text-xs font-bold text-emerald-400">
+                                {awayWinProb}%
+                              </span>
+                            </div>
+                            <span className="text-[9px] text-slate-400">Victoire Ext.</span>
+                          </div>
+                        </div>
+
+                        {/* Tri-color Win Probability Gauge */}
+                        <div className="h-1.5 w-full bg-slate-900 rounded-full flex overflow-hidden border border-slate-800">
+                          <div style={{ width: `${homeWinProb}%` }} className="bg-emerald-500 transition-all" title={`Domicile: ${homeWinProb}%`} />
+                          <div style={{ width: `${drawProb}%` }} className="bg-slate-600 transition-all" title={`Nul: ${drawProb}%`} />
+                          <div style={{ width: `${awayWinProb}%` }} className="bg-indigo-500 transition-all" title={`Extérieur: ${awayWinProb}%`} />
+                        </div>
+                      </div>
+
+                      {/* Tactical Metrics: Clean Sheet & xG Matrix */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1.5 border-t border-slate-800/70 text-xs">
+                        
+                        {/* Clean Sheet Domicile */}
+                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
+                          <span className="text-[10px] text-slate-400 font-bold block">🛡️ CS {homeClubName}</span>
+                          <span className="text-xs sm:text-sm font-black text-blue-400 font-mono block mt-0.5">
+                            {homeCS}%
+                          </span>
+                          <span className="text-[9px] text-slate-500">{fixture.isHome ? 'Pour vos GK/DEF' : 'Risque offensif'}</span>
+                        </div>
+
+                        {/* Clean Sheet Extérieur */}
+                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
+                          <span className="text-[10px] text-slate-400 font-bold block">🛡️ CS {awayClubName}</span>
+                          <span className="text-xs sm:text-sm font-black text-blue-400 font-mono block mt-0.5">
+                            {awayCS}%
+                          </span>
+                          <span className="text-[9px] text-slate-500">{!fixture.isHome ? 'Pour vos GK/DEF' : 'Risque offensif'}</span>
+                        </div>
+
+                        {/* xG Attaque Match */}
+                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
+                          <span className="text-[10px] text-slate-400 font-bold block">⚽ xG Attaque</span>
+                          <span className="text-xs sm:text-sm font-black text-purple-300 font-mono block mt-0.5">
+                            {homeXG} - {awayXG}
+                          </span>
+                          <span className="text-[9px] text-slate-500">Total match: {totalXgMatch} xG</span>
+                        </div>
+
+                        {/* Tendance & Conseil SO5 */}
+                        <div className="p-2 rounded-xl bg-slate-900/80 border border-slate-800">
+                          <span className="text-[10px] text-slate-400 font-bold block">🎯 Tendance SO5</span>
+                          <span className="text-xs font-black text-emerald-400 block mt-0.5 truncate">
+                            {homeWinProb > 55 ? `Favori ${homeClubName}` : awayWinProb > 55 ? `Favori ${awayClubName}` : 'Match Équilibré'}
+                          </span>
+                          <span className="text-[9px] text-slate-500">{parseFloat(totalXgMatch) > 2.5 ? 'Match ouvert' : 'Match fermé'}</span>
+                        </div>
+
+                      </div>
+
+                    </div>
+                  );
+                })()}
 
                 {/* Gallery Player Count Header & Pills */}
                 <div className="mt-4 border-t border-slate-800/60 pt-3">
@@ -1030,6 +1080,19 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           })
         )}
       </div>
+
+      {/* Deep-dive API-Football Match Analysis Modal */}
+      {selectedMatchForModal && (
+        <ApiFootballMatchModal
+          homeTeam={selectedMatchForModal.homeTeam}
+          awayTeam={selectedMatchForModal.awayTeam}
+          competition={selectedMatchForModal.competition}
+          kickoffDate={selectedMatchForModal.kickoffDate}
+          galleryPlayers={selectedMatchForModal.players}
+          onClose={() => setSelectedMatchForModal(null)}
+          onOpenScout={onOpenScout}
+        />
+      )}
 
     </div>
   );

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { toast } from 'sonner';
 import { SorareCard, Lineup, StartingXIPlayerInfo, NonStarterAlert } from '../types';
 import { StorageService } from '../utils/storage';
 import { NotificationService } from '../utils/notifications';
@@ -95,6 +96,11 @@ export function useStartingXIMonitor({
               notifiedAlertIdsRef.current.add(alertKey);
               NotificationService.notifyNonStarter(alert);
               AppLogger.logLineupAlert(alert);
+              
+              toast.error(`🚨 Alerte Lineup: ${alert.player.displayName || alert.player.name}`, {
+                description: `Est ${alert.statusLabel.toLowerCase()} dans "${alert.lineupName}".`,
+                duration: 10000,
+              });
             }
           });
         }

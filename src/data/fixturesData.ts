@@ -2499,6 +2499,10 @@ export function getClubUpcomingFixture(clubName: string, positionCode: 'GK' | 'D
     projectedScore: projScore,
     weather,
     bookmaker: {
+      homeTeamName: def.isHome ? norm : def.opponent,
+      awayTeamName: def.isHome ? def.opponent : norm,
+      sourceType: 'estimated_mirror',
+      source: 'Estimation interne (aucune source bookmaker réelle)',
       win: def.winOdds,
       draw: def.drawOdds,
       loss: def.lossOdds,
