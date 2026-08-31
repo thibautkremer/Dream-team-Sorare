@@ -19,6 +19,7 @@ interface PitchPageProps {
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
   onImportSorareLineups?: () => void;
+  onReplacePlayerInCompo?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => void;
   alerts?: NonStarterAlert[];
   playerStatusMap?: Record<string, StartingXIPlayerInfo>;
   onOpenStartingXIMonitor?: () => void;

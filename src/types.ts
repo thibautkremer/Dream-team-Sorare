@@ -182,6 +182,7 @@ export interface SorareCard {
     otherBonusBasisPoints: number;
   };
   bonusPercentage?: number;
+  customBonusPercentage?: number;
   scores: {
     l5: number;
     l10?: number;

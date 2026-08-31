@@ -8,6 +8,7 @@ interface ProjectionBreakdownModalProps {
   card: SorareCard;
   strategy?: StrategyType;
   allGalleryCards?: SorareCard[];
+  onUpdateCard?: (updatedCard: SorareCard) => void;
   onClose: () => void;
 }
 
@@ -15,13 +16,42 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
   card,
   strategy = 'BALANCED',
   allGalleryCards = [],
+  onUpdateCard,
   onClose,
 }) => {
-  const breakdown = calculatePlayerProjectedScore(card, strategy as StrategyType, allGalleryCards);
-  const posBadge = formatPositionBadge(card.positionCode);
-  const fixture = card.upcomingFixture;
+  const [currentCard, setCurrentCard] = useState<SorareCard>(card);
+  const breakdown = calculatePlayerProjectedScore(currentCard, strategy as StrategyType, allGalleryCards);
+  const posBadge = formatPositionBadge(currentCard.positionCode);
+  const fixture = currentCard.upcomingFixture;
   const [apiData, setApiData] = useState<any>(null);
   const [loadingApi, setLoadingApi] = useState(false);
+  const [isEditingBonus, setIsEditingBonus] = useState(false);
+  const [customBonusInput, setCustomBonusInput] = useState<string>(
+    currentCard.customBonusPercentage !== undefined ? String(currentCard.customBonusPercentage) : String(breakdown.cardBonusPercentage)
+  );
+
+  const handleApplyBonus = (val: number) => {
+    const updated = {
+      ...currentCard,
+      customBonusPercentage: val,
+      bonusPercentage: val
+    };
+    setCurrentCard(updated);
+    if (onUpdateCard) {
+      onUpdateCard(updated);
+    }
+  };
+
+  const handleResetBonus = () => {
+    const updated = {
+      ...currentCard,
+      customBonusPercentage: undefined
+    };
+    setCurrentCard(updated);
+    if (onUpdateCard) {
+      onUpdateCard(updated);
+    }
+  };
 
   useEffect(() => {
     if (fixture?.opponent) {
@@ -369,7 +399,17 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
                 <Sparkles className="w-4 h-4" />
                 <span>Étape 4 : Décomposition des Bonus de la Carte (API Sorare)</span>
               </div>
-              <span className="text-xs font-black text-amber-300">Total : +{breakdown.cardBonusPercentage}%</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black text-amber-300">Total : +{breakdown.cardBonusPercentage}%</span>
+                {onUpdateCard && (
+                  <button
+                    onClick={() => setIsEditingBonus(!isEditingBonus)}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40 transition"
+                  >
+                    {isEditingBonus ? 'Fermer' : 'Ajuster'}
+                  </button>
+                )}
+              </div>
             </div>
 
             <p className="text-[11px] text-slate-400">
@@ -382,8 +422,8 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
                 <span className="text-[10px] font-bold text-slate-400 block uppercase">Saison / Édition</span>
                 <span className="text-base font-black text-amber-300 mt-1 block">+{breakdown.bonusBreakdown.editionBonus}%</span>
                 <span className="text-[9px] text-slate-400 mt-0.5 block font-medium">
-                  {breakdown.bonusBreakdown.editionBonus === 20
-                    ? 'Édition Spéciale (+20%)'
+                  {breakdown.bonusBreakdown.editionBonus >= 20
+                    ? 'In-Season / Spéciale (+20%)'
                     : breakdown.bonusBreakdown.editionBonus === 5
                     ? 'In-Season Standard (+5%)'
                     : 'Classic Season (+0%)'}
@@ -401,16 +441,74 @@ export const ProjectionBreakdownModal: React.FC<ProjectionBreakdownModalProps> =
               <div className="p-2.5 rounded-xl bg-slate-900 border border-amber-500/20">
                 <span className="text-[10px] font-bold text-slate-400 block uppercase">Grade / XP</span>
                 <span className="text-base font-black text-amber-300 mt-1 block">+{breakdown.bonusBreakdown.xpGradeBonus}%</span>
-                <span className="text-[9px] text-slate-400 mt-0.5 block">Niveau Grade: {card.grade || 0}</span>
+                <span className="text-[9px] text-slate-400 mt-0.5 block">Niveau Grade: {currentCard.grade || 0}</span>
               </div>
 
               {/* Bonus Rareté Base */}
               <div className="p-2.5 rounded-xl bg-slate-900 border border-amber-500/20">
                 <span className="text-[10px] font-bold text-slate-400 block uppercase">Rareté Base</span>
                 <span className="text-base font-black text-amber-300 mt-1 block">+{breakdown.bonusBreakdown.rarityBonus}%</span>
-                <span className="text-[9px] text-slate-400 mt-0.5 block">{card.rarity.toUpperCase()}</span>
+                <span className="text-[9px] text-slate-400 mt-0.5 block">{currentCard.rarity?.toUpperCase()}</span>
               </div>
             </div>
+
+            {/* Interactive Bonus Adjuster Panel */}
+            {isEditingBonus && (
+              <div className="mt-3 p-3 rounded-xl bg-slate-900/90 border border-amber-500/40 space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-200">
+                  <span>Ajuster manuellement le bonus total de la carte :</span>
+                  {currentCard.customBonusPercentage !== undefined && (
+                    <button
+                      onClick={handleResetBonus}
+                      className="text-[10px] text-slate-400 hover:text-amber-300 underline"
+                    >
+                      Réinitialiser calcul auto
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  {[0, 5, 10, 15, 20, 25, 30].map(val => (
+                    <button
+                      key={val}
+                      onClick={() => {
+                        handleApplyBonus(val);
+                        setCustomBonusInput(String(val));
+                      }}
+                      className={`px-2.5 py-1 text-xs font-black rounded-lg border transition ${
+                        breakdown.cardBonusPercentage === val
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white'
+                      }`}
+                    >
+                      +{val}%
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="100"
+                    value={customBonusInput}
+                    onChange={(e) => setCustomBonusInput(e.target.value)}
+                    className="w-24 px-2 py-1 text-xs bg-slate-950 border border-slate-700 rounded text-amber-300 font-bold focus:outline-none focus:border-amber-400"
+                    placeholder="ex: 20"
+                  />
+                  <button
+                    onClick={() => {
+                      const num = parseFloat(customBonusInput);
+                      if (!isNaN(num) && num >= 0) {
+                        handleApplyBonus(num);
+                      }
+                    }}
+                    className="px-3 py-1 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded transition"
+                  >
+                    Appliquer
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 flex items-center justify-between text-xs text-amber-200">
               <span className="font-semibold">Gain attribué par le bonus :</span>

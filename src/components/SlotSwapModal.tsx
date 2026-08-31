@@ -9,11 +9,13 @@ interface SlotSwapModalProps {
   cards: SorareCard[];
   filters?: LineupOptimizationFilters;
   currentLineup?: Lineup;
+  compositions?: Lineup[];
+  selectedCompoIndex?: number;
   onSelectPlayer: (player: SorareCard) => void;
   onClose: () => void;
 }
 
-export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filters, currentLineup, onSelectPlayer, onClose }) => {
+export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filters, currentLineup, compositions = [], selectedCompoIndex, onSelectPlayer, onClose }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [enforceDateFilter, setEnforceDateFilter] = useState(true);
@@ -69,10 +71,28 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
     }
   };
 
+  // Cartes déjà utilisées dans d'autres compositions (pour respecter la règle 1 carte = 1 seule compo)
+  const otherCompositionsMap = useMemo(() => {
+    const map = new Map<string, { compoName: string; compoIndex: number }>();
+    if (!compositions || selectedCompoIndex === undefined) return map;
+    compositions.forEach((comp, idx) => {
+      if (idx === selectedCompoIndex || !comp?.slots) return;
+      Object.values(comp.slots).forEach(p => {
+        if (p) {
+          const info = { compoName: comp.name || `Compo ${idx + 1}`, compoIndex: idx };
+          map.set(p.id, info);
+          map.set(getPlayerUniqueKey(p), info);
+        }
+      });
+    });
+    return map;
+  }, [compositions, selectedCompoIndex]);
+
   const cardsWithInfo = useMemo(() => {
     return cards.map(card => {
       const opposingPlayer = otherTeamPlayers.find(other => areOpponents(card, other));
       const teammates = otherTeamPlayers.filter(other => isSameClub(card.club?.name, other.club?.name));
+      const alignedInOther = otherCompositionsMap.get(card.id) || otherCompositionsMap.get(getPlayerUniqueKey(card));
 
       return {
         card,
@@ -81,9 +101,10 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
         winProb: getPlayerWinProbability(card.upcomingFixture),
         opposingPlayer,
         teammates,
+        alignedInOther,
       };
     });
-  }, [cards, otherTeamPlayers, currentLineup?.strategy, filters?.scoringFocus]);
+  }, [cards, otherTeamPlayers, currentLineup?.strategy, filters?.scoringFocus, otherCompositionsMap]);
 
   const searchedCardsInfo = useMemo(() => {
     return cardsWithInfo.filter(({ card, proj, bonus, winProb, opposingPlayer }) => {
@@ -472,7 +493,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
               )}
             </div>
           ) : (
-            searchedCardsInfo.map(({ card, proj, bonus, opposingPlayer, teammates }) => {
+            searchedCardsInfo.map(({ card, proj, bonus, opposingPlayer, teammates, alignedInOther }) => {
               const posBadge = formatPositionBadge(card.positionCode);
               const statusInfo = formatStatusBadge(card.status, card.starterConfidence);
               const isNotPlaying = card.status === 'NOT_PLAYING' || card.injuryStatus === 'INJURED';
@@ -484,11 +505,19 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
                 <div
                   key={card.id}
                   onClick={() => {
+                    if (alignedInOther) {
+                      const confirmTransfer = window.confirm(
+                        `🔒 Règle Unicité :\n\nCe joueur (${card.displayName}) est actuellement aligné dans la ${alignedInOther.compoName}.\n\nUne même carte ne peut pas être alignée dans 2 compositions différentes.\n\nSouhaitez-vous le transférer dans cette composition ? (Il sera automatiquement retiré de la ${alignedInOther.compoName}).`
+                      );
+                      if (!confirmTransfer) return;
+                    }
                     onSelectPlayer(card);
                     onClose();
                   }}
                   className={`flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border p-3 cursor-pointer transition ${
-                    isOpponent
+                    alignedInOther
+                      ? 'border-amber-600/60 bg-amber-950/20 opacity-80 hover:opacity-100 hover:border-amber-400'
+                      : isOpponent
                       ? 'border-rose-700/60 bg-rose-950/25 hover:border-rose-500'
                       : isTeammate
                       ? 'border-emerald-500/60 bg-emerald-950/20 hover:border-emerald-400'
@@ -521,8 +550,16 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
                           </span>
                         )}
 
+                        {/* Aligned in other composition warning badge */}
+                        {alignedInOther && (
+                          <span className="rounded bg-amber-500/20 border border-amber-500/50 text-amber-300 text-[9px] font-bold px-1.5 py-0.5 flex items-center gap-1">
+                            <ShieldAlert className="h-2.5 w-2.5 text-amber-400" />
+                            <span>Aligné dans {alignedInOther.compoName}</span>
+                          </span>
+                        )}
+
                         {/* Stacking synergy badge */}
-                        {isTeammate && (
+                        {isTeammate && !alignedInOther && (
                           <span className="rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[9px] font-black px-1.5 py-0.5 flex items-center gap-1">
                             <Users className="h-2.5 w-2.5" />
                             <span>Même club ({teammates.map(t => t.displayName).join(', ')})</span>
@@ -530,7 +567,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
                         )}
 
                         {/* Opponent alert badge */}
-                        {isOpponent && (
+                        {isOpponent && !alignedInOther && (
                           <span className="rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[9px] font-black px-1.5 py-0.5 flex items-center gap-1">
                             <Swords className="h-2.5 w-2.5" />
                             <span>Affronte {opposingPlayer?.displayName}</span>

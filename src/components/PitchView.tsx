@@ -4,6 +4,10 @@ import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilte
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub, getPlayerUniqueKey } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
 import { ApiFootballMatchModal } from './ApiFootballMatchModal';
+import { RealisticPitchCard } from './pitch/RealisticPitchCard';
+import { PitchTournamentRules } from './pitch/PitchTournamentRules';
+import { PitchQuickSwapDrawer } from './pitch/PitchQuickSwapDrawer';
+import { PitchBenchmarkModal } from './pitch/PitchBenchmarkModal';
 
 interface PitchViewProps {
   lineup: Lineup;
@@ -22,6 +26,7 @@ interface PitchViewProps {
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
   onImportSorareLineups?: () => void;
+  onReplacePlayerInCompo?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => void;
   alerts?: NonStarterAlert[];
   playerStatusMap?: Record<string, StartingXIPlayerInfo>;
   onOpenStartingXIMonitor?: () => void;
@@ -44,6 +49,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
   onExportLineup,
   onToggleLockCompo,
   onImportSorareLineups,
+  onReplacePlayerInCompo,
   alerts = [],
   playerStatusMap = {},
   onOpenStartingXIMonitor,
@@ -56,6 +62,15 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
   // Mobile layout state: compact list mode vs vertical formation mode
   const [mobileCompactView, setMobileCompactView] = useState(false);
+
+  // Bench Assistant Quick Swap Slot state
+  const [quickSwapSlot, setQuickSwapSlot] = useState<{
+    slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra';
+    compoIndex: number;
+  } | null>(null);
+
+  // Bench Benchmark / Scenario Comparison Modal state
+  const [isBenchmarkModalOpen, setIsBenchmarkModalOpen] = useState(false);
 
   // Touch swipe support for switching compositions on mobile
   const touchStartRef = React.useRef<{ x: number; y: number } | null>(null);
@@ -166,325 +181,33 @@ export const PitchView: React.FC<PitchViewProps> = ({
     targetLineup: Lineup,
     slotKey: 'gk' | 'def' | 'mid' | 'fwd' | 'extra',
     slotLabel: string,
-    expectedPosition: 'GK' | 'DEF' | 'MID' | 'FWD' | 'EXTRA'
+    expectedPosition: 'GK' | 'DEF' | 'MID' | 'FWD' | 'EXTRA',
+    compoIndex: number = selectedCompoIndex
   ) => {
     const card = targetLineup.slots[slotKey];
     const isCaptain = targetLineup.captainSlot === slotKey;
-    const posBadge = formatPositionBadge(card?.positionCode || expectedPosition);
-    const statusInfo = card ? formatStatusBadge(card.status, card.starterConfidence) : null;
-
-    if (!card) {
-      return (
-        <div
-          onClick={() => onSelectSlotToSwap(slotKey)}
-          className="group relative flex h-52 w-full max-w-[150px] xs:max-w-[160px] sm:h-60 sm:w-44 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-700/80 bg-slate-900/70 p-3 text-center shadow-lg backdrop-blur transition hover:border-emerald-400 hover:bg-slate-800/80"
-        >
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-800 text-slate-400 group-hover:bg-emerald-400 group-hover:text-slate-950 transition">
-            <span className="text-sm font-black">{expectedPosition}</span>
-          </div>
-          <span className="mt-2 text-xs font-semibold text-slate-300">Emplacement {slotLabel}</span>
-          <span className="text-[11px] text-emerald-400 font-bold mt-1">Cliquer pour choisir</span>
-        </div>
-      );
-    }
-
-    const cardBreakdown = calculatePlayerProjectedScore(card, targetLineup.strategy, cards);
-    const projected = cardBreakdown.projectedScore;
-    const bonusIfCaptain = isCaptain ? Math.round((cardBreakdown.baseProjectedScore * 0.20) * 10) / 10 : 0;
-    const totalBonusPct = Math.round((cardBreakdown.cardBonusPercentage + (isCaptain ? 20 : 0)) * 10) / 10;
-    const totalBonusScore = Math.round((cardBreakdown.cardBonusScore + bonusIfCaptain) * 10) / 10;
-    const winProb = getPlayerWinProbability(card.upcomingFixture);
-    const recentStats = getPlayerRecentMatchAnalysis(card);
-    const injuryInfo = formatInjuryBadge(card.injuryStatus);
-
-    // Conflict and synergy detection with rest of lineup
-    const otherPlayers = Object.entries(targetLineup.slots)
-      .filter(([k, p]) => k !== slotKey && p !== null)
-      .map(([_, p]) => p as SorareCard);
-    const opposingTeammate = otherPlayers.find(other => areOpponents(card, other));
-    const stackedTeammates = otherPlayers.filter(other => isSameClub(card.club?.name, other.club?.name));
 
     return (
-      <div
-        onClick={() => onOpenScout(card)}
-        className={`relative flex h-full min-h-[420px] w-full flex-col justify-between rounded-2xl border transition-all duration-300 shadow-xl overflow-hidden backdrop-blur-md cursor-pointer hover:scale-[1.02] hover:border-emerald-500/50 active:scale-[0.99] group/card pb-1.5 ${
-          isCaptain
-            ? 'border-emerald-400 ring-2 ring-emerald-400/40 bg-gradient-to-b from-emerald-950/50 via-slate-900/90 to-slate-950 shadow-emerald-500/10'
-            : 'border-slate-700/70 bg-slate-900/90 hover:border-slate-500'
-        }`}
-      >
-        {/* Card Header Top */}
-        <div className="flex items-center justify-between p-2 bg-slate-950/80 border-b border-slate-800/60 gap-1 shrink-0">
-          <div className="flex items-center gap-1 min-w-0">
-            <span className={`flex h-5 w-5 items-center justify-center rounded-md text-[10px] font-black shrink-0 ${posBadge.bg} ${posBadge.text} border ${posBadge.border}`}>
-              {card.positionCode}
-            </span>
-            {/* Tiny Star count */}
-            <span className="bg-amber-500/10 text-amber-400 font-extrabold text-[9px] px-1 rounded border border-amber-500/20 shrink-0">
-              {getPlayerStars(card)}★
-            </span>
-            {cardBreakdown.cardBonusPercentage > 0 && (
-              <span className="bg-amber-500/15 text-amber-300 font-black text-[9px] px-1 rounded border border-amber-500/30 shrink-0" title={`Bonus intrinsèque de la carte : +${cardBreakdown.cardBonusPercentage}%`}>
-                +{cardBreakdown.cardBonusPercentage}%
-              </span>
-            )}
-            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
-              {slotKey === 'extra' ? 'EXTRA' : slotLabel}
-            </span>
-          </div>
-
-          {/* Captain Toggle */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleCaptainChangeForLineup(targetLineup, slotKey);
-            }}
-            title={isCaptain ? 'Capitaine actif (+20%)' : 'Nommer Capitaine'}
-            className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-black transition-all shrink-0 ${
-              isCaptain
-                ? 'bg-emerald-400 text-slate-950 shadow-md shadow-emerald-400/30 ring-1 ring-emerald-300 scale-105'
-                : 'bg-slate-800/80 text-slate-400 hover:bg-emerald-500/20 hover:text-emerald-300'
-            }`}
-          >
-            <Crown className="h-2.5 w-2.5" />
-            <span>{isCaptain ? 'CAP' : 'C'}</span>
-          </button>
-        </div>
-
-        {/* Player Image & Club */}
-        <div className="relative flex flex-col items-center px-3 pt-2 shrink-0">
-          <div className="relative">
-            <img
-              src={card.pictureUrl}
-              alt={card.displayName}
-              referrerPolicy="no-referrer"
-              className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl object-contain bg-slate-950/60 border-2 border-slate-700/80 shadow-md transition-transform group-hover/card:scale-105 p-1"
-            />
-            {card.club?.pictureUrl && (
-              <img
-                src={card.club.pictureUrl}
-                alt={card.club.name || 'Club'}
-                referrerPolicy="no-referrer"
-                className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full border border-slate-700 bg-slate-950 p-0.5 shadow"
-              />
-            )}
-          </div>
-
-          <h3 className="mt-2 text-center text-xs sm:text-sm font-black text-white truncate max-w-full group-hover/card:text-emerald-400 transition">
-            {card.displayName}
-          </h3>
-          
-          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap justify-center">
-            <span className="text-[10px] text-slate-400 truncate max-w-[90px]">{card.club?.name || 'Club'}</span>
-            {injuryInfo ? (
-              <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${injuryInfo.bg} ${injuryInfo.color} flex items-center gap-1`}>
-                <span>{injuryInfo.icon}</span>
-                <span>{injuryInfo.label}</span>
-              </span>
-            ) : statusInfo ? (
-              <span className={`text-[9px] font-bold ${statusInfo.color}`}>
-                • {statusInfo.label}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Projected Score & Next Match Info */}
-        <div className="flex-1 flex flex-col justify-between px-2.5 pb-2.5 pt-1.5">
-          {/* Projected Score Box */}
-          <div className="rounded-xl bg-slate-950/80 p-2 border border-slate-800/80 space-y-1">
-            <div className="space-y-0.5 text-[10px]">
-              <div className="flex items-center justify-between text-slate-400 gap-1">
-                <span className="shrink-0 text-slate-400 font-medium">Base</span>
-                <span className="font-semibold text-slate-200 text-right truncate">{cardBreakdown.baseProjectedScore} ({cardBreakdown.projectedFloor}-{cardBreakdown.projectedCeiling}) pts</span>
-              </div>
-              {isCaptain ? (
-                <>
-                  <div className="flex items-center justify-between text-slate-400 text-[9.5px] gap-1">
-                    <span className="shrink-0 text-slate-400">Bonus Carte (+{cardBreakdown.cardBonusPercentage}%)</span>
-                    <span className="font-semibold text-amber-300 text-right">+{cardBreakdown.cardBonusScore} pts</span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-400 text-[9.5px] gap-1">
-                    <span className="shrink-0 text-emerald-400 font-semibold">Bonus Cap (+20%)</span>
-                    <span className="font-semibold text-emerald-400 text-right">+{bonusIfCaptain} pts</span>
-                  </div>
-                  <div className="flex items-center justify-between font-bold border-t border-slate-800/60 pt-0.5 mt-0.5 gap-1">
-                    <span className="shrink-0 text-amber-300">Total Bonus (+{totalBonusPct}%)</span>
-                    <span className="font-bold text-amber-300 text-right">+{totalBonusScore} pts</span>
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center justify-between text-slate-400 gap-1">
-                  <span className="shrink-0 text-slate-400">Bonus Carte (+{cardBreakdown.cardBonusPercentage}%)</span>
-                  <span className="font-bold text-amber-300 text-right">+{cardBreakdown.cardBonusScore} pts</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between font-black border-t border-slate-800/80 pt-1 mt-1 gap-1">
-                <span className="shrink-0 text-slate-300">Total Projeté</span>
-                <span className="text-emerald-400 text-xs font-black text-right">
-                  {Math.round((cardBreakdown.baseProjectedScore + totalBonusScore) * 10) / 10} pts
-                </span>
-              </div>
-            </div>
-
-            {/* Tactical Club Synergy or Opponent Conflict Badge */}
-            {stackedTeammates.length > 0 && (
-              <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300">
-                <span className="flex items-center gap-1">
-                  <Users className="h-2.5 w-2.5" />
-                  <span>Stack Club ({stackedTeammates.length + 1}x)</span>
-                </span>
-                <span className="text-[8px] text-emerald-400">Synergie</span>
-              </div>
-            )}
-
-            {opposingTeammate && (
-              <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-950/80 border border-rose-500/40 text-rose-300">
-                <span className="flex items-center gap-1">
-                  <Swords className="h-2.5 w-2.5 text-rose-400" />
-                  <span>Duel direct</span>
-                </span>
-                <span className="text-[8px] text-rose-400 truncate max-w-[65px]">vs {opposingTeammate.displayName.split(' ').pop()}</span>
-              </div>
-            )}
-
-            {/* Last Match Status Badge */}
-            <div className="mt-1 flex items-center justify-between text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-800">
-              <span className="text-slate-400">
-                {recentStats.isLive ? '🔴 M1 (En direct):' : 'M1 (Dernier):'}
-              </span>
-              {recentStats.playedLastMatch || recentStats.lastMatchScore > 0 ? (
-                <span className={`font-extrabold ${recentStats.isLive ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`}>
-                  {recentStats.isLive ? '🔴 ' : '✓ '}{recentStats.lastMatchScore} pts
-                </span>
-              ) : (
-                <span className="text-rose-400 font-extrabold">⚠️ Non joué</span>
-              )}
-            </div>
-
-            {/* Next Fixture Snippet with Win Prob & Date */}
-            {card.upcomingFixture && (
-              <div className="mt-1 border-t border-slate-800/60 pt-1 text-[10px] space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400 truncate max-w-[85px] font-medium">
-                    {card.upcomingFixture.isHome ? 'vs' : '@'} {card.upcomingFixture.opponent}
-                  </span>
-                  <span className="font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded">
-                    {winProb}% Vic.
-                  </span>
-                </div>
-
-                {/* Bookmaker Proposition Indicator */}
-                {(() => {
-                  const bm = card.upcomingFixture.bookmaker;
-                  const isDefensive = card.positionCode === 'GK' || card.positionCode === 'DEF';
-                  if (isDefensive) {
-                    const cs = bm?.cleanSheetProb || (card.upcomingFixture.isHome ? 38 : 26);
-                    return (
-                      <div className="flex items-center justify-between text-[9px] bg-slate-900/90 border border-slate-800/80 px-1.5 py-0.5 rounded">
-                        <span className="text-slate-400 flex items-center gap-0.5">
-                          <Shield className="h-2.5 w-2.5 text-blue-400" /> CS Attendu:
-                        </span>
-                        <strong className="text-blue-300 font-mono">{cs}%</strong>
-                      </div>
-                    );
-                  } else {
-                    const scorerOdd = bm?.anytimeScorerOdds;
-                    const xg = bm?.goalExpectancy || (card.upcomingFixture.isHome ? 1.8 : 1.2);
-                    return (
-                      <div className="flex items-center justify-between text-[9px] bg-slate-900/90 border border-slate-800/80 px-1.5 py-0.5 rounded">
-                        <span className="text-slate-400 flex items-center gap-0.5">
-                          <Target className="h-2.5 w-2.5 text-rose-400" /> {scorerOdd ? 'Cote but:' : 'xG Équipe:'}
-                        </span>
-                        <strong className="text-rose-300 font-mono">
-                          {scorerOdd ? `@${scorerOdd.toFixed(2)}` : `${xg}`}
-                        </strong>
-                      </div>
-                    );
-                  }
-                })()}
-
-                <div className="flex items-center justify-between text-[9px] text-slate-400 pt-0.5">
-                  <span className="truncate">📅 {formatKickoffDate(card.upcomingFixture.kickoffDate || card.upcomingFixture.matchDate)}</span>
-                  <span className="text-[8px] font-bold text-emerald-400 bg-emerald-950/70 border border-emerald-500/30 px-1 rounded shrink-0 ml-1">
-                    Bookmakers
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* Official Starting Lineup Badge (1h before kickoff) */}
-            {(() => {
-              const pKey = getPlayerUniqueKey(card).toLowerCase();
-              const sInfo = playerStatusMap ? Object.values(playerStatusMap).find(
-                i => i.playerSlug.toLowerCase() === pKey || (i.displayName && card.displayName && i.displayName.toLowerCase() === card.displayName.toLowerCase())
-              ) : null;
-
-              if (!sInfo) return null;
-
-              if (sInfo.lineupStatus === 'CONFIRMED_BENCH') {
-                return (
-                  <div className="mt-1 flex items-center justify-between text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300 animate-pulse">
-                    <span className="flex items-center gap-1">
-                      <AlertTriangle className="h-2.5 w-2.5 text-rose-400" />
-                      <span>REMPLAÇANT</span>
-                    </span>
-                    <span className="text-[8px] text-rose-300 uppercase">Compo off.</span>
-                  </div>
-                );
-              }
-              if (sInfo.lineupStatus === 'CONFIRMED_OUT') {
-                return (
-                  <div className="mt-1 flex items-center justify-between text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300">
-                    <span className="flex items-center gap-1">
-                      <AlertCircle className="h-2.5 w-2.5 text-rose-400" />
-                      <span>HORS GROUPE</span>
-                    </span>
-                    <span className="text-[8px] text-rose-300 uppercase">Compo off.</span>
-                  </div>
-                );
-              }
-              if (sInfo.lineupStatus === 'CONFIRMED_STARTER') {
-                return (
-                  <div className="mt-1 flex items-center justify-between text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-500/60 text-emerald-300">
-                    <span className="flex items-center gap-1">
-                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400" />
-                      <span>TITULAIRE</span>
-                    </span>
-                    <span className="text-[8px] text-emerald-400 uppercase">Compo off. 1h</span>
-                  </div>
-                );
-              }
-              if (sInfo.minutesUntilKickoff !== null && sInfo.minutesUntilKickoff > 0) {
-                const minToOfficial = Math.max(0, sInfo.minutesUntilKickoff - 60);
-                return (
-                  <div className="mt-1 flex items-center justify-between text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400">
-                    <span>Compo officielle :</span>
-                    <span className="font-bold text-slate-300">
-                      {minToOfficial === 0 ? 'Imminente' : `dans ${minToOfficial} min`}
-                    </span>
-                  </div>
-                );
-              }
-              return null;
-            })()}
-          </div>
-
-          {/* Swap Player Action */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelectSlotToSwap(slotKey);
-            }}
-            className="mt-1.5 w-full flex items-center justify-center gap-1 rounded-lg border border-slate-800 bg-slate-950/60 py-1 text-[10px] font-bold text-slate-300 hover:bg-slate-800 hover:text-emerald-400 transition"
-          >
-            <ArrowRightLeft className="h-3 w-3" />
-            <span>Remplacer</span>
-          </button>
-        </div>
-      </div>
+      <RealisticPitchCard
+        card={card}
+        slotKey={slotKey}
+        slotLabel={slotLabel}
+        expectedPosition={expectedPosition}
+        targetLineup={targetLineup}
+        allCards={cards}
+        isCaptain={isCaptain}
+        onSetCaptain={(slot) => handleCaptainChangeForLineup(targetLineup, slot)}
+        onOpenScout={onOpenScout}
+        onQuickSwap={(slot) => {
+          onSelectComposition(compoIndex);
+          setQuickSwapSlot({ slot, compoIndex });
+        }}
+        playerStatusMap={playerStatusMap}
+      />
     );
   };
+
+  const oldUnusedPitchCode = () => null;
 
   // Helper to render the full football pitch for a given lineup
   const renderPitchContainer = (targetLineup: Lineup, compoIndex: number) => {
@@ -576,6 +299,17 @@ export const PitchView: React.FC<PitchViewProps> = ({
               className="md:hidden flex items-center gap-1.5 rounded-xl bg-slate-800/90 border border-slate-700 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:text-white transition"
             >
               <span>{mobileCompactView ? '⚽ Formation' : '📋 Vue Compacte'}</span>
+            </button>
+
+            {/* Benchmark Scenario Mode Button */}
+            <button
+              type="button"
+              onClick={() => setIsBenchmarkModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-200 transition"
+              title="Comparer et Benchmarker les compositions"
+            >
+              <Scale className="h-3.5 w-3.5 text-cyan-400" />
+              <span className="hidden sm:inline">Benchmark</span>
             </button>
 
             <div className="flex items-center gap-1.5 bg-slate-950/80 px-3 py-1.5 rounded-xl border border-emerald-500/30">
@@ -685,31 +419,31 @@ export const PitchView: React.FC<PitchViewProps> = ({
                 {/* Attack: FWD & EXTRA side by side */}
                 <div className="flex justify-center items-center gap-2 sm:gap-4 w-full px-1">
                   <div className="w-[48%] max-w-[155px] flex justify-center scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                    {renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}
+                    {renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD', compoIndex)}
                   </div>
                   <div className="w-[48%] max-w-[155px] flex justify-center scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                    {renderPitchCard(targetLineup, 'extra', 'Extra', 'EXTRA')}
+                    {renderPitchCard(targetLineup, 'extra', 'Extra', 'EXTRA', compoIndex)}
                   </div>
                 </div>
                 
                 {/* Midfield: MID */}
                 <div className="flex justify-center w-full">
                   <div className="scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                    {renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}
+                    {renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID', compoIndex)}
                   </div>
                 </div>
                 
                 {/* Defense: DEF */}
                 <div className="flex justify-center w-full">
                   <div className="scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                    {renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}
+                    {renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF', compoIndex)}
                   </div>
                 </div>
                 
                 {/* Goalkeeper: GK */}
                 <div className="flex justify-center w-full">
                   <div className="scale-[0.88] xs:scale-95 sm:scale-100 origin-center transition-all duration-300">
-                    {renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}
+                    {renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK', compoIndex)}
                   </div>
                 </div>
               </>
@@ -718,12 +452,17 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
           {/* PC / Wide Screen Horizontal Row */}
           <div className="hidden md:grid md:grid-cols-5 gap-3 lg:gap-4 w-full items-stretch max-w-6xl mx-auto">
-            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK')}</div>
-            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF')}</div>
-            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID')}</div>
-            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD')}</div>
-            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'extra', 'Extra (Joker)', 'EXTRA')}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'gk', 'Gardien', 'GK', compoIndex)}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'def', 'Défenseur', 'DEF', compoIndex)}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'mid', 'Milieu', 'MID', compoIndex)}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'fwd', 'Attaquant', 'FWD', compoIndex)}</div>
+            <div className="h-full flex flex-col">{renderPitchCard(targetLineup, 'extra', 'Extra (Joker)', 'EXTRA', compoIndex)}</div>
           </div>
+        </div>
+
+        {/* Pitch Tournament Eligibility & Strategy Rules Diagnostics */}
+        <div className="relative z-10 my-2">
+          <PitchTournamentRules lineup={targetLineup} allCards={cards} />
         </div>
 
         {/* Tactical & Bookmakers Intelligence Matrix Bar */}
@@ -1220,6 +959,12 @@ export const PitchView: React.FC<PitchViewProps> = ({
 
 
       <div className="space-y-4">
+        {/* Unicity Rule Active Badge */}
+        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-xs font-semibold w-fit shadow-sm">
+          <Lock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+          <span>Règle d'Unicité Active : Une même carte ne peut pas être alignée dans 2 compositions différentes.</span>
+        </div>
+
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
             <span>Les 4 Compositions Optimisées</span>
@@ -1420,6 +1165,29 @@ export const PitchView: React.FC<PitchViewProps> = ({
           galleryPlayers={selectedMatchForModal.players}
           onClose={() => setSelectedMatchForModal(null)}
           onOpenScout={onOpenScout}
+        />
+      )}
+
+      {/* Pitch Quick Swap Drawer */}
+      {quickSwapSlot && (
+        <PitchQuickSwapDrawer
+          slot={quickSwapSlot.slot}
+          lineup={compositions[quickSwapSlot.compoIndex] || lineup}
+          cards={cards}
+          compositions={compositions}
+          selectedCompoIndex={quickSwapSlot.compoIndex}
+          onSelectPlayer={(selectedCard) => {
+            if (onReplacePlayerInCompo) {
+              onReplacePlayerInCompo(quickSwapSlot.compoIndex, quickSwapSlot.slot, selectedCard);
+            }
+            setQuickSwapSlot(null);
+          }}
+          onClose={() => setQuickSwapSlot(null)}
+          onOpenFullModal={() => {
+            const slot = quickSwapSlot.slot;
+            setQuickSwapSlot(null);
+            onSelectSlotToSwap(slot);
+          }}
         />
       )}
 

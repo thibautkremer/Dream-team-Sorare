@@ -178,6 +178,7 @@ export class StorageService {
         power: c.power,
         powerBreakdown: c.powerBreakdown,
         bonusPercentage: c.bonusPercentage,
+        customBonusPercentage: c.customBonusPercentage,
         grade: c.grade,
         xp: c.xp,
         specialEdition: c.specialEdition,

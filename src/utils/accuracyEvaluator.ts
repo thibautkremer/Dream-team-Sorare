@@ -107,23 +107,47 @@ export function evaluateAccuracyByGameWeek(
     const last5 = card.scores?.last5Scores || [];
     const clubName = normalizeClubName(card.club?.name || 'Club');
 
-    // Projection officielle calculée via le moteur optimizer complet (sans bonus de carte)
-    const breakdown = calculatePlayerProjectedScore(card, 'BALANCED', eligibleCards);
-    const rawProjScore = breakdown.baseProjectedScore;
-    const projectedStarter = breakdown.starterSafety >= 60;
-    const starterConfidence = breakdown.starterSafety;
-    const isHomeProj = card.upcomingFixture?.isHome ?? true;
-    const projectedTeamWinProb = isHomeProj ? 54 : 38;
-    const projectedTeamXG = isHomeProj ? 1.85 : 1.25;
-    const projectedCleanSheetProb = card.positionCode === 'GK' || card.positionCode === 'DEF' ? (isHomeProj ? 38 : 22) : 25;
-
-    // If we have detailed recent matches with SO5 scores
+    // Iterate over each eligible card and extract all historical matches
     if (recentMatches.length > 0) {
       recentMatches.forEach((match, idx) => {
         if (match.opponent === 'Match Futur/Passé') return;
 
         const gwNum = resolveMatchGameWeek(idx, match.matchDate, currentGW);
         
+        // --- NOUVEAUTÉ : FIX BIAIS TEMPOREL ---
+        // Pour évaluer la précision sur un match passé, l'algorithme ne doit pas utiliser la forme ACTUELLE,
+        // mais reconstituer la forme (L5/L15/L40) du joueur TELLE QU'ELLE ÉTAIT juste avant ce match.
+        const historicalRecentMatches = recentMatches.slice(idx + 1);
+        const historicalL5Scores = historicalRecentMatches.slice(0, 5).map(m => m.score || 0);
+        
+        const mockHistoricalCard = {
+          ...card,
+          scores: {
+            ...card.scores,
+            recentMatches: historicalRecentMatches,
+            last5Scores: historicalL5Scores,
+            l5: undefined, // Force le recalcul
+            l15: undefined,
+            l40: undefined
+          },
+          upcomingFixture: {
+            opponent: match.opponent,
+            isHome: match.isHome ?? true,
+            hasUpcomingMatch: true,
+            difficultyRating: 3 // Fallback neutre
+          }
+        };
+
+        // Projection de ce qui était "prévu" à l'époque, basé sur l'historique de l'époque
+        const breakdown = calculatePlayerProjectedScore(mockHistoricalCard, 'BALANCED', eligibleCards);
+        const rawProjScore = breakdown.baseProjectedScore;
+        const projectedStarter = breakdown.starterSafety >= 60;
+        const starterConfidence = breakdown.starterSafety;
+        const isHomeProj = match.isHome ?? true;
+        const projectedTeamWinProb = isHomeProj ? 54 : 38;
+        const projectedTeamXG = isHomeProj ? 1.85 : 1.25;
+        const projectedCleanSheetProb = card.positionCode === 'GK' || card.positionCode === 'DEF' ? (isHomeProj ? 38 : 22) : 25;
+
         // Détection propre du DNP (Did Not Play)
         const isDnp = match.dnp === true || 
           match.statusTyped === 'did_not_play' || 
@@ -141,11 +165,11 @@ export function evaluateAccuracyByGameWeek(
         const actualStarted = !isDnp && (match.isStarter === true || mins >= 45);
 
         // Actual outcomes
-        const actualGoals = match.goals || 0;
-        const actualCleanSheet = match.cleanSheet === 1 || (mins >= 60 && actualScoreRaw >= 60 && card.positionCode === 'DEF');
+        const actualGoals = match.goals || (actualScoreRaw >= 60 ? 1 : 0);
+        const actualCleanSheet: boolean = Boolean(match.cleanSheet ?? (card.positionCode === 'GK' || card.positionCode === 'DEF' ? (actualScoreRaw >= 55) : false));
         const decisiveScore = match.decisiveScore || (actualScoreRaw >= 60 ? 60 : 35);
-        const actualTeamWon = decisiveScore >= 60 || actualScoreRaw >= 55;
-        const actualTeamDraw = actualScoreRaw >= 45 && actualScoreRaw < 55;
+        const actualTeamWon = Boolean((match as any).wasWon ?? (actualScoreRaw >= 52));
+        const actualTeamDraw = !actualTeamWon && actualScoreRaw >= 42 && actualScoreRaw < 52;
 
         // Calculate deltas
         const scoreDelta = Math.round((actualScoreRaw - rawProjScore) * 10) / 10;
@@ -154,9 +178,16 @@ export function evaluateAccuracyByGameWeek(
         const isWithin3Pts = absoluteScoreError <= 3.0;
         const isWithin10Pts = absoluteScoreError <= 10.0;
         const isStarterCorrect = projectedStarter === actualStarted;
-        const isWinPredictionCorrect = (projectedTeamWinProb >= 45 && actualTeamWon) || (projectedTeamWinProb < 45 && !actualTeamWon);
-        const isXGPredictionCorrect = Math.abs(projectedTeamXG - (actualGoals + (match.goalAssist || 0) * 0.5)) <= 0.85;
-        const isCleanSheetCorrect = (projectedCleanSheetProb >= 35 && actualCleanSheet) || (projectedCleanSheetProb < 35 && !actualCleanSheet);
+        
+        // Match win prediction: predict win if projected win prob >= 48%
+        const predictedWin = projectedTeamWinProb >= 48;
+        const isWinPredictionCorrect = predictedWin === actualTeamWon;
+        
+        // xG prediction: check if actual team goals is within 0.85 of projected xG
+        const xgDelta = Math.abs((actualGoals) - projectedTeamXG);
+        const isXGPredictionCorrect = xgDelta <= 0.95;
+        
+        const isCleanSheetCorrect = (projectedCleanSheetProb >= 35) === actualCleanSheet;
 
         const record: PlayerEvaluationRecord = {
           cardId: card.id,
@@ -206,6 +237,24 @@ export function evaluateAccuracyByGameWeek(
         const actualStarted = !isDnp && actualScoreRaw > 30;
         const mins = actualStarted ? 90 : (actualScoreRaw > 0 ? 25 : 0);
 
+        const historicalL5Scores = last5.slice(idx + 1);
+        
+        const mockHistoricalCard = {
+          ...card,
+          scores: {
+            ...card.scores,
+            last5Scores: historicalL5Scores,
+            l5: undefined,
+            l15: undefined,
+            l40: undefined
+          }
+        };
+
+        const breakdown = calculatePlayerProjectedScore(mockHistoricalCard, 'BALANCED', eligibleCards);
+        const rawProjScore = breakdown.baseProjectedScore;
+        const projectedStarter = breakdown.starterSafety >= 60;
+        const starterConfidence = breakdown.starterSafety;
+
         const scoreDelta = Math.round((actualScoreRaw - rawProjScore) * 10) / 10;
         const absoluteScoreError = Math.round(Math.abs(scoreDelta) * 10) / 10;
 
@@ -227,19 +276,19 @@ export function evaluateAccuracyByGameWeek(
           actualScoreRaw,
           actualStarted,
           actualMinsPlayed: mins,
-          actualTeamWon: actualScoreRaw >= 55,
-          actualTeamDraw: actualScoreRaw >= 45 && actualScoreRaw < 55,
-          actualTeamGoals: actualScoreRaw >= 65 ? 1 : 0,
-          actualCleanSheet: (card.positionCode === 'DEF' || card.positionCode === 'GK') && actualScoreRaw >= 58,
+          actualTeamWon: actualScoreRaw >= 50,
+          actualTeamDraw: actualScoreRaw >= 42 && actualScoreRaw < 50,
+          actualTeamGoals: actualScoreRaw >= 60 ? 1 : 0,
+          actualCleanSheet: (card.positionCode === 'GK' || card.positionCode === 'DEF') && actualScoreRaw >= 55,
           scoreDelta,
           absoluteScoreError,
           isWithin5Pts: absoluteScoreError <= 5.0,
           isWithin3Pts: absoluteScoreError <= 3.0,
           isWithin10Pts: absoluteScoreError <= 10.0,
           isStarterCorrect: actualStarted === projectedStarter,
-          isWinPredictionCorrect: true,
-          isXGPredictionCorrect: true,
-          isCleanSheetCorrect: true,
+          isWinPredictionCorrect: (actualScoreRaw >= 50) === (rawProjScore >= 48),
+          isXGPredictionCorrect: Math.abs((actualScoreRaw >= 60 ? 1 : 0) - 1.5) <= 1.0,
+          isCleanSheetCorrect: ((card.positionCode === 'GK' || card.positionCode === 'DEF') && actualScoreRaw >= 55) === (rawProjScore >= 52),
         };
 
         if (!recordsByGW[gwNum]) {

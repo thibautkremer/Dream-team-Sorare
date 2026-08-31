@@ -8,6 +8,8 @@ import { GalleryCompareModal } from './gallery/GalleryCompareModal';
 import { CardTagModal } from './gallery/CardTagModal';
 import { GalleryTableView } from './gallery/GalleryTableView';
 import { GalleryStacksView } from './gallery/GalleryStacksView';
+import { VisualSorareCard } from './gallery/VisualSorareCard';
+import { GalleryPortfolioSummary } from './gallery/GalleryPortfolioSummary';
 
 interface GalleryViewProps {
   cards: SorareCard[];
@@ -32,8 +34,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   compositions = [],
   onReplacePlayerInCompo,
 }) => {
-  // Display Mode (Point 5: Detailed, Compact, Table, Stacks)
-  const [displayMode, setDisplayMode] = useState<'grid_detailed' | 'grid_compact' | 'table' | 'stacks'>('grid_detailed');
+  // Display Mode (Detailed 3D cards, Standard, Compact, Table, Stacks)
+  const [displayMode, setDisplayMode] = useState<'grid_visual' | 'grid_detailed' | 'grid_compact' | 'table' | 'stacks'>('grid_detailed');
 
   const [searchTerm, setSearchTerm] = useState('');
   const [localSearch, setLocalSearch] = useState('');
@@ -498,6 +500,29 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   return (
     <div className="space-y-6">
       
+      {/* Portfolio Financial Valuation & Quick Metric Summary */}
+      <GalleryPortfolioSummary
+        cards={cards}
+        favoritesCount={favorites.length}
+        tagsCount={Object.keys(cardTags).length}
+        onFilterRarity={(r) => {
+          setSelectedRarity(r);
+          setCurrentPage(1);
+        }}
+        onFilterQuick={(filterType) => {
+          if (filterType === 'READY_GW') {
+            setAlignmentFilter('UNALIGNED_READY');
+          } else if (filterType === 'U23') {
+            setSearchTerm('U23');
+          } else if (filterType === 'IN_SEASON') {
+            setSelectedBonusTier('5-9');
+          } else if (filterType === 'INJURED_DNP') {
+            setSelectedStatus('NOT_PLAYING');
+          }
+          setCurrentPage(1);
+        }}
+      />
+
       {/* Top Header & Search Bar */}
       <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-6 shadow-xl backdrop-blur-md">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -516,8 +541,22 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Display Mode Switcher (Point 5) */}
+            {/* Display Mode Switcher (Visual 3D, Detailed, Compact, Table, Stacks) */}
             <div className="flex items-center bg-slate-950/80 border border-slate-800 rounded-xl p-1 shadow-inner">
+              <button
+                type="button"
+                onClick={() => setDisplayMode('grid_visual')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                  displayMode === 'grid_visual'
+                    ? 'bg-amber-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Vue Cartes 3D Sorare Visuelles"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">3D Sorare</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setDisplayMode('grid_detailed')}
@@ -1261,6 +1300,37 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             <RefreshCw className="h-3.5 w-3.5" />
             <span>Réinitialiser tous les filtres</span>
           </button>
+        </div>
+      ) : displayMode === 'grid_visual' ? (
+        /* Display Mode 1: 3D Visual Sorare Cards */
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+          {paginatedCards.map((card) => {
+            const bonusPct = getCardTotalBonus(card);
+            const isFav = favorites.includes(card.id);
+            const isCompared = selectedForCompare.includes(card.id);
+            const tags = cardTags[card.id] || [];
+            const lineups = playerLineupMap.get(card.id) || [];
+            const cachedBreakdown = projectionsMap.get(card.id);
+            const breakdown = cachedBreakdown || calculatePlayerProjectedScore(card, strategy, cards);
+
+            return (
+              <VisualSorareCard
+                key={card.id}
+                card={card}
+                projectedScore={breakdown.projectedScore}
+                baseProjectedScore={breakdown.baseProjectedScore}
+                bonusPct={bonusPct}
+                isFavorite={isFav}
+                isSelectedForCompare={isCompared}
+                onToggleFavorite={handleToggleFavorite}
+                onToggleCompare={handleToggleCompare}
+                onOpenScout={onOpenScout}
+                onOpenTags={(c) => setSelectedCardForTags(c)}
+                tags={tags}
+                lineups={lineups}
+              />
+            );
+          })}
         </div>
       ) : displayMode === 'grid_compact' ? (
         /* Display Mode 3: Grid Compact */

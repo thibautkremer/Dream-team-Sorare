@@ -1004,7 +1004,7 @@ app.get('/api/sorare/player-live-detail', async (req, res) => {
           else if (r === 'SUPER_RARE') rBonus = 20;
           else if (r === 'UNIQUE') rBonus = 40;
 
-          const isCurrentSeason = typeof foundCard.seasonYear === 'number' && foundCard.seasonYear >= 2026;
+          const isCurrentSeason = typeof foundCard.seasonYear === 'number' && foundCard.seasonYear >= 2024;
           const manualInSeasonBonus = isCurrentSeason ? 5 : 0;
 
           let b1 = -1, b2 = -1, b3 = manualInSeasonBonus;
@@ -2320,9 +2320,9 @@ app.get('/api/football/team', async (req, res) => {
   try {
     const { searchTeam } = require('./src/services/apiFootball');
     const team = await searchTeam(name.toString());
-    return res.json({ success: true, team: team || { id: 50, name: name.toString() } });
+    return res.json({ success: true, team: team });
   } catch (err: any) {
-    return res.json({ success: true, isSimulated: true, team: { id: 50, name: name.toString() } });
+    return res.json({ success: true, isSimulated: true, team: null });
   }
 });
 
@@ -4536,7 +4536,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
   try {
     const hasApiKey = Boolean(customApiKey);
     const pageSize = hasApiKey ? 50 : 8;
-    const scoresCount = 60;
+    const scoresCount = 15;
 
     syncProgressMap.set(slug, {
       fetchedPages: 0,
@@ -5235,7 +5235,7 @@ app.get('/api/sorare/user-cards', async (req, res) => {
             else if (rarity === 'SUPER_RARE') rarityBonus = 20;
             else if (rarity === 'UNIQUE') rarityBonus = 40;
 
-            const isCurrentSeason = typeof c.seasonYear === 'number' && c.seasonYear >= 2026;
+            const isCurrentSeason = typeof c.seasonYear === 'number' && c.seasonYear >= 2024;
             const manualInSeasonBonus = isCurrentSeason ? 5 : 0;
 
             let b1 = -1, b2 = -1, b3 = manualInSeasonBonus;
@@ -6422,14 +6422,16 @@ app.get('/api/sorare/gameweek', async (req, res) => {
   // never silently freezes on a stale literal again.
   const customApiKey = (req.headers['x-sorare-api-key'] as string) || (req.body?.apiKey as string) || process.env.SORARE_API_KEY || '';
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (customApiKey) {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json', APIKEY: customApiKey };
-      const query = `query { so5 { currentSo5OneWeekGameWeek { number } } }`;
-      const result = await fetchGraphQLWithRetry('https://api.sorare.com/graphql', { query }, headers, 1);
-      const liveNumber = result?.data?.data?.so5?.currentSo5OneWeekGameWeek?.number;
-      if (typeof liveNumber === 'number' && liveNumber > 0) {
-        return res.json({ success: true, gameWeek: liveNumber, source: 'sorare_live' });
-      }
+      headers['APIKEY'] = customApiKey;
+      headers['Authorization'] = `Bearer ${customApiKey}`;
+    }
+    const query = `query { so5 { currentSo5OneWeekGameWeek { number } } }`;
+    const result = await fetchGraphQLWithRetry('https://api.sorare.com/graphql', { query }, headers, 1);
+    const liveNumber = result?.data?.data?.so5?.currentSo5OneWeekGameWeek?.number;
+    if (typeof liveNumber === 'number' && liveNumber > 0) {
+      return res.json({ success: true, gameWeek: liveNumber, source: 'sorare_live' });
     }
   } catch (err) {
     console.warn('[GameWeek] Live Sorare query failed, using computed fallback:', (err as any)?.message || err);

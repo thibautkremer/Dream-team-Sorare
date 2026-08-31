@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Send, Bot, User, CornerDownLeft, RefreshCw, Lightbulb, Zap, ShieldAlert, Cpu } from 'lucide-react';
 import { SorareCard, ChatMessage } from '../types';
 import { StorageService } from '../utils/storage';
+import { calculatePlayerProjectedScore } from '../utils/optimizer';
 
 interface AICoachChatProps {
   cards: SorareCard[];
@@ -14,6 +15,8 @@ export const AICoachChat: React.FC<AICoachChatProps> = ({ cards, gameWeekNumber 
     const fwd = cards.filter(c => c.positionCode === 'FWD').sort((a,b) => b.scores.l5 - a.scores.l5).slice(0, 3).map(c => c.displayName);
     const mid = cards.filter(c => c.positionCode === 'MID').sort((a,b) => b.scores.l5 - a.scores.l5).slice(0, 3).map(c => c.displayName);
     const gk = cards.filter(c => c.positionCode === 'GK').sort((a,b) => b.scores.l5 - a.scores.l5).slice(0, 2).map(c => c.displayName);
+    const userMeta = StorageService.getUserMeta();
+    const managerName = userMeta?.nickname || StorageService.getUsername() || 'Manager';
     
     const suggestedActions = [
       fwd.length >= 2 ? `Qui nommer Capitaine (+20%) parmi ${fwd.join(' et ')} ?` : 'Qui nommer Capitaine cette semaine ?',
@@ -25,7 +28,7 @@ export const AICoachChat: React.FC<AICoachChatProps> = ({ cards, gameWeekNumber 
     return [{
       id: 'welcome-msg',
       role: 'assistant',
-      content: `Salut Thibaut (Thib 8) ! Je suis ton **Coach Tactique IA Sorare**, connecté en direct à ta galerie officielle de cartes (${cards.length} cartes synchronisées). 
+      content: `Salut ${managerName} ! Je suis ton **Coach Tactique IA Sorare**, connecté en direct à ta galerie officielle de cartes (${cards.length} cartes synchronisées). 
 
 J'ai analysé tes joueurs clés (L5, L15, L40), les statuts de titulaires vérifiés, l'état de santé et les cotes des bookmakers pour la **Game Week ${gameWeekNumber}**.
 
@@ -111,28 +114,91 @@ Comment puis-je t'aider à optimiser ta composition gratuite SO5 ?`,
 
   function generateFallbackChatReply(query: string, galleryCards: SorareCard[]): string {
     const q = query.toLowerCase();
-    if (q.includes('capitaine') || q.includes('bonus')) {
-      return `Pour le brassard de Capitaine (+20% de bonus SO5) en GW${gameWeekNumber}, je te recommande vivement **Ousmane Dembélé** ou **Bukayo Saka**.
+    
+    // 1. Captain recommendation based on real highest projected scores
+    if (q.includes('capitaine') || q.includes('captain') || q.includes('bonus')) {
+      const eligible = galleryCards.filter(c => c.status !== 'NOT_PLAYING' && c.injuryStatus !== 'INJURED');
+      const ranked = eligible.map(c => ({
+        card: c,
+        breakdown: calculatePlayerProjectedScore(c, 'BALANCED', galleryCards)
+      })).sort((a, b) => b.breakdown.projectedScore - a.breakdown.projectedScore);
 
-- **Ousmane Dembélé (PSG vs Montpellier)** : Forme récente étincelante (L5: 72.8), cote buteur de 1.95 (51% de probabilité de marquer ou d'offrir une passe décisive) face à une défense très poreuse.
-- **Bukayo Saka (Arsenal vs Southampton)** : Tireur de pénaltys, match ultra favorable à l'Emirates Stadium (xG d'Arsenal de 2.6).`;
-    }
-    if (q.includes('donnarumma') || q.includes('chevalier') || q.includes('gardien') || q.includes('cage')) {
-      return `Entre Donnarumma et Chevalier pour la GW${gameWeekNumber} :
-- **Donnarumma (PSG vs Montpellier à domicile)** est le choix n°1 : Le PSG a 62% de probabilité de Clean Sheet selon les bookmakers. C'est le plus gros gage de sécurité pour sécuriser les 60+ points SO5.
-- Chevalier affronte Monaco à l'extérieur (seulement 24% de clean sheet prob), avec un risque élevé d'encaisser des buts.`;
-    }
-    if (q.includes('dnp') || q.includes('blessure') || q.includes('risque')) {
-      return `Attention aux statuts suivants dans ton effectif :
-- **Presnel Kimpembe** : Statut NOT_PLAYING (Blessé) - 0 point SO5 garanti si aligné.
-- **Arnau Tenas** : Remplaçant de Donnarumma (SUBSTITUTE) - ne pas aligner.
-- **Gonçalo Ramos** : Incertain / Gêne cheville - risque de commencer sur le banc.
-- **Senny Mayulu** : Super Sub entrant pour 20 minutes seulement.`;
-    }
-    return `Analyse tactique pour ta galerie :
-Ton effectif dispose de bases très solides avec le bloc PSG (Donnarumma, Hakimi, Vitinha, Dembélé) et les stars d'Arsenal (Gabriel, Saka, Ødegaard).
+      if (ranked.length >= 2) {
+        const top1 = ranked[0];
+        const top2 = ranked[1];
+        const opp1 = top1.card.upcomingFixture?.opponent || 'Adversaire';
+        const opp2 = top2.card.upcomingFixture?.opponent || 'Adversaire';
+        return `Pour le brassard de **Capitaine (+20% de bonus SO5)** en GW${gameWeekNumber}, voici mes meilleures recommandations issues de ta galerie :
 
-Aligner 1 GK (Donnarumma), 1 DEF (Hakimi), 1 MID (Vitinha), 1 FWD (Dembélé Capitaine) et 1 EXTRA (Saka) te procure un score projeté supérieur à **370 points** avec 0 risque de DNP.`;
+- **${top1.card.displayName} (${top1.card.club?.name || 'Club'} vs ${opp1})** : Score projeté de **${top1.breakdown.projectedScore} pts** (L5: ${top1.card.scores?.l5 || 50}). Avec le bonus de +20%, sa projection totale atteint **${Math.round((top1.breakdown.projectedScore + top1.breakdown.baseProjectedScore * 0.20) * 10) / 10} pts**.
+- **${top2.card.displayName} (${top2.card.club?.name || 'Club'} vs ${opp2})** : Score projeté de **${top2.breakdown.projectedScore} pts** (L5: ${top2.card.scores?.l5 || 50}), excellente alternative avec projection cap à **${Math.round((top2.breakdown.projectedScore + top2.breakdown.baseProjectedScore * 0.20) * 10) / 10} pts**.`;
+      }
+    }
+
+    // 2. Goalkeeper analysis
+    if (q.includes('gardien') || q.includes('gk') || q.includes('cage') || q.includes('cleansheet') || q.includes('clean sheet')) {
+      const gks = galleryCards.filter(c => c.positionCode === 'GK');
+      if (gks.length > 0) {
+        const rankedGK = gks.map(c => ({
+          card: c,
+          breakdown: calculatePlayerProjectedScore(c, 'BALANCED', galleryCards)
+        })).sort((a, b) => b.breakdown.projectedScore - a.breakdown.projectedScore);
+
+        const bestGK = rankedGK[0];
+        const opp = bestGK.card.upcomingFixture?.opponent || 'Adversaire';
+        const details = rankedGK.slice(0, 3).map(g => 
+          `- **${g.card.displayName} (${g.card.club?.name || 'Club'} vs ${g.card.upcomingFixture?.opponent || 'Adversaire'})** : Score projeté ${g.breakdown.projectedScore} pts (L5: ${g.card.scores?.l5 || 50}, Difficulté ${g.card.upcomingFixture?.difficultyRating || 3}/5)`
+        ).join('\n');
+
+        return `Analyse comparative de tes gardiens pour la GW${gameWeekNumber} :
+${details}
+
+👉 **Recommandation n°1** : Titulariser **${bestGK.card.displayName}**, qui présente le meilleur ratio sécurité clean sheet et forme récente.`;
+      }
+    }
+
+    // 3. DNP / Injuries detection
+    if (q.includes('dnp') || q.includes('blessure') || q.includes('risque') || q.includes('suspendu') || q.includes('incertain')) {
+      const atRisk = galleryCards.filter(c => 
+        c.injuryStatus === 'INJURED' || 
+        c.injuryStatus === 'SUSPENDED' || 
+        c.injuryStatus === 'DOUBTFUL' || 
+        c.status === 'NOT_PLAYING' || 
+        c.status === 'SUBSTITUTE'
+      );
+
+      if (atRisk.length > 0) {
+        const items = atRisk.slice(0, 6).map(c => {
+          const reason = c.injuryStatus === 'INJURED' ? 'Blessé (0 pt garanti)'
+            : c.injuryStatus === 'SUSPENDED' ? 'Suspendu'
+            : c.injuryStatus === 'DOUBTFUL' ? 'Incertain / Gêne physique'
+            : c.status === 'SUBSTITUTE' ? 'Remplaçant / Super Sub'
+            : 'Statut hors-groupe';
+          return `- **${c.displayName} (${c.club?.name || 'Club'})** : ${reason}`;
+        }).join('\n');
+
+        return `⚠️ **Attention aux risques de DNP identifiés dans ta galerie (${atRisk.length} joueur(s)) :**\n${items}\n\nÉvite absolument d'aligner ces joueurs dans ton SO5 titulaire.`;
+      } else {
+        return `✅ **Aucun joueur blessé ou suspendu majeur** détecté parmi tes cartes actives ! Ton effectif est à 100% opérationnel pour la GW${gameWeekNumber}.`;
+      }
+    }
+
+    // 4. Default tactical overview
+    const top5 = [...galleryCards]
+      .filter(c => c.status !== 'NOT_PLAYING' && c.injuryStatus !== 'INJURED')
+      .map(c => ({ card: c, breakdown: calculatePlayerProjectedScore(c, 'BALANCED', galleryCards) }))
+      .sort((a, b) => b.breakdown.projectedScore - a.breakdown.projectedScore)
+      .slice(0, 5);
+
+    const totalProj = top5.reduce((sum, p) => sum + p.breakdown.projectedScore, 0);
+
+    return `Analyse tactique pour ta galerie en GW${gameWeekNumber} :
+Ton effectif compte **${galleryCards.length} cartes**.
+
+Tes 5 meilleurs joueurs projetés pour cette journée sont :
+${top5.map((p, idx) => `${idx + 1}. **${p.card.displayName}** (${p.card.positionCode}) - Projection : **${p.breakdown.projectedScore} pts**`).join('\n')}
+
+L'alignement de cette colonne vertébrale te confère un score cumulé estimé à **${Math.round(totalProj)} points**. N'hésite pas à me poser une question précise sur un poste ou un choix de capitaine !`;
   }
 
   return (

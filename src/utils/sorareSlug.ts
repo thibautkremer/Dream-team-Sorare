@@ -113,12 +113,17 @@ export interface CardBonusBreakdown {
   xpGradeBonus: number;        // Bonus Niveau/Grade XP (ex: 0.5% * grade)
   rarityBonus: number;         // Bonus Rareté de base (Rare +10%, Super Rare +20%, Unique +40%)
   totalBonusPercentage: number;// Multiplicateur total de la carte
-  powerString: string;         // Ex: "1.230" (depuis l'API Sorare)
-  hasInSeasonBonus: boolean;   // Vrai si saison courante (2025/2026)
+  powerString: string;         // Ex: "1.200" (depuis l'API Sorare)
+  hasInSeasonBonus: boolean;   // Vrai si saison courante (2024+)
 }
 
 export function getCardTotalBonus(card: SorareCard): number {
   if (!card) return 0;
+
+  // 1. Explicit user override if set
+  if (typeof card.customBonusPercentage === 'number' && card.customBonusPercentage >= 0) {
+    return Math.round(card.customBonusPercentage * 10) / 10;
+  }
 
   const rarity = (card.rarity || '').toUpperCase();
   let rarityBonus = 0;
@@ -126,30 +131,38 @@ export function getCardTotalBonus(card: SorareCard): number {
   else if (rarity === 'SUPER_RARE') rarityBonus = 20;
   else if (rarity === 'UNIQUE') rarityBonus = 40;
 
+  // In Sorare: Current seasons (2024-2025, 2025-2026, 2026-2027) get in-season bonus (+5% Classic / +20% In-Season)
+  const isCurrentSeason = typeof card.seasonYear === 'number' && card.seasonYear >= 2024;
+  const inSeasonBonus = isCurrentSeason ? 5 : 0;
+
   // 1. Exact power breakdown from Sorare API (Source de vérité)
   let apiBonusFromBreakdown = -1;
   if (card.powerBreakdown) {
     const pb = card.powerBreakdown;
+    const seasonBps = (pb.seasonBasisPoints && pb.seasonBasisPoints > 0) ? pb.seasonBasisPoints : (isCurrentSeason ? 500 : 0);
     const sumBps = (pb.collectionBasisPoints || 0) +
-                   (pb.seasonBasisPoints || 0) +
+                   seasonBps +
                    (pb.specialEditionCardsBasisPoints || 0) +
                    (pb.xpBasisPoints || 0) +
                    (pb.otherBonusBasisPoints || 0);
 
-    apiBonusFromBreakdown = sumBps / 100;
+    const breakdownBonus = sumBps / 100;
+    // In Sorare, if breakdown doesn't include rarity bonus, combine with rarityBonus
+    apiBonusFromBreakdown = Math.max(breakdownBonus, rarityBonus + breakdownBonus);
   }
 
-  // 2. Exact power string from Sorare API e.g. "1.040" -> 4.0%, "1.050" -> 5.0%, "1.000" -> 0.0%
+  // 2. Exact power string from Sorare API e.g. "1.200" -> 20.0%, "1.100" -> 10.0%, "1.050" -> 5.0%
   let apiBonusFromPower = -1;
   if (card.power) {
     const p = parseFloat(card.power);
     if (!isNaN(p) && p >= 1.0) {
-      apiBonusFromPower = (p - 1.0) * 100;
+      const rawPowerBonus = Math.round((p - 1.0) * 100 * 10) / 10;
+      apiBonusFromPower = Math.max(rawPowerBonus, rarityBonus + rawPowerBonus);
     }
   }
 
-  // 3. Fallback only if no API power data is available
-  let fallback = 0;
+  // 3. Fallback components (Rarity + In-Season + XP/Grade + Special Edition)
+  let fallback = rarityBonus + inSeasonBonus;
   if (typeof card.grade === 'number' && card.grade > 0) {
     fallback += card.grade * 0.5;
   } else if (typeof card.xp === 'number' && card.xp > 0) {
@@ -165,21 +178,19 @@ export function getCardTotalBonus(card: SorareCard): number {
   }
 
   // Extract the maximum possible bonus out of the parsed values
-  const maxApiBonus = Math.max(
+  let calculatedBonus = Math.max(
     apiBonusFromBreakdown,
     apiBonusFromPower,
     fallback,
     0
   );
-  
-  let calculatedBonus = Math.round((rarityBonus + maxApiBonus) * 10) / 10;
 
   // Compare with the explicitly passed bonusPercentage to ensure we don't lose pre-calculated values
   if (typeof card.bonusPercentage === 'number' && card.bonusPercentage > 0) {
     calculatedBonus = Math.max(calculatedBonus, Math.round(card.bonusPercentage * 10) / 10);
   }
 
-  return calculatedBonus;
+  return Math.round(calculatedBonus * 10) / 10;
 }
 
 export function getCardBonusBreakdown(card: SorareCard): CardBonusBreakdown {
@@ -204,15 +215,12 @@ export function getCardBonusBreakdown(card: SorareCard): CardBonusBreakdown {
   const total = getCardTotalBonus(card);
   const powerStr = (1 + total / 100).toFixed(3);
   
-  const isCurrentSeason = typeof card.seasonYear === 'number' && card.seasonYear >= 2026;
+  const isCurrentSeason = typeof card.seasonYear === 'number' && card.seasonYear >= 2024;
   const manualInSeasonBonus = isCurrentSeason ? 5 : 0;
 
   if (card.powerBreakdown) {
     const pb = card.powerBreakdown;
-    let seasonBonus = Math.round((pb.seasonBasisPoints || 0) / 10) / 10;
-    if (seasonBonus === 0 && manualInSeasonBonus > 0) {
-       seasonBonus = manualInSeasonBonus;
-    }
+    let seasonBonus = Math.round(((pb.seasonBasisPoints && pb.seasonBasisPoints > 0) ? pb.seasonBasisPoints : (manualInSeasonBonus * 100)) / 10) / 10;
     
     const specialEditionBonus = Math.round((pb.specialEditionCardsBasisPoints || 0) / 10) / 10;
     const editionBonus = Math.round((seasonBonus + specialEditionBonus) * 10) / 10;
@@ -257,7 +265,7 @@ export function getCardBonusBreakdown(card: SorareCard): CardBonusBreakdown {
     rarityBonus,
     totalBonusPercentage: total,
     powerString: powerStr,
-    hasInSeasonBonus: manualInSeasonBonus > 0,
+    hasInSeasonBonus: editionBonus > 0,
   };
 }
 

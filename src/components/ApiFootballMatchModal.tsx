@@ -29,63 +29,102 @@ export const ApiFootballMatchModal: React.FC<ApiFootballMatchModalProps> = ({
   const [statistics, setStatistics] = useState<any[]>([]);
   const [homeTeamInfo, setHomeTeamInfo] = useState<any>(null);
   const [awayTeamInfo, setAwayTeamInfo] = useState<any>(null);
+  const [fixtureIdState, setFixtureIdState] = useState<string>('0');
   const [activeTab, setActiveTab] = useState<'odds' | 'predictions' | 'live_stats' | 'injuries' | 'lineups'>('odds');
+  
+  // Track loaded tabs
+  const [loadedTabs, setLoadedTabs] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
 
-    const loadData = async () => {
+    const loadInitialData = async () => {
       try {
-        // Step 1: Search home team
+        // Search home team first to get fixture ID
         const homeRes = await fetch(`/api/football/team?name=${encodeURIComponent(homeTeam)}`).then(r => r.json());
+        let fixtureId = '0';
+        
         if (isMounted && homeRes.team) {
           setHomeTeamInfo(homeRes.team);
-        }
-
-        // Step 2: Search away team
-        const awayRes = await fetch(`/api/football/team?name=${encodeURIComponent(awayTeam)}`).then(r => r.json());
-        if (isMounted && awayRes.team) {
-          setAwayTeamInfo(awayRes.team);
-        }
-
-        let fixtureId = '0';
-        if (homeRes.team?.id) {
           const fixtureRes = await fetch(`/api/football/fixture/upcoming?teamId=${homeRes.team.id}`).then(r => r.json());
           if (fixtureRes.fixture?.fixture?.id) {
             fixtureId = fixtureRes.fixture.fixture.id.toString();
+            setFixtureIdState(fixtureId);
           }
         }
+        
+        // Load away team info concurrently with first tab load, as it's quick
+        fetch(`/api/football/team?name=${encodeURIComponent(awayTeam)}`)
+          .then(r => r.json())
+          .then(res => { if (isMounted && res.team) setAwayTeamInfo(res.team); })
+          .catch(() => {});
 
-        // Fetch odds, predictions, injuries, events, statistics in parallel
-        const [oddsRes, predRes, injRes, eventsRes, statsRes] = await Promise.all([
-          fetch(`/api/football/odds?fixtureId=${fixtureId}`).then(r => r.json()).catch(() => ({})),
-          fetch(`/api/football/predictions?fixtureId=${fixtureId}`).then(r => r.json()).catch(() => ({})),
-          fetch(`/api/football/injuries?fixtureId=${fixtureId}&teamId=${homeRes.team?.id || ''}`).then(r => r.json()).catch(() => ({})),
-          fetch(`/api/football/events?fixtureId=${fixtureId}`).then(r => r.json()).catch(() => ({})),
-          fetch(`/api/football/statistics?fixtureId=${fixtureId}`).then(r => r.json()).catch(() => ({}))
-        ]);
-
-        if (isMounted) {
-          setOdds(oddsRes.odds || oddsRes.response?.[0] || null);
-          setPredictions(predRes.predictions || predRes.response?.[0] || null);
-          setInjuries(injRes.injuries || injRes.response || []);
-          setEvents(eventsRes.events || eventsRes.response || []);
-          setStatistics(statsRes.statistics || statsRes.response || []);
-          setLoading(false);
+        // Fetch just the initial tab
+        if (fixtureId !== '0') {
+           const oddsRes = await fetch(`/api/football/odds?fixtureId=${fixtureId}`).then(r => r.json()).catch(() => ({}));
+           if (isMounted) {
+             setOdds(oddsRes.odds || oddsRes.response?.[0] || null);
+             setLoadedTabs(prev => ({ ...prev, odds: true }));
+             setLoading(false);
+           }
+        } else {
+           if (isMounted) setLoading(false);
         }
       } catch (err) {
-        console.warn('[ApiFootballMatchModal] Erreur chargement:', err);
+        console.warn('[ApiFootballMatchModal] Erreur initialisation:', err);
         if (isMounted) setLoading(false);
       }
     };
 
-    loadData();
+    loadInitialData();
 
     return () => {
       isMounted = false;
     };
   }, [homeTeam, awayTeam]);
+
+  // Tab Lazy Loading
+  useEffect(() => {
+    if (fixtureIdState === '0' || loadedTabs[activeTab]) return;
+
+    let isMounted = true;
+    const fetchTabData = async () => {
+      try {
+        setLoading(true);
+        switch (activeTab) {
+          case 'predictions':
+            const predRes = await fetch(`/api/football/predictions?fixtureId=${fixtureIdState}`).then(r => r.json()).catch(() => ({}));
+            if (isMounted) setPredictions(predRes.predictions || predRes.response?.[0] || null);
+            break;
+          case 'injuries':
+            const injRes = await fetch(`/api/football/injuries?fixtureId=${fixtureIdState}&teamId=${homeTeamInfo?.id || ''}`).then(r => r.json()).catch(() => ({}));
+            if (isMounted) setInjuries(injRes.injuries || injRes.response || []);
+            break;
+          case 'live_stats':
+            const [eventsRes, statsRes] = await Promise.all([
+              fetch(`/api/football/events?fixtureId=${fixtureIdState}`).then(r => r.json()).catch(() => ({})),
+              fetch(`/api/football/statistics?fixtureId=${fixtureIdState}`).then(r => r.json()).catch(() => ({}))
+            ]);
+            if (isMounted) {
+              setEvents(eventsRes.events || eventsRes.response || []);
+              setStatistics(statsRes.statistics || statsRes.response || []);
+            }
+            break;
+        }
+        
+        if (isMounted) {
+          setLoadedTabs(prev => ({ ...prev, [activeTab]: true }));
+          setLoading(false);
+        }
+      } catch (err) {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    fetchTabData();
+    return () => { isMounted = false; };
+  }, [activeTab, fixtureIdState, loadedTabs, homeTeamInfo]);
 
   // Extract bet values safely
   const bookmaker = odds?.bookmakers?.[0] || odds?.response?.[0]?.bookmakers?.[0];

@@ -1695,6 +1695,9 @@ export const PlayerScoutModal: React.FC<PlayerScoutModalProps> = ({ card: initia
         <ProjectionBreakdownModal
           card={card}
           allGalleryCards={allCards}
+          onUpdateCard={(updated) => {
+            setLiveCard(updated);
+          }}
           onClose={() => setShowProjectionBreakdown(false)}
         />
       )}

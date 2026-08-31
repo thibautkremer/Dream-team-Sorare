@@ -18,6 +18,7 @@ import { StorageService } from './utils/storage';
 import { 
   optimizeLineup, 
   generateFourDistinctLineups, 
+  sanitizeAllCompositionsNoDuplicates,
   getPlayerUniqueKey, 
   calculatePlayerProjectedScore, 
   sanitizeLineupNoDuplicatePlayers, 
@@ -223,8 +224,8 @@ export default function App() {
         }
         const merged = fourCompos.map((newCompo, idx) => {
           const existing = prevComps[idx];
-          if (existing && existing.isLocked) {
-            return existing; // Preserve locked compo!
+          if (existing && (existing.isLocked || existing.isManuallyEdited)) {
+            return existing; // Preserve manually edited or locked compo!
           }
           return {
             ...newCompo,
@@ -768,75 +769,122 @@ export default function App() {
     }
   };
 
+  // Retire un joueur de toutes les autres compositions s'il y est déjà aligné (Garantie Règle Unicité)
+  const removePlayerFromOtherCompositions = (
+    compositionsList: Lineup[],
+    player: SorareCard,
+    targetCompoIndex: number
+  ): { updatedCompositions: Lineup[]; removedFromIndex: number | null } => {
+    const pKey = getPlayerUniqueKey(player);
+    let removedFromIndex: number | null = null;
+
+    const updatedCompositions = compositionsList.map((comp, idx) => {
+      if (idx === targetCompoIndex || !comp?.slots) return comp;
+      
+      let modified = false;
+      const newSlots = { ...comp.slots };
+
+      (['gk', 'def', 'mid', 'fwd', 'extra'] as const).forEach(slotKey => {
+        const slotVal = newSlots[slotKey];
+        if (slotVal && (slotVal.id === player.id || getPlayerUniqueKey(slotVal) === pKey)) {
+          newSlots[slotKey] = null;
+          modified = true;
+          removedFromIndex = idx;
+        }
+      });
+
+      if (modified) {
+        const getSlotPlayerScore = (c: SorareCard | null) => {
+          if (!c) return 0;
+          return calculatePlayerProjectedScore(c, comp.strategy || strategy, cards).projectedScore;
+        };
+
+        const baseSum = (
+          getSlotPlayerScore(newSlots.gk) +
+          getSlotPlayerScore(newSlots.def) +
+          getSlotPlayerScore(newSlots.mid) +
+          getSlotPlayerScore(newSlots.fwd) +
+          getSlotPlayerScore(newSlots.extra)
+        );
+
+        const capPlayer = newSlots[comp.captainSlot];
+        const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
+
+        return {
+          ...comp,
+          slots: newSlots,
+          projectedTotal: Math.round(baseSum * 10) / 10,
+          projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
+        };
+      }
+
+      return comp;
+    });
+
+    return { updatedCompositions, removedFromIndex };
+  };
+
   // Slot swap handler.
-  // `targetSlot` is optional and defaults to the `slotToSwap` state (used by SlotSwapModal,
-  // which is only ever opened after a slot was already selected on a previous render).
-  // When called with an explicit `targetSlot` (see handleAssignToSlot below), we no longer
-  // depend on `slotToSwap` having been updated first — this fixes a stale-closure bug where
-  // `setSlotToSwap(slot)` followed synchronously by `handleSwapPlayerInSlot(card)` would still
-  // read the OLD `slotToSwap` value (often `null`), silently doing nothing.
+  // Directly updates targetSlot on active lineup and ensures immediate synchronization
+  // with compositions state and locks the edited compo so it is never discarded.
   const handleSwapPlayerInSlot = (player: SorareCard, targetSlot?: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => {
     const resolvedSlot = targetSlot ?? slotToSwap;
     if (!resolvedSlot) return;
-    if (isPlayerAlreadyInLineup(lineup, player, resolvedSlot)) {
+
+    const currentCompo = compositions[selectedCompoIndex] || lineup;
+    if (isPlayerAlreadyInLineup(currentCompo, player, resolvedSlot)) {
       showToast("Ce joueur est déjà aligné dans cette composition sur un autre poste !", "error");
       return;
     }
 
-    let updatedLineup: Lineup | null = null;
+    // Retirer le joueur d'éventuelles autres compositions
+    const { updatedCompositions: cleanedCompositions, removedFromIndex } = removePlayerFromOtherCompositions(
+      compositions,
+      player,
+      selectedCompoIndex
+    );
 
-    setLineup(prev => {
-      const updatedSlots = enforceSingleStarterPerClub({
-        ...prev.slots,
-        [resolvedSlot]: player,
-      }, cards);
+    const updatedSlots = {
+      ...(cleanedCompositions[selectedCompoIndex]?.slots || currentCompo.slots),
+      [resolvedSlot]: player,
+    };
 
-      const getSlotPlayerScore = (card: SorareCard | null) => {
-        if (!card) return 0;
-        return calculatePlayerProjectedScore(card, strategy, cards).projectedScore;
-      };
+    const getSlotPlayerScore = (card: SorareCard | null) => {
+      if (!card) return 0;
+      return calculatePlayerProjectedScore(card, currentCompo.strategy || strategy, cards).projectedScore;
+    };
 
-      const baseSum = (
-        getSlotPlayerScore(updatedSlots.gk) +
-        getSlotPlayerScore(updatedSlots.def) +
-        getSlotPlayerScore(updatedSlots.mid) +
-        getSlotPlayerScore(updatedSlots.fwd) +
-        getSlotPlayerScore(updatedSlots.extra)
-      );
+    const baseSum = (
+      getSlotPlayerScore(updatedSlots.gk) +
+      getSlotPlayerScore(updatedSlots.def) +
+      getSlotPlayerScore(updatedSlots.mid) +
+      getSlotPlayerScore(updatedSlots.fwd) +
+      getSlotPlayerScore(updatedSlots.extra)
+    );
 
-      const capPlayer = updatedSlots[prev.captainSlot];
-      const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
+    const capPlayer = updatedSlots[currentCompo.captainSlot];
+    const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
 
-      const updated = {
-        ...prev,
-        slots: updatedSlots,
-        projectedTotal: Math.round(baseSum * 10) / 10,
-        projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
-      };
+    const updated: Lineup = {
+      ...currentCompo,
+      slots: updatedSlots,
+      projectedTotal: Math.round(baseSum * 10) / 10,
+      projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
+      isLocked: true,
+      isManuallyEdited: true,
+    };
 
-      updatedLineup = updated;
-      return updated;
-    });
+    const finalCompositions = [...cleanedCompositions];
+    finalCompositions[selectedCompoIndex] = updated;
 
-    // Sync back to compositions
-    setTimeout(() => {
-      if (updatedLineup) {
-        setCompositions(comps => {
-          const copy = [...comps];
-          if (copy[selectedCompoIndex]) {
-            // Mark as manually edited (unless already locked, in which case it's protected
-            // anyway) so the regeneration effect below can warn before discarding this edit.
-            copy[selectedCompoIndex] = {
-              ...updatedLineup!,
-              isManuallyEdited: !copy[selectedCompoIndex].isLocked,
-            };
-          }
-          return copy;
-        });
-      }
-    }, 0);
+    setLineup(updated);
+    setCompositions(finalCompositions);
 
-    showToast(`${player.displayName} assigné au poste ${resolvedSlot.toUpperCase()}`);
+    if (removedFromIndex !== null) {
+      showToast(`🔄 ${player.displayName} transféré de la Compo ${removedFromIndex + 1} vers la Compo ${selectedCompoIndex + 1} (unicité 🔒)`);
+    } else {
+      showToast(`${player.displayName} assigné au poste ${resolvedSlot.toUpperCase()} (Compo ${selectedCompoIndex + 1} mise à jour 🔒)`);
+    }
     setSlotToSwap(null);
   };
 
@@ -849,63 +897,68 @@ export default function App() {
   };
 
   // Direct assign to slot from gallery or scout.
-  // Pass `slot` explicitly to handleSwapPlayerInSlot instead of relying on `setSlotToSwap` +
-  // reading the state back synchronously (which was always stale — see fix above).
   const handleAssignToSlot = (card: SorareCard, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => {
     handleSwapPlayerInSlot(card, slot);
     setCurrentTab('pitch');
   };
 
   const handleReplacePlayerInCompo = (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => {
-    const targetCompo = compositions[compoIndex];
+    const targetCompo = compositions[compoIndex] || lineup;
     if (targetCompo && isPlayerAlreadyInLineup(targetCompo, player, slot)) {
       showToast("Ce joueur est déjà aligné dans cette composition sur un autre poste !", "error");
       return;
     }
 
-    setCompositions(comps => {
-      const copy = [...comps];
-      if (!copy[compoIndex]) return comps;
-      
-      const compo = copy[compoIndex];
-      const updatedSlots = enforceSingleStarterPerClub({
-        ...compo.slots,
-        [slot]: player,
-      }, cards);
+    const { updatedCompositions: cleanedCompositions, removedFromIndex } = removePlayerFromOtherCompositions(
+      compositions,
+      player,
+      compoIndex
+    );
 
-      const getSlotPlayerScore = (c: SorareCard | null) => {
-        if (!c) return 0;
-        return calculatePlayerProjectedScore(c, strategy, cards).projectedScore;
-      };
+    const updatedSlots = {
+      ...(cleanedCompositions[compoIndex]?.slots || targetCompo.slots),
+      [slot]: player,
+    };
 
-      const baseSum = (
-        getSlotPlayerScore(updatedSlots.gk) +
-        getSlotPlayerScore(updatedSlots.def) +
-        getSlotPlayerScore(updatedSlots.mid) +
-        getSlotPlayerScore(updatedSlots.fwd) +
-        getSlotPlayerScore(updatedSlots.extra)
-      );
+    const getSlotPlayerScore = (c: SorareCard | null) => {
+      if (!c) return 0;
+      return calculatePlayerProjectedScore(c, targetCompo.strategy || strategy, cards).projectedScore;
+    };
 
-      const capPlayer = updatedSlots[compo.captainSlot];
-      const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
+    const baseSum = (
+      getSlotPlayerScore(updatedSlots.gk) +
+      getSlotPlayerScore(updatedSlots.def) +
+      getSlotPlayerScore(updatedSlots.mid) +
+      getSlotPlayerScore(updatedSlots.fwd) +
+      getSlotPlayerScore(updatedSlots.extra)
+    );
 
-      const updated = {
-        ...compo,
-        slots: updatedSlots,
-        projectedTotal: Math.round(baseSum * 10) / 10,
-        projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
-      };
+    const capPlayer = updatedSlots[targetCompo.captainSlot];
+    const capBonus = capPlayer ? Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10 : 0;
 
-      copy[compoIndex] = updated;
+    const updated: Lineup = {
+      ...targetCompo,
+      slots: updatedSlots,
+      projectedTotal: Math.round(baseSum * 10) / 10,
+      projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
+      isLocked: true,
+      isManuallyEdited: true,
+    };
 
-      if (compoIndex === selectedCompoIndex) {
-        setLineup(updated);
-      }
+    const finalCompositions = [...cleanedCompositions];
+    finalCompositions[compoIndex] = updated;
 
-      return copy;
-    });
+    setCompositions(finalCompositions);
 
-    showToast(`${player.displayName} a remplacé le joueur dans la Compo ${compoIndex + 1} !`, 'success');
+    if (compoIndex === selectedCompoIndex) {
+      setLineup(updated);
+    }
+
+    if (removedFromIndex !== null) {
+      showToast(`🔄 ${player.displayName} transféré de la Compo ${removedFromIndex + 1} vers la Compo ${compoIndex + 1} (unicité 🔒)`);
+    } else {
+      showToast(`${player.displayName} aligné sur le poste ${slot.toUpperCase()} dans ${targetCompo.name || `Compo ${compoIndex + 1}`}`);
+    }
   };
 
   const handleSelectComposition = (index: number) => {
@@ -1145,6 +1198,7 @@ export default function App() {
             onExportLineup={(l) => setExportLineupTarget(l)}
             onToggleLockCompo={handleToggleLockCompo}
             onImportSorareLineups={handleImportSorareLineups}
+            onReplacePlayerInCompo={handleReplacePlayerInCompo}
             alerts={startingXIAlerts}
             playerStatusMap={playerStatusMap}
             onOpenStartingXIMonitor={() => setIsStartingXIModalOpen(true)}
@@ -1231,6 +1285,36 @@ export default function App() {
           card={breakdownCard}
           strategy={strategy}
           allGalleryCards={cards}
+          onUpdateCard={(updated) => {
+            const newCards = cards.map(c => c.id === updated.id ? updated : c);
+            setCards(newCards);
+            setBreakdownCard(updated);
+            StorageService.saveCards(newCards);
+            setCompositions(prevComps => prevComps.map(comp => {
+              let changed = false;
+              const newSlots = { ...comp.slots };
+              (['gk', 'def', 'mid', 'fwd', 'extra'] as const).forEach(slotKey => {
+                if (newSlots[slotKey]?.id === updated.id) {
+                  newSlots[slotKey] = updated;
+                  changed = true;
+                }
+              });
+              if (!changed) return comp;
+              return { ...comp, slots: newSlots };
+            }));
+            setLineup(prev => {
+              let changed = false;
+              const newSlots = { ...prev.slots };
+              (['gk', 'def', 'mid', 'fwd', 'extra'] as const).forEach(slotKey => {
+                if (newSlots[slotKey]?.id === updated.id) {
+                  newSlots[slotKey] = updated;
+                  changed = true;
+                }
+              });
+              if (!changed) return prev;
+              return { ...prev, slots: newSlots };
+            });
+          }}
           onClose={() => setBreakdownCard(null)}
         />
       )}
@@ -1250,6 +1334,8 @@ export default function App() {
           cards={cards}
           filters={filters}
           currentLineup={compositions[selectedCompoIndex] || lineup}
+          compositions={compositions}
+          selectedCompoIndex={selectedCompoIndex}
           onSelectPlayer={handleSwapPlayerInSlot}
           onClose={() => setSlotToSwap(null)}
         />

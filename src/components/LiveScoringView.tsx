@@ -1,12 +1,39 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { RefreshCw, Zap, Clock, Trophy, Crown, CheckCircle2, AlertCircle, Sparkles, Filter, ChevronRight, Activity, Flame, Shield, ShieldAlert, Calendar, TrendingUp, AlertTriangle, Users, Layers, Radio, ArrowUpDown } from 'lucide-react';
+import { RefreshCw, Zap, Clock, Trophy, Crown, CheckCircle2, AlertCircle, Sparkles, Filter, ChevronRight, Activity, Flame, Shield, ShieldAlert, Calendar, TrendingUp, AlertTriangle, Users, Layers, Radio, ArrowUpDown, Volume2, VolumeX, Bell, Target, BarChart2 } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType } from '../types';
 import { calculatePlayerProjectedScore, formatKickoffDate, getPlayerWinProbability, getPlayerRecentMatchAnalysis } from '../utils/optimizer';
 import { StorageService } from '../utils/storage';
 import { getCardTotalBonus, normalizePlayerSlug } from '../utils/sorareSlug';
 import { SorareScoreDetailModal } from './SorareScoreDetailModal';
 import { ApiFootballMatchModal } from './ApiFootballMatchModal';
+
+/**
+ * Web Audio API synthesizer for instant goal & decisive action chime alert
+ */
+function playGoalChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const now = ctx.currentTime;
+    const notes = [523.25, 659.25, 783.99, 1046.50];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+      gain.gain.setValueAtTime(0.25, now + idx * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.08);
+      osc.stop(now + idx * 0.08 + 0.32);
+    });
+  } catch (e) {
+    console.warn('Audio chime error:', e);
+  }
+}
 
 interface LiveScoringViewProps {
   cards: SorareCard[];
@@ -329,6 +356,16 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
   const [lastSorareSyncTime, setLastSorareSyncTime] = useState<Date | null>(null);
   const [lastLiveTrackedCount, setLastLiveTrackedCount] = useState(0);
 
+  // Audio alert settings & Live events timeline feed
+  const [soundAlertsEnabled, setSoundAlertsEnabled] = useState<boolean>(true);
+  const [liveEventsLog, setLiveEventsLog] = useState<Array<{
+    id: string;
+    time: string;
+    playerName: string;
+    type: 'decisive' | 'aa_jump' | 'status';
+    message: string;
+  }>>([]);
+
   // API-Football Live Fixtures State
   const [apiFootballLiveFixtures, setApiFootballLiveFixtures] = useState<any[]>([]);
   const [loadingFootballLive, setLoadingFootballLive] = useState(false);
@@ -339,7 +376,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       const res = await fetch('/api/football/live');
       if (res.ok) {
         const data = await res.json();
-        const fixtures = data.liveFixtures || data.response || [];
+        const fixtures = data.live || data.liveFixtures || data.response || [];
         setApiFootballLiveFixtures(fixtures);
       }
     } catch (err) {
@@ -421,24 +458,45 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
       }
 
       if (anyChunkSucceeded) {
-        // DETECT LIVE EVENTS FOR TOAST NOTIFICATIONS
+        // DETECT LIVE EVENTS FOR TOAST NOTIFICATIONS & AUDIO CHIME
         const prevScores = liveScoresRef.current;
         Object.keys(mergedScores).forEach(slug => {
           const newPlayer = mergedScores[slug];
           const oldPlayer = prevScores[slug];
           
           if (newPlayer && oldPlayer && newPlayer.game?.id === oldPlayer.game?.id) {
+            const name = newPlayer.player?.displayName || slug;
+            const timeStr = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
             // Check for Decisive Score change (Goal, Assist, etc.)
             if (newPlayer.decisiveScore > oldPlayer.decisiveScore) {
-              toast.success(`🚨 Action décisive pour ${newPlayer.player?.displayName || slug} !`, {
+              if (soundAlertsEnabled) {
+                playGoalChime();
+              }
+              toast.success(`🚨 Action décisive pour ${name} !`, {
                 description: `Son Decisive Score passe à ${newPlayer.decisiveScore} pts.`,
               });
+              setLiveEventsLog(prev => [{
+                id: Math.random().toString(),
+                time: timeStr,
+                playerName: name,
+                type: 'decisive',
+                message: `Goal / Action Décisive (DS: ${newPlayer.decisiveScore} pts)`
+              }, ...prev.slice(0, 19)]);
             }
             // Check for AA big jumps (e.g. +10 pts in 5 mins)
             if (newPlayer.allAroundScore - oldPlayer.allAroundScore >= 10) {
-              toast.info(`🔥 Gros coup de chaud pour ${newPlayer.player?.displayName || slug} !`, {
-                description: `+${Math.round((newPlayer.allAroundScore - oldPlayer.allAroundScore) * 10) / 10} AA sur les 5 dernières minutes.`,
+              const deltaAA = Math.round((newPlayer.allAroundScore - oldPlayer.allAroundScore) * 10) / 10;
+              toast.info(`🔥 Gros coup de chaud pour ${name} !`, {
+                description: `+${deltaAA} AA sur les 5 dernières minutes.`,
               });
+              setLiveEventsLog(prev => [{
+                id: Math.random().toString(),
+                time: timeStr,
+                playerName: name,
+                type: 'aa_jump',
+                message: `+${deltaAA} All-Around (score AA: ${Math.round(newPlayer.allAroundScore)})`
+              }, ...prev.slice(0, 19)]);
             }
           }
         });
@@ -545,7 +603,7 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     fetchApiFootballLive();
     const interval = setInterval(() => {
       fetchSorareLiveScores(getSlugsToFetchLive());
-      fetchApiFootballLive();
+      
     }, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchSorareLiveScores, getSlugsToFetchLive, fetchApiFootballLive]);
@@ -970,6 +1028,34 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
     };
   }, [processedCards]);
 
+  // Urgent Lineup Alerts (players benched or out in active compositions)
+  const urgentLineupAlerts = useMemo(() => {
+    const alerts: Array<{ card: SorareCard; compoName: string; statusLabel: string; slot: string }> = [];
+    activeCompositions.forEach(comp => {
+      Object.entries(comp.slots).forEach(([slotKey, card]) => {
+        if (card) {
+          const processed = processedCards.find(p => p.card.id === card.id);
+          const sInfo = processed?.sorareLive;
+          const liveStat = (sInfo?.playingStatus || '').toUpperCase();
+          const cardStat = (card.lineupStatus || card.status || '').toUpperCase();
+          
+          if (
+            liveStat.includes('SUB') || liveStat.includes('BENCH') || liveStat.includes('OUT') || liveStat.includes('DID_NOT_PLAY') ||
+            cardStat === 'CONFIRMED_BENCH' || cardStat === 'CONFIRMED_OUT'
+          ) {
+            alerts.push({
+              card,
+              compoName: comp.name || 'Compo',
+              statusLabel: (liveStat.includes('BENCH') || liveStat.includes('SUB') || cardStat === 'CONFIRMED_BENCH') ? 'Sur le banc' : 'Hors Groupe / Non aligné',
+              slot: slotKey.toUpperCase()
+            });
+          }
+        }
+      });
+    });
+    return alerts;
+  }, [activeCompositions, processedCards]);
+
   const activeCompoIndex = activeView.startsWith('team_') ? parseInt(activeView.replace('team_', ''), 10) : 0;
 
   return (
@@ -1005,7 +1091,33 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
           </span>
         </div>
       </div>
-      
+
+      {/* Urgent Lineup Alert Banner (if aligned players are benched / out) */}
+      {urgentLineupAlerts.length > 0 && (
+        <div className="rounded-2xl border border-rose-500/60 bg-rose-950/80 p-4 text-rose-200 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-pulse">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center flex-shrink-0 text-rose-400">
+              <ShieldAlert className="h-6 w-6" />
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-white flex items-center gap-2">
+                <span>⚠️ ALERTE COMPOSITIONS OFFICIELLES ({urgentLineupAlerts.length})</span>
+                <span className="text-[10px] bg-rose-500 text-white font-bold px-1.5 py-0.2 rounded">Urgent SO5</span>
+              </h4>
+              <p className="text-xs text-rose-300 mt-0.5">
+                {urgentLineupAlerts.map(a => `${a.card.displayName} (${a.statusLabel} - ${a.compoName})`).join(' • ')}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveView('all_aligned')}
+            className="px-3.5 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 font-black text-xs transition shadow-md whitespace-nowrap self-start sm:self-center"
+          >
+            Remplacer / Inspecter
+          </button>
+        </div>
+      )}
+
       {/* Top Banner: GameWeek & Team Navigation Overview */}
       <div className="rounded-3xl border border-emerald-500/40 bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-950 p-5 sm:p-6 shadow-2xl relative overflow-hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
@@ -1019,10 +1131,19 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
               <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
                 Données Officielles Sorare
               </span>
-              <span className="rounded-md bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-300 flex items-center gap-1">
-                <Sparkles className="h-2.5 w-2.5" />
-                Clé API Active (Galerie complète & Historiques SO5)
-              </span>
+              <button
+                type="button"
+                onClick={() => setSoundAlertsEnabled(!soundAlertsEnabled)}
+                className={`rounded-md border px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 transition ${
+                  soundAlertsEnabled
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+                title={soundAlertsEnabled ? 'Alerte sonore active (Cliquez pour désactiver)' : 'Activer les bips sonores sur buts et actions décisives'}
+              >
+                {soundAlertsEnabled ? <Volume2 className="h-3 w-3 text-emerald-400" /> : <VolumeX className="h-3 w-3 text-slate-500" />}
+                <span>{soundAlertsEnabled ? 'Alerte Bip: ON' : 'Alerte Bip: OFF'}</span>
+              </button>
             </div>
             
             <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
@@ -1236,6 +1357,50 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Live Events Feed Block (Goals, Decisive Actions, AA jumps timeline) */}
+      {liveEventsLog.length > 0 && (
+        <div className="rounded-2xl border border-indigo-500/40 bg-slate-950/90 p-3.5 shadow-xl space-y-2">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+              </span>
+              <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Activity className="h-3.5 w-3.5 text-indigo-400" />
+                Fil des Actions Décisives & Multiplex
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                  {liveEventsLog.length} événement{liveEventsLog.length > 1 ? 's' : ''}
+                </span>
+              </span>
+            </div>
+            <button
+              onClick={() => setLiveEventsLog([])}
+              className="text-[10px] font-semibold text-slate-400 hover:text-slate-200 transition"
+            >
+              Effacer le journal
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {liveEventsLog.map((ev) => (
+              <div key={ev.id} className="flex items-center justify-between bg-slate-900/80 border border-slate-800 rounded-xl p-2 text-xs">
+                <div className="flex items-center gap-2 truncate">
+                  <span className="text-[10px] font-mono text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">{ev.time}</span>
+                  <span className="font-bold text-white truncate">{ev.playerName}</span>
+                </div>
+                <span className={`text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${
+                  ev.type === 'decisive' 
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50 shadow-sm' 
+                    : 'bg-amber-950 text-amber-300 border-amber-500/50'
+                }`}>
+                  {ev.message}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1756,6 +1921,34 @@ export const LiveScoringView: React.FC<LiveScoringViewProps> = ({
                             }
                             return null;
                           })()}
+                        </div>
+                      )}
+
+                      {/* Opta Decisive Score (DS) vs All-Around (AA) Live Breakdown Gauge */}
+                      {sorareLive && (sorareLive.decisiveScore != null || sorareLive.allAroundScore != null) && (
+                        <div className="mt-2.5 pt-2 border-t border-slate-800/80 space-y-1">
+                          <div className="flex items-center justify-between text-[10px] font-bold">
+                            <span className="text-slate-300 flex items-center gap-1">
+                              <Target className="h-3 w-3 text-emerald-400" />
+                              <span>Decisive (DS): <strong className="text-emerald-300">{sorareLive.decisiveScore ?? 35} pts</strong></span>
+                            </span>
+                            <span className="text-slate-300 flex items-center gap-1">
+                              <BarChart2 className="h-3 w-3 text-indigo-400" />
+                              <span>All-Around (AA): <strong className="text-indigo-300">{Math.round((sorareLive.allAroundScore ?? 0) * 10) / 10} pts</strong></span>
+                            </span>
+                          </div>
+                          <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden flex border border-slate-800 p-0.5">
+                            <div 
+                              className="h-full bg-emerald-400 rounded-l-full transition-all duration-300" 
+                              style={{ width: `${Math.min(100, Math.max(0, (sorareLive.decisiveScore || 35) / 100 * 100))}%` }}
+                              title={`Decisive Score: ${sorareLive.decisiveScore || 35} pts`}
+                            />
+                            <div 
+                              className="h-full bg-indigo-400 rounded-r-full transition-all duration-300 ml-0.5" 
+                              style={{ width: `${Math.min(100, Math.max(0, (sorareLive.allAroundScore || 0) / 60 * 100))}%` }}
+                              title={`All-Around Score: ${sorareLive.allAroundScore || 0} pts`}
+                            />
+                          </div>
                         </div>
                       )}
                     </div>

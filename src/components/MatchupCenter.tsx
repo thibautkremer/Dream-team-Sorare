@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink, AlertTriangle, Clock, Layers, Flame, Shield, HelpCircle, ArrowUpDown } from 'lucide-react';
+import { BarChart3, ShieldCheck, Target, Zap, Calendar, Search, Filter, Sparkles, ChevronRight, TrendingUp, CloudSun, RefreshCw, CheckCircle2, Loader2, ExternalLink, AlertTriangle, Clock, Layers, Flame, Shield, HelpCircle, ArrowUpDown, ArrowRightLeft } from 'lucide-react';
 import { SorareCard, GameWeekInfo, StrategyType } from '../types';
 import { formatKickoffDate, getPlayerWinProbability, calculatePlayerProjectedScore } from '../utils/optimizer';
 import { getCardTotalBonus } from '../utils/sorareSlug';
 import { normalizeClubName } from '../data/fixturesData';
 import { StorageService } from '../utils/storage';
 import { ApiFootballMatchModal } from './ApiFootballMatchModal';
-import { MatchOpportunitiesBar } from './matchups/MatchOpportunitiesBar';
+import { MatchOpportunitiesBar, StackingClubItem, ConflictMatchItem } from './matchups/MatchOpportunitiesBar';
 import { MatchTimelineView } from './matchups/MatchTimelineView';
+import { MatchH2HComparatorModal } from './matchups/MatchH2HComparatorModal';
 export { getCardTotalBonus };
 
 interface MatchupCenterProps {
@@ -97,6 +98,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
   const [isSyncingRealOdds, setIsSyncingRealOdds] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  // Deep dive API Football modal
   const [selectedMatchForModal, setSelectedMatchForModal] = useState<{
     homeTeam: string;
     awayTeam: string;
@@ -105,18 +107,24 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
     players: SorareCard[];
   } | null>(null);
 
+  // H2H Comparator Modal State
+  const [isH2HModalOpen, setIsH2HModalOpen] = useState(false);
+  const [h2hInitialMatchA, setH2hInitialMatchA] = useState<string | undefined>(undefined);
+  const [h2hInitialMatchB, setH2hInitialMatchB] = useState<string | undefined>(undefined);
+
   const handleSyncRealOdds = async () => {
     setIsSyncingRealOdds(true);
     setSyncFeedback('Recherche des cotes officielles des bookmakers via API-Football...');
     try {
       const appToken = StorageService.getAppToken();
+      const currentSlug = StorageService.getUsername() || 'thib-8';
       const res = await fetch('/api/match-odds/sync-gemini', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           ...(appToken ? { 'x-app-token': appToken } : {})
         },
-        body: JSON.stringify({ slug: 'thib-8', cards }),
+        body: JSON.stringify({ slug: currentSlug, cards }),
       });
       const data = await res.json();
       if (data.success) {
@@ -389,7 +397,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
 
   // View & Advanced Filter states
   const [viewMode, setViewMode] = useState<'grid' | 'timeline'>('grid');
-  const [profileFilter, setProfileFilter] = useState<'ALL' | 'CLEAN_SHEET' | 'HIGH_XG' | 'BIG_FAVORITE' | 'MY_PLAYERS'>('ALL');
+  const [profileFilter, setProfileFilter] = useState<'ALL' | 'CLEAN_SHEET' | 'HIGH_XG' | 'BIG_FAVORITE' | 'MY_PLAYERS' | 'STACKING' | 'CONFLICTS' | 'DROPPING_ODDS' | 'WEATHER_EXTREME'>('ALL');
   const [expandedSimulatorMatchKey, setExpandedSimulatorMatchKey] = useState<string | null>(null);
 
   const [selectedCompetition, setSelectedCompetition] = useState<string>('ALL');
@@ -466,6 +474,72 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
       .slice(0, 6);
   }, [cards, strategy]);
 
+  // Stacking Clubs Computation
+  const stackingClubs: StackingClubItem[] = useMemo(() => {
+    return allFixtures
+      .filter(f => f.players.length >= 2 && (f.winProb || 0) >= 40)
+      .map(f => {
+        const gkDefs = f.players.filter(p => p.positionCode === 'GK' || p.positionCode === 'DEF');
+        const fwdMids = f.players.filter(p => p.positionCode === 'MID' || p.positionCode === 'FWD');
+        let stackType: 'DEFENSIVE' | 'OFFENSIVE' | 'BALANCED' = 'BALANCED';
+        if (gkDefs.length >= 2) stackType = 'DEFENSIVE';
+        else if (fwdMids.length >= 2) stackType = 'OFFENSIVE';
+        return {
+          club: f.club,
+          opponent: f.opponent,
+          isHome: f.isHome,
+          cardCount: f.players.length,
+          gkDefCount: gkDefs.length,
+          fwdMidCount: fwdMids.length,
+          csProb: f.cleanSheetProb || 30,
+          winProb: f.winProb || 50,
+          stackType,
+        };
+      })
+      .sort((a, b) => b.cardCount - a.cardCount || b.winProb - a.winProb);
+  }, [allFixtures]);
+
+  // Gallery Conflicts Computation
+  const conflicts: ConflictMatchItem[] = useMemo(() => {
+    const seenPairs = new Set<string>();
+    const conflictList: ConflictMatchItem[] = [];
+
+    allFixtures.forEach(f => {
+      const homeName = f.homeTeam || (f.isHome ? f.club : f.opponent);
+      const awayName = f.awayTeam || (!f.isHome ? f.club : f.opponent);
+      const pairKey = [homeName, awayName].sort().join('__');
+      if (seenPairs.has(pairKey)) return;
+      seenPairs.add(pairKey);
+
+      const homePlayers = cards.filter(c => {
+        const club = normalizeClubName(c.club?.name || '');
+        return club.toLowerCase() === normalizeClubName(homeName).toLowerCase();
+      });
+      const awayPlayers = cards.filter(c => {
+        const club = normalizeClubName(c.club?.name || '');
+        return club.toLowerCase() === normalizeClubName(awayName).toLowerCase();
+      });
+
+      if (homePlayers.length > 0 && awayPlayers.length > 0) {
+        const hasGkDefHome = homePlayers.some(p => p.positionCode === 'GK' || p.positionCode === 'DEF');
+        const hasFwdMidAway = awayPlayers.some(p => p.positionCode === 'MID' || p.positionCode === 'FWD');
+        const hasGkDefAway = awayPlayers.some(p => p.positionCode === 'GK' || p.positionCode === 'DEF');
+        const hasFwdMidHome = homePlayers.some(p => p.positionCode === 'MID' || p.positionCode === 'FWD');
+
+        conflictList.push({
+          matchLabel: `${homeName} vs ${awayName}`,
+          homeTeam: homeName,
+          awayTeam: awayName,
+          homePlayers,
+          awayPlayers,
+          hasGkConflict: (hasGkDefHome && hasFwdMidAway) || (hasGkDefAway && hasFwdMidHome),
+        });
+      }
+    });
+
+    return conflictList;
+  }, [allFixtures, cards]);
+
   const competitions = useMemo(() => {
     const set = new Set<string>();
     allFixtures.forEach(f => {
@@ -505,6 +579,23 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
       result = result.filter(f => (f.winProb || 0) >= 55);
     } else if (profileFilter === 'MY_PLAYERS') {
       result = result.filter(f => f.players.length > 0);
+    } else if (profileFilter === 'STACKING') {
+      result = result.filter(f => f.players.length >= 2 && (f.winProb || 0) >= 40);
+    } else if (profileFilter === 'CONFLICTS') {
+      const conflictTeams = new Set<string>();
+      conflicts.forEach(c => {
+        conflictTeams.add(c.homeTeam.toLowerCase());
+        conflictTeams.add(c.awayTeam.toLowerCase());
+      });
+      result = result.filter(f => conflictTeams.has(f.club.toLowerCase()) || conflictTeams.has(f.opponent.toLowerCase()));
+    } else if (profileFilter === 'DROPPING_ODDS') {
+      result = result.filter(f => (f.winProb || 0) >= 50 || f.winOdds <= 1.90 || Boolean(f.hasVerifiedData && (f.winProb || 0) >= 48));
+    } else if (profileFilter === 'WEATHER_EXTREME') {
+      result = result.filter(f => {
+        const w = weatherMap[f.club];
+        if (!w) return false;
+        return w.wind >= 25 || w.temp <= 3 || w.temp >= 30 || w.description.toLowerCase().includes('pluie') || w.description.toLowerCase().includes('rain');
+      });
     }
 
     // Filter search
@@ -741,15 +832,20 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
         </div>
       </div>
 
-      {/* Top Opportunities Bar (Clean Sheets, High xG, Top Value Players) */}
+      {/* Top Opportunities Bar (Clean Sheets, High xG, Top Value Players, Stacking, Conflicts) */}
       <MatchOpportunitiesBar
         topCleanSheets={topCleanSheets}
         topOffensiveMatches={topOffensiveMatches}
         topValuePlayers={topValuePlayers}
+        stackingClubs={stackingClubs}
+        conflicts={conflicts}
         onSelectClub={(clubName) => setSearchQuery(clubName)}
         onOpenScout={onOpenScout}
         onFilterCS={() => setProfileFilter('CLEAN_SHEET')}
         onFilterXG={() => setProfileFilter('HIGH_XG')}
+        onFilterStacking={() => setProfileFilter('STACKING')}
+        onFilterConflicts={() => setProfileFilter('CONFLICTS')}
+        onOpenH2HModal={() => setIsH2HModalOpen(true)}
       />
 
       {/* View Switcher & Profile Filters Bar */}
@@ -779,7 +875,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
             }`}
           >
             <Shield className="h-3.5 w-3.5" />
-            <span>Top Clean Sheets (≥35%)</span>
+            <span>Clean Sheet (≥35%)</span>
           </button>
           <button
             onClick={() => setProfileFilter('HIGH_XG')}
@@ -790,7 +886,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
             }`}
           >
             <Flame className="h-3.5 w-3.5" />
-            <span>Festivals xG (≥2.7)</span>
+            <span>xG Boomers (≥2.7)</span>
           </button>
           <button
             onClick={() => setProfileFilter('BIG_FAVORITE')}
@@ -801,7 +897,7 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
             }`}
           >
             <Sparkles className="h-3.5 w-3.5" />
-            <span>Grands Favoris (≥55%)</span>
+            <span>Favoris (≥55%)</span>
           </button>
           <button
             onClick={() => setProfileFilter('MY_PLAYERS')}
@@ -813,6 +909,52 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           >
             <Target className="h-3.5 w-3.5" />
             <span>Mes Joueurs Galerie</span>
+          </button>
+          <button
+            onClick={() => setProfileFilter('STACKING')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'STACKING'
+                ? 'bg-indigo-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-indigo-300 hover:text-white'
+            }`}
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span>Stacks Clubs ({stackingClubs.length})</span>
+          </button>
+          {conflicts.length > 0 && (
+            <button
+              onClick={() => setProfileFilter('CONFLICTS')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+                profileFilter === 'CONFLICTS'
+                  ? 'bg-rose-500 text-slate-950 shadow-md font-black'
+                  : 'bg-rose-950/70 border border-rose-800/80 text-rose-300 hover:text-white'
+              }`}
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>Conflits Galerie ({conflicts.length})</span>
+            </button>
+          )}
+          <button
+            onClick={() => setProfileFilter('DROPPING_ODDS')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'DROPPING_ODDS'
+                ? 'bg-emerald-400 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-emerald-300 hover:text-white'
+            }`}
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+            <span>Cotes en Baisse 🔥</span>
+          </button>
+          <button
+            onClick={() => setProfileFilter('WEATHER_EXTREME')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
+              profileFilter === 'WEATHER_EXTREME'
+                ? 'bg-sky-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-950/80 border border-slate-800 text-sky-300 hover:text-white'
+            }`}
+          >
+            <CloudSun className="h-3.5 w-3.5" />
+            <span>Alertes Météo</span>
           </button>
         </div>
 
@@ -1029,6 +1171,27 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
               const matchKey = `${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'h' : 'a'}`;
               const isSimulatorExpanded = expandedSimulatorMatchKey === matchKey;
 
+              const isStackOpportunity = fixture.players.length >= 2 && (fixture.winProb || 0) >= 40;
+              const isDroppingOdds = (fixture.winProb || 0) >= 52 || fixture.winOdds <= 1.85;
+
+              // Intra-gallery conflict check
+              const matchConflict = conflicts.find(c => 
+                (c.homeTeam.toLowerCase() === homeClubName.toLowerCase() && c.awayTeam.toLowerCase() === awayClubName.toLowerCase()) ||
+                (c.homeTeam.toLowerCase() === awayClubName.toLowerCase() && c.awayTeam.toLowerCase() === homeClubName.toLowerCase())
+              );
+
+              // Tactical weather note
+              let weatherTacticalNote: { label: string; color: string } | null = null;
+              if (wInfo) {
+                if (wInfo.wind >= 28) {
+                  weatherTacticalNote = { label: `💨 Vent fort (${wInfo.wind} km/h) : pénalise les passes longues et tirs lointains (-8% xG).`, color: 'text-amber-300 bg-amber-950/70 border-amber-500/40' };
+                } else if (wInfo.temp <= 3) {
+                  weatherTacticalNote = { label: `❄️ Froid vif (${wInfo.temp}°C) : pelouse dure, favorise les fautes et turnovers défensifs.`, color: 'text-sky-300 bg-sky-950/70 border-sky-500/40' };
+                } else if (wInfo.description.toLowerCase().includes('pluie') || wInfo.description.toLowerCase().includes('rain')) {
+                  weatherTacticalNote = { label: `🌧️ Pluie / Pelouse grasse : rebonds piégeux pour les gardiens, vigilance clean sheet.`, color: 'text-blue-300 bg-blue-950/70 border-blue-500/40' };
+                }
+              }
+
               return (
                 <div
                   key={`${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'home' : 'away'}_${idx}`}
@@ -1057,6 +1220,20 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                             </span>
                           )}
                         </span>
+
+                        {isStackOpportunity && (
+                          <span className="text-[10px] text-indigo-300 font-bold flex items-center gap-1 bg-indigo-950/80 px-2 py-0.5 rounded-md border border-indigo-500/40" title="Opportunité de Stacking détectée dans votre galerie">
+                            <Layers className="h-3 w-3 text-indigo-400" />
+                            <span>Stack Club ({fixture.players.length})</span>
+                          </span>
+                        )}
+
+                        {isDroppingOdds && (
+                          <span className="text-[10px] text-emerald-300 font-bold flex items-center gap-1 bg-emerald-950/80 px-2 py-0.5 rounded-md border border-emerald-500/40" title="Cote favorable / Tendance marché haussière">
+                            <TrendingUp className="h-3 w-3 text-emerald-400" />
+                            <span>Cote en Baisse ↘</span>
+                          </span>
+                        )}
 
                         {wInfo && (
                           <span
@@ -1112,8 +1289,20 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                       )}
                     </div>
 
-                    {/* Deep-dive API-Football modal trigger button */}
-                    <div className="flex items-center gap-2 shrink-0">
+                    {/* Action buttons: H2H Comparator + Deep-dive API-Football */}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          setH2hInitialMatchA(`${fixture.club}_${fixture.opponent}_${fixture.isHome ? 'h' : 'a'}`);
+                          setIsH2HModalOpen(true);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-teal-300 font-bold text-xs border border-teal-500/40 hover:border-teal-400 transition cursor-pointer shadow-sm"
+                        title="Comparer ce match en Face-à-Face avec une autre rencontre pour arbitrer vos compositions"
+                      >
+                        <ArrowRightLeft className="h-3.5 w-3.5 text-teal-400" />
+                        <span>⚖️ Arbitrer H2H</span>
+                      </button>
+
                       <button
                         onClick={() => setSelectedMatchForModal({
                           homeTeam: homeClubName,
@@ -1126,11 +1315,43 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                         title="Ouvrir le centre d'analyse complet API-Football (Cotes bookmakers détaillées, H2H, Compos probables/officielles, Blessures)"
                       >
                         <Search className="h-3.5 w-3.5 text-indigo-200" />
-                        <span>🔍 Analyse Approfondie API-Football & Compos</span>
+                        <span>🔍 Analyse API-Football & Compos</span>
                       </button>
                     </div>
 
                   </div>
+
+                  {/* Conflict Alert Banner if detected */}
+                  {matchConflict && (
+                    <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-600/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs animate-fadeIn">
+                      <div className="flex items-start sm:items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5 sm:mt-0" />
+                        <div>
+                          <span className="font-bold text-rose-300">Conflit Intra-Galerie Détecté : </span>
+                          <span className="text-slate-300">
+                            {matchConflict.homePlayers.map(p => p.displayName).join(', ')} ({matchConflict.homeTeam}) affronte {matchConflict.awayPlayers.map(p => p.displayName).join(', ')} ({matchConflict.awayTeam})
+                          </span>
+                        </div>
+                      </div>
+                      {matchConflict.hasGkConflict ? (
+                        <span className="text-[10px] font-black text-rose-200 bg-rose-900/90 px-2.5 py-1 rounded-lg border border-rose-500/60 shrink-0">
+                          ⚠️ Risque Annulation Clean Sheet
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-amber-200 bg-amber-900/60 px-2 py-0.5 rounded border border-amber-600/60 shrink-0">
+                          Duel de possession
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tactical Weather Impact Alert if notable */}
+                  {weatherTacticalNote && (
+                    <div className={`p-2.5 rounded-xl border flex items-center gap-2 text-xs ${weatherTacticalNote.color}`}>
+                      <CloudSun className="h-3.5 w-3.5 shrink-0" />
+                      <span className="font-semibold">{weatherTacticalNote.label}</span>
+                    </div>
+                  )}
 
                   {/* Direct Unified Bookmaker & Match Analysis Matrix (Zero Redundancy) */}
                   <div className="space-y-3 bg-slate-950/90 rounded-2xl border border-slate-800/80 p-3.5 sm:p-4 shadow-inner">
@@ -1369,6 +1590,8 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                         const projected = breakdown.projectedScore;
                         const isStarter = p.status === 'STARTER';
                         const bonusPct = getCardTotalBonus(p);
+                        const l5 = p.scores?.l5 || 0;
+                        const diffVsL5 = projected - l5;
 
                         return (
                           <button
@@ -1401,9 +1624,9 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
                                 <span className="font-black text-emerald-300 bg-emerald-500/20 px-1 rounded" title="Total projeté (Base + Bonus)">= {projected} pts</span>
                               </div>
 
-                              {/* L5 Score */}
-                              <span className="text-[10px] text-slate-400 font-semibold">
-                                L5: <strong className="text-slate-200">{p.scores?.l5 || 0}</strong>
+                              {/* Diff vs L5 */}
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${diffVsL5 >= 0 ? 'text-emerald-400 bg-emerald-950/50' : 'text-slate-400 bg-slate-900'}`} title="Différence par rapport à la moyenne L5">
+                                {diffVsL5 >= 0 ? `+${diffVsL5.toFixed(1)}` : diffVsL5.toFixed(1)} vs L5
                               </span>
 
                               {/* Match Odds pill */}
@@ -1471,6 +1694,48 @@ export const MatchupCenter: React.FC<MatchupCenterProps> = ({ cards, gameWeek, o
           kickoffDate={selectedMatchForModal.kickoffDate}
           galleryPlayers={selectedMatchForModal.players}
           onClose={() => setSelectedMatchForModal(null)}
+          onOpenScout={onOpenScout}
+        />
+      )}
+
+      {/* Match Head-to-Head Comparator Modal */}
+      {isH2HModalOpen && (
+        <MatchH2HComparatorModal
+          fixtures={allFixtures.map(f => ({
+            key: `${f.club}_${f.opponent}_${f.isHome ? 'h' : 'a'}`,
+            club: f.club,
+            opponent: f.opponent,
+            isHome: f.isHome,
+            competition: f.competition,
+            kickoffDate: f.kickoffDate,
+            kickoffFormatted: f.kickoffFormatted || formatKickoffDate(f.kickoffDate),
+            homeWinOdds: f.homeWinOdds || (f.isHome ? f.winOdds : f.lossOdds),
+            drawOdds: f.drawOdds || 3.40,
+            awayWinOdds: f.awayWinOdds || (f.isHome ? f.lossOdds : f.winOdds),
+            homeWinProb: f.isHome ? f.winProb : f.lossProb,
+            drawProb: f.drawProb || 28,
+            awayWinProb: f.isHome ? f.lossProb : f.winProb,
+            winOdds: f.winOdds || 2.00,
+            winProb: f.winProb || 50,
+            cleanSheetProb: f.cleanSheetProb || 30,
+            goalExpectancy: typeof f.goalExpectancy === 'number' ? f.goalExpectancy : 1.4,
+            players: f.players || [],
+            weather: weatherMap[f.club] ? {
+              temp: weatherMap[f.club].temp,
+              description: weatherMap[f.club].description,
+              wind: weatherMap[f.club].wind,
+              city: weatherMap[f.club].city || f.club,
+            } : undefined,
+          }))}
+          allCards={cards}
+          initialMatchA={h2hInitialMatchA || undefined}
+          initialMatchB={h2hInitialMatchB || undefined}
+          strategy={strategy}
+          onClose={() => {
+            setIsH2HModalOpen(false);
+            setH2hInitialMatchA(null);
+            setH2hInitialMatchB(null);
+          }}
           onOpenScout={onOpenScout}
         />
       )}
