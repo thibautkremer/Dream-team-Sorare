@@ -2624,12 +2624,10 @@ export function generateFourDistinctLineups(
   strategy: StrategyType = 'BALANCED',
   gameWeek: number = getCurrentGameWeekNumber(),
   filters: LineupOptimizationFilters = {},
-  initialUsedCardIds: Set<string> = new Set<string>(),
-  initialUsedPlayerKeys: Set<string> = new Set<string>()
+  initialUsedCardIds: Set<string> = new Set<string>()
 ): Lineup[] {
   const lineups: Lineup[] = [];
   const usedCardIds = new Set<string>(initialUsedCardIds);
-  const usedPlayerKeys = new Set<string>(initialUsedPlayerKeys);
 
   const strategies: { name: string; type: StrategyType }[] = [
     { name: 'Compo 1', type: 'BALANCED' },
@@ -2641,18 +2639,17 @@ export function generateFourDistinctLineups(
   for (let i = 0; i < 4; i++) {
     const s = strategies[i];
     
-    // Optimiser la composition en passant les cartes déjà utilisées par les compos précédentes/verrouillées
-    let lineup = optimizeLineup(cards, s.type, gameWeek, filters, usedCardIds, usedPlayerKeys);
+    // On passe un Set vide pour usedPlayerKeys pour ne pas interdire l'utilisation d'une autre carte d'un même joueur
+    let lineup = optimizeLineup(cards, s.type, gameWeek, filters, usedCardIds, new Set<string>());
     lineup.name = s.name;
     
     // Assurer l'unicité stricte des 5 joueurs au sein de la composition
     lineup.slots = sanitizeLineupNoDuplicatePlayers(lineup.slots, cards);
 
-    // Enregistrer les cartes utilisées pour exclure de la composition suivante
+    // Enregistrer UNIQUEMENT les cartes utilisées pour exclure de la composition suivante
     Object.values(lineup.slots).forEach((c) => {
       if (c) {
         usedCardIds.add(c.id);
-        usedPlayerKeys.add(getPlayerUniqueKey(c));
       }
     });
     
@@ -2674,7 +2671,6 @@ export function sanitizeAllCompositionsNoDuplicates(
   }
 
   const usedCardIds = new Set<string>();
-  const usedPlayerKeys = new Set<string>();
   let cleanedCount = 0;
 
   // Pass 1: Enregistrer en priorité les compositions verrouillées par l'utilisateur
@@ -2683,7 +2679,6 @@ export function sanitizeAllCompositionsNoDuplicates(
       Object.values(comp.slots).forEach(c => {
         if (c) {
           usedCardIds.add(c.id);
-          usedPlayerKeys.add(getPlayerUniqueKey(c));
         }
       });
     }
@@ -2700,18 +2695,16 @@ export function sanitizeAllCompositionsNoDuplicates(
     (['gk', 'def', 'mid', 'fwd', 'extra'] as const).forEach(slotKey => {
       const card = newSlots[slotKey];
       if (card) {
-        const pKey = getPlayerUniqueKey(card);
         if (isLockedCompo) {
           // Déjà enregistré lors du pass 1
         } else {
-          if (usedCardIds.has(card.id) || usedPlayerKeys.has(pKey)) {
+          if (usedCardIds.has(card.id)) {
             // Doublon inter-compositions détecté !
             newSlots[slotKey] = null;
             cleanedCount++;
             compoModified = true;
           } else {
             usedCardIds.add(card.id);
-            usedPlayerKeys.add(pKey);
           }
         }
       }

@@ -18,6 +18,8 @@ interface PitchPageProps {
   onSelectComposition: (index: number) => void;
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
+  onClearCompo?: (index: number) => void;
+  onClearSlot?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   onImportSorareLineups?: () => void;
   onReplacePlayerInCompo?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => void;
   alerts?: NonStarterAlert[];

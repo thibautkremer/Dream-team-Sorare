@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download, BellRing, Radio, Target } from 'lucide-react';
+import { Sparkles, Crown, Shield, ArrowRightLeft, Eye, AlertTriangle, AlertCircle, CheckCircle2, ChevronRight, Activity, Flame, Zap, Award, Filter, ChevronDown, ChevronUp, Calendar, Percent, Send, Share2, Scale, Swords, Users, ShieldCheck, Lock, Unlock, Download, BellRing, Radio, Target, Trash2 } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType, SlotPosition, LineupOptimizationFilters, NonStarterAlert, StartingXIPlayerInfo } from '../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, getPlayerRecentMatchAnalysis, getLineupOpponentConflicts, getLineupClubStacks, areOpponents, isSameClub, getPlayerUniqueKey } from '../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars, getCardTotalBonus } from '../utils/sorareSlug';
@@ -25,6 +25,8 @@ interface PitchViewProps {
   onSelectComposition: (index: number) => void;
   onExportLineup?: (lineup: Lineup) => void;
   onToggleLockCompo?: (index: number) => void;
+  onClearCompo?: (index: number) => void;
+  onClearSlot?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   onImportSorareLineups?: () => void;
   onReplacePlayerInCompo?: (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra', player: SorareCard) => void;
   alerts?: NonStarterAlert[];
@@ -48,6 +50,8 @@ export const PitchView: React.FC<PitchViewProps> = ({
   onSelectComposition,
   onExportLineup,
   onToggleLockCompo,
+  onClearCompo,
+  onClearSlot,
   onImportSorareLineups,
   onReplacePlayerInCompo,
   alerts = [],
@@ -202,6 +206,7 @@ export const PitchView: React.FC<PitchViewProps> = ({
           onSelectComposition(compoIndex);
           setQuickSwapSlot({ slot, compoIndex });
         }}
+        onClearSlot={onClearSlot ? ((slot) => onClearSlot(compoIndex, slot)) : undefined}
         playerStatusMap={playerStatusMap}
       />
     );
@@ -1032,6 +1037,21 @@ export const PitchView: React.FC<PitchViewProps> = ({
                         {comp.isLocked ? <Lock className="h-3 w-3 text-amber-400" /> : <Unlock className="h-3 w-3" />}
                         <span>{comp.isLocked ? 'Verrouillée' : 'Verrouiller'}</span>
                       </button>
+
+                      {/* Clear Compo Button */}
+                      {onClearCompo && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClearCompo(idx);
+                          }}
+                          className="ml-2 px-2 py-0.5 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 hover:border-rose-500/40 transition flex items-center"
+                          title="Vider cette composition"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
 
                       <span className="text-[11px] text-slate-400 ml-auto md:ml-2">
                         {isPitchOpen ? '▼ Masquer' : '▶ Terrain'}

@@ -255,6 +255,79 @@ export default function App() {
     });
   };
 
+  const handleClearCompo = (index: number) => {
+    setCompositions(comps => {
+      const copy = [...comps];
+      if (copy[index]) {
+        copy[index] = {
+          ...copy[index],
+          slots: { gk: null, def: null, mid: null, fwd: null, extra: null },
+          projectedTotal: 0,
+          projectedTotalWithCaptain: 0,
+          captainSlot: 'gk',
+          isManuallyEdited: true,
+        };
+        showToast(`Compo ${index + 1} vidée avec succès.`, 'info');
+      }
+      if (index === selectedCompoIndex) {
+        setLineup(copy[index]);
+      }
+      return copy;
+    });
+  };
+
+  const handleClearSlot = (compoIndex: number, slot: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => {
+    setCompositions(comps => {
+      const copy = [...comps];
+      const comp = copy[compoIndex];
+      if (comp) {
+        const newSlots = { ...comp.slots, [slot]: null };
+        
+        // Recalculate totals
+        const getSlotPlayerScore = (c: SorareCard | null) => {
+          if (!c) return 0;
+          return calculatePlayerProjectedScore(c, comp.strategy || strategy, cards).projectedScore;
+        };
+
+        const baseSum = (
+          getSlotPlayerScore(newSlots.gk) +
+          getSlotPlayerScore(newSlots.def) +
+          getSlotPlayerScore(newSlots.mid) +
+          getSlotPlayerScore(newSlots.fwd) +
+          getSlotPlayerScore(newSlots.extra)
+        );
+
+        let capBonus = 0;
+        let capSlot = comp.captainSlot;
+        
+        // If we clear the captain, try to assign a new one, or set to a valid default
+        if (capSlot === slot || !newSlots[capSlot]) {
+            const availableSlots = (['gk', 'def', 'mid', 'fwd', 'extra'] as const).filter(s => newSlots[s] !== null);
+            capSlot = availableSlots.length > 0 ? availableSlots[0] : 'gk';
+        }
+
+        const capPlayer = newSlots[capSlot];
+        if (capPlayer) {
+            capBonus = Math.round(getSlotPlayerScore(capPlayer) * 0.20 * 10) / 10;
+        }
+
+        copy[compoIndex] = {
+          ...comp,
+          slots: newSlots,
+          captainSlot: capSlot,
+          projectedTotal: Math.round(baseSum * 10) / 10,
+          projectedTotalWithCaptain: Math.round((baseSum + capBonus) * 10) / 10,
+          isManuallyEdited: true,
+        };
+
+        if (compoIndex === selectedCompoIndex) {
+          setLineup(copy[compoIndex]);
+        }
+      }
+      return copy;
+    });
+  };
+
   const handleUpdateLineup = (updatedLineup: Lineup | ((prev: Lineup) => Lineup)) => {
     setLineup(prev => {
       const next = typeof updatedLineup === 'function' ? updatedLineup(prev) : updatedLineup;
@@ -618,15 +691,13 @@ export default function App() {
   const handleOptimizeAI = async (strategy: StrategyType = 'BALANCED') => {
     setIsOptimizing(true);
     try {
-      // 1. Extraire les cartes et joueurs des compositions VERROUILLÉES pour ne pas réutiliser leurs joueurs
+      // 1. Extraire les cartes des compositions VERROUILLÉES pour ne pas réutiliser les mêmes cartes
       const lockedUsedCardIds = new Set<string>();
-      const lockedUsedPlayerKeys = new Set<string>();
       compositions.forEach((comp) => {
         if (comp && comp.isLocked && comp.slots) {
           Object.values(comp.slots).forEach((c) => {
             if (c) {
               lockedUsedCardIds.add(c.id);
-              lockedUsedPlayerKeys.add(getPlayerUniqueKey(c));
             }
           });
         }
@@ -704,7 +775,7 @@ export default function App() {
           };
 
           // Générer 4 équipes distinctes en tenant compte des joueurs verrouillés
-          const otherLineups = generateFourDistinctLineups(cards, strategy, gameWeek, filters, lockedUsedCardIds, lockedUsedPlayerKeys);
+          const otherLineups = generateFourDistinctLineups(cards, strategy, gameWeek, filters, lockedUsedCardIds);
           const fourTeams = [
             { ...primaryLineup, name: 'Compo 1' },
             { ...(otherLineups[1] || otherLineups[0]), name: 'Compo 2' },
@@ -736,18 +807,16 @@ export default function App() {
     } catch (e: any) {
       console.warn('Fallback to deterministic 4 SO5 lineups with filters', e);
       const lockedUsedCardIds = new Set<string>();
-      const lockedUsedPlayerKeys = new Set<string>();
       compositions.forEach((comp) => {
         if (comp && comp.isLocked && comp.slots) {
           Object.values(comp.slots).forEach((c) => {
             if (c) {
               lockedUsedCardIds.add(c.id);
-              lockedUsedPlayerKeys.add(getPlayerUniqueKey(c));
             }
           });
         }
       });
-      const fourTeams = generateFourDistinctLineups(cards, strategy, gameWeek, filters, lockedUsedCardIds, lockedUsedPlayerKeys);
+      const fourTeams = generateFourDistinctLineups(cards, strategy, gameWeek, filters, lockedUsedCardIds);
       setCompositions(prevComps => {
         const merged = fourTeams.map((newCompo, idx) => {
           const existing = prevComps[idx];
@@ -769,13 +838,12 @@ export default function App() {
     }
   };
 
-  // Retire un joueur de toutes les autres compositions s'il y est déjà aligné (Garantie Règle Unicité)
+  // Retire une carte de toutes les autres compositions si elle y est déjà alignée (Garantie Règle Unicité de Carte)
   const removePlayerFromOtherCompositions = (
     compositionsList: Lineup[],
     player: SorareCard,
     targetCompoIndex: number
   ): { updatedCompositions: Lineup[]; removedFromIndex: number | null } => {
-    const pKey = getPlayerUniqueKey(player);
     let removedFromIndex: number | null = null;
 
     const updatedCompositions = compositionsList.map((comp, idx) => {
@@ -786,7 +854,7 @@ export default function App() {
 
       (['gk', 'def', 'mid', 'fwd', 'extra'] as const).forEach(slotKey => {
         const slotVal = newSlots[slotKey];
-        if (slotVal && (slotVal.id === player.id || getPlayerUniqueKey(slotVal) === pKey)) {
+        if (slotVal && slotVal.id === player.id) {
           newSlots[slotKey] = null;
           modified = true;
           removedFromIndex = idx;
@@ -1197,6 +1265,8 @@ export default function App() {
             onSelectComposition={handleSelectComposition}
             onExportLineup={(l) => setExportLineupTarget(l)}
             onToggleLockCompo={handleToggleLockCompo}
+            onClearCompo={handleClearCompo}
+            onClearSlot={handleClearSlot}
             onImportSorareLineups={handleImportSorareLineups}
             onReplacePlayerInCompo={handleReplacePlayerInCompo}
             alerts={startingXIAlerts}

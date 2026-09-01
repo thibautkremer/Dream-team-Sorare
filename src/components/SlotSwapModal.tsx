@@ -81,7 +81,6 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
         if (p) {
           const info = { compoName: comp.name || `Compo ${idx + 1}`, compoIndex: idx };
           map.set(p.id, info);
-          map.set(getPlayerUniqueKey(p), info);
         }
       });
     });
@@ -92,7 +91,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
     return cards.map(card => {
       const opposingPlayer = otherTeamPlayers.find(other => areOpponents(card, other));
       const teammates = otherTeamPlayers.filter(other => isSameClub(card.club?.name, other.club?.name));
-      const alignedInOther = otherCompositionsMap.get(card.id) || otherCompositionsMap.get(getPlayerUniqueKey(card));
+      const alignedInOther = otherCompositionsMap.get(card.id);
 
       return {
         card,
@@ -507,7 +506,7 @@ export const SlotSwapModal: React.FC<SlotSwapModalProps> = ({ slot, cards, filte
                   onClick={() => {
                     if (alignedInOther) {
                       const confirmTransfer = window.confirm(
-                        `🔒 Règle Unicité :\n\nCe joueur (${card.displayName}) est actuellement aligné dans la ${alignedInOther.compoName}.\n\nUne même carte ne peut pas être alignée dans 2 compositions différentes.\n\nSouhaitez-vous le transférer dans cette composition ? (Il sera automatiquement retiré de la ${alignedInOther.compoName}).`
+                        `🔒 Règle Unicité :\n\nCette carte de ${card.displayName} est actuellement alignée dans la ${alignedInOther.compoName}.\n\nUne même carte ne peut pas être alignée dans 2 compositions différentes.\n\nSouhaitez-vous la transférer dans cette composition ? (Elle sera automatiquement retirée de la ${alignedInOther.compoName}).`
                       );
                       if (!confirmTransfer) return;
                     }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Trophy, Shield, Star, Award, ArrowRightLeft, Crown, Swords, Users, AlertTriangle, AlertCircle, CheckCircle2, Target, Calendar, BarChart2 } from 'lucide-react';
+import { Sparkles, Trophy, Shield, Star, Award, ArrowRightLeft, Crown, Swords, Users, AlertTriangle, AlertCircle, CheckCircle2, Target, Calendar, BarChart2, Trash2 } from 'lucide-react';
 import { SorareCard, Lineup, StrategyType } from '../../types';
 import { calculatePlayerProjectedScore, getPlayerWinProbability, formatKickoffDate, areOpponents, isSameClub } from '../../utils/optimizer';
 import { formatPositionBadge, formatStatusBadge, formatInjuryBadge, getPlayerStars, getCardTotalBonus, getCardBonusBreakdown } from '../../utils/sorareSlug';
@@ -15,6 +15,7 @@ interface RealisticPitchCardProps {
   onSetCaptain: (slotKey: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   onOpenScout: (card: SorareCard) => void;
   onQuickSwap: (slotKey: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
+  onClearSlot?: (slotKey: 'gk' | 'def' | 'mid' | 'fwd' | 'extra') => void;
   playerStatusMap?: Record<string, any>;
 }
 
@@ -29,6 +30,7 @@ export const RealisticPitchCard: React.FC<RealisticPitchCardProps> = ({
   onSetCaptain,
   onOpenScout,
   onQuickSwap,
+  onClearSlot,
   playerStatusMap = {},
 }) => {
   const [showBonusDetail, setShowBonusDetail] = useState(false);
@@ -249,18 +251,34 @@ export const RealisticPitchCard: React.FC<RealisticPitchCardProps> = ({
         </div>
       )}
 
-      {/* Quick Swap Trigger */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onQuickSwap(slotKey);
-        }}
-        className="mt-2 flex w-full items-center justify-center gap-1 rounded-lg border border-slate-800 bg-slate-900/90 py-1 text-[9.5px] font-extrabold text-slate-300 hover:border-emerald-500/40 hover:bg-slate-800 hover:text-emerald-400 transition"
-      >
-        <ArrowRightLeft className="h-2.5 w-2.5" />
-        <span>Remplacer</span>
-      </button>
+      {/* Actions (Quick Swap & Clear) */}
+      <div className="mt-2 flex w-full gap-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onQuickSwap(slotKey);
+          }}
+          className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-slate-800 bg-slate-900/90 py-1 text-[9.5px] font-extrabold text-slate-300 hover:border-emerald-500/40 hover:bg-slate-800 hover:text-emerald-400 transition"
+        >
+          <ArrowRightLeft className="h-2.5 w-2.5" />
+          <span>Remplacer</span>
+        </button>
+
+        {onClearSlot && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClearSlot(slotKey);
+            }}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/90 text-slate-400 hover:border-rose-500/40 hover:bg-rose-950/40 hover:text-rose-400 transition"
+            title="Vider ce poste"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+      </div>
     </div>
   );
 };

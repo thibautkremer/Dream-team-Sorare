@@ -43,17 +43,16 @@ export const PitchQuickSwapDrawer: React.FC<PitchQuickSwapDrawerProps> = ({
       .map(([_, p]) => p as SorareCard);
 
     const otherIds = new Set(otherPlayers.map(p => p.id));
+    const otherPlayerKeys = new Set(otherPlayers.map(p => getPlayerUniqueKey(p)));
 
     // Cartes utilisées dans d'autres compositions (Règle : 1 carte = 1 seule compo)
     const otherCompositionsCardIds = new Set<string>();
-    const otherCompositionsPlayerKeys = new Set<string>();
     if (compositions && selectedCompoIndex !== undefined) {
       compositions.forEach((comp, idx) => {
         if (idx !== selectedCompoIndex && comp?.slots) {
           Object.values(comp.slots).forEach(p => {
             if (p) {
               otherCompositionsCardIds.add(p.id);
-              otherCompositionsPlayerKeys.add(getPlayerUniqueKey(p));
             }
           });
         }
@@ -62,8 +61,8 @@ export const PitchQuickSwapDrawer: React.FC<PitchQuickSwapDrawerProps> = ({
 
     return cards
       .filter(card => {
-        if (otherIds.has(card.id)) return false;
-        if (otherCompositionsCardIds.has(card.id) || otherCompositionsPlayerKeys.has(getPlayerUniqueKey(card))) return false;
+        if (otherIds.has(card.id) || otherPlayerKeys.has(getPlayerUniqueKey(card))) return false;
+        if (otherCompositionsCardIds.has(card.id)) return false;
         if (slot === 'gk' && card.positionCode !== 'GK') return false;
         if (slot === 'def' && card.positionCode !== 'DEF') return false;
         if (slot === 'mid' && card.positionCode !== 'MID') return false;
