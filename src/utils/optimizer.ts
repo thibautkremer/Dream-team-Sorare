@@ -979,9 +979,9 @@ export function calculatePlayerProjectedScore(
 
   const calcCleanAverage = (scores: number[] | undefined, count: number, fallback = 40) => {
     if (!scores || scores.length === 0) return fallback;
-    const played = scores.filter(s => s != null && s > 0).slice(0, count);
-    if (played.length === 0) return fallback;
-    return Math.round((played.reduce((a, b) => a + b, 0) / played.length) * 10) / 10;
+    const evaluated = scores.slice(0, count).map(s => (s != null && s >= 0 ? s : 0));
+    if (evaluated.length === 0) return fallback;
+    return Math.round((evaluated.reduce((a, b) => a + b, 0) / evaluated.length) * 10) / 10;
   };
 
   let l5 = card.scores?.l5 || calcCleanAverage(card.scores?.last5Scores, 5, 40);
@@ -1017,8 +1017,7 @@ export function calculatePlayerProjectedScore(
       // Calcul officiel Sorare avec sommation stricte des scores de matchs de club et lissage bayésien
       const baselineScore = (card.scores?.l40 && card.scores.l40 > 0) ? card.scores.l40 : (card.scores?.l15 || 48);
       const calcAverage = (scores: number[], count: number, fallback: number = baselineScore) => {
-        const playedScores = scores.filter(s => typeof s === 'number' && s > 0);
-        const slice = playedScores.slice(0, count);
+        const slice = scores.slice(0, count).map(s => (typeof s === 'number' && s >= 0 ? s : 0));
         if (slice.length === 0) return fallback;
         const totalSum = slice.reduce((a, b) => a + b, 0);
         const rawAvg = totalSum / slice.length;
@@ -1137,7 +1136,7 @@ export function calculatePlayerProjectedScore(
   const isProvenClubPlayer = !upcomingIsNational && (
     isClubGk 
       ? (card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 55 || (card.scores?.l40 ?? 0) >= 35 || (card.scores?.l15 ?? 0) >= 35 || (recentStats.playedLastMatch && recentStats.playedCountL5 >= 2))
-      : (l15 >= 38 || l40 >= 38 || (card.scores?.l15 || 0) >= 38 || (card.scores?.l40 || 0) >= 38 || card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 60)
+      : ((l15 >= 50 && (card.scores?.l15PlayedRate ?? 100) >= 60) || (l40 >= 45 && (card.scores?.l40PlayedRate ?? 100) >= 60) || card.status === 'STARTER' || (card.starterConfidence ?? 0) >= 65)
   );
 
   if (isProvenClubPlayer) {
@@ -1273,9 +1272,9 @@ export function calculatePlayerProjectedScore(
     l5Adjusted = l40 + 10 + (excess * formCredibility);
     regressionPenalty = l5 - l5Adjusted;
   } else if (l40 > 0 && isRegularStarter && card.injuryStatus === 'FIT' && l5 < l40 - 15) {
-    // Si L5 a chuté brutalement suite à 2 matchs malchanceux chez un titulaire sain, amortissement haussier
+    // Si L5 a chuté brutalement suite à 2 matchs malchanceux chez un titulaire sain, amortissement haussier adouci
     const deficit = (l40 - 15) - l5;
-    const bounceBackCredibility = recentStats.playedCountL5 >= 4 ? 0.45 : 0.25;
+    const bounceBackCredibility = recentStats.playedCountL5 >= 4 ? 0.20 : 0.10;
     l5Adjusted = l5 + (deficit * bounceBackCredibility);
   }
 
@@ -1306,25 +1305,28 @@ export function calculatePlayerProjectedScore(
   const titularizationPct = (card as any).titularizationPercentage ?? (card.starterConfidence ?? 0);
   pStarter = Math.max(0, Math.min(100, titularizationPct)) / 100;
 
-  if (playerStatus === 'STARTER') {
-    pStarter = Math.max(pStarter, 0.85);
-    pSub = (1 - pStarter) * 0.5;
-    starterImpactLabel = 'Titulaire garanti (Probable Starter)';
-  } else if (playerStatus === 'REGULAR') {
-    pStarter = Math.max(pStarter, 0.65);
-    pSub = Math.max(0.15, (1 - pStarter) * 0.6);
-    starterImpactLabel = 'Joueur régulier (Rotation possible)';
+  let fallbackPStarter = 0;
+  if (playerStatus === 'STARTER') fallbackPStarter = 0.75;
+  else if (playerStatus === 'REGULAR') fallbackPStarter = 0.50;
+  else if (playerStatus === 'SUPER_SUBSTITUTE') fallbackPStarter = 0.20;
+  else if (playerStatus === 'SUBSTITUTE' || playerStatus === 'BENCH') fallbackPStarter = 0.05;
+
+  if (pStarter === 0 && fallbackPStarter > 0) {
+    pStarter = fallbackPStarter;
+  }
+
+  if (playerStatus === 'STARTER' || playerStatus === 'REGULAR') {
+    pSub = (1 - pStarter) * 0.4;
+    starterImpactLabel = playerStatus === 'STARTER' ? 'Titulaire' : 'Joueur régulier';
   } else if (playerStatus === 'SUPER_SUBSTITUTE') {
-    pStarter = Math.min(pStarter, 0.35);
-    pSub = Math.max(0.50, (1 - pStarter) * 0.8);
+    pSub = Math.max(0.40, (1 - pStarter) * 0.6);
     starterImpactLabel = 'Super Sub (Impact en sortie de banc)';
   } else if (playerStatus === 'SUBSTITUTE' || playerStatus === 'BENCH') {
-    pStarter = Math.min(pStarter, 0.15);
-    pSub = Math.max(0.30, (1 - pStarter) * 0.5);
+    pSub = Math.max(0.20, (1 - pStarter) * 0.4);
     starterImpactLabel = 'Remplaçant (Entrée incertaine)';
   } else {
-    pStarter = Math.min(pStarter, 0.05);
-    pSub = 0.10;
+    pStarter = 0;
+    pSub = 0.05;
     starterImpactLabel = 'Non régulier / Réserviste';
   }
 
@@ -1498,9 +1500,9 @@ export function calculatePlayerProjectedScore(
   // Set Pieces (Tireurs de coups de pied arrêtés)
   const setPieceRole = detectSetPieceRole(card);
   let setPieceBonus = 0;
-  if (setPieceRole.isPenaltyTaker) setPieceBonus += 3.5;
-  if (setPieceRole.isCornerTaker) setPieceBonus += 2.0;
-  if (setPieceRole.isFreeKickTaker) setPieceBonus += 1.2;
+  if (setPieceRole.isPenaltyTaker) setPieceBonus += 1.7;
+  if (setPieceRole.isCornerTaker) setPieceBonus += 1.0;
+  if (setPieceRole.isFreeKickTaker) setPieceBonus += 0.6;
 
   // Conditions climatiques
   let weatherBonus = 0;
@@ -1511,20 +1513,20 @@ export function calculatePlayerProjectedScore(
   if (fixture?.bookmaker) {
     const bm = fixture.bookmaker;
     if (bm.anytimeScorerOdds && bm.anytimeScorerOdds < 4.5) {
-      bookmakerActionBonus += Math.max(0, (5.0 - bm.anytimeScorerOdds) * 0.25);
+      bookmakerActionBonus += Math.max(0, (5.0 - bm.anytimeScorerOdds) * 0.12);
     }
     if (bm.anytimeAssistOdds && bm.anytimeAssistOdds < 5.5) {
-      bookmakerActionBonus += Math.max(0, (6.0 - bm.anytimeAssistOdds) * 0.20);
+      bookmakerActionBonus += Math.max(0, (6.0 - bm.anytimeAssistOdds) * 0.10);
     }
   }
 
   let advancedStatsBonus = 0;
   if (card.scores?.xG && card.scores.xG > 0) {
-    // Si forte production xG (ex: > 0.4) mais peu de réussite, régression positive attendue
-    advancedStatsBonus += Math.min(2.5, card.scores.xG * 1.5);
+    // Si forte production xG (ex: > 0.4) mais peu de réussite, régression positive attendue (impact adouci)
+    advancedStatsBonus += Math.min(1.25, card.scores.xG * 0.75);
   }
   if (card.scores?.xA && card.scores.xA > 0) {
-    advancedStatsBonus += Math.min(2.0, card.scores.xA * 1.2);
+    advancedStatsBonus += Math.min(1.0, card.scores.xA * 0.6);
   }
 
   // Dynamique Collective (Team Form) & NOUVEAUTÉ : Dépendances et Arbitrage
