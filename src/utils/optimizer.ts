@@ -242,11 +242,12 @@ export function compareCandidates(a: ScoreBreakdown, b: ScoreBreakdown): number 
 }
 
 /**
- * Vérifie si le match d'une carte se déroule au plus tard le jour de maxDateStr (inclus).
+ * Vérifie si le match d'une carte se déroule au plus tard le jour de maxDateStr (inclus) et à l'heure maxTimeStr (optionnel).
  * @param card Carte Sorare
  * @param maxDateStr Date limite au format "YYYY-MM-DD" (ex: "2026-08-22")
+ * @param maxTimeStr Heure limite au format "HH:MM" (ex: "20:00")
  */
-export function isCardMatchOnOrBeforeDate(card: SorareCard, maxDateStr?: string | null): boolean {
+export function isCardMatchOnOrBeforeDate(card: SorareCard, maxDateStr?: string | null, maxTimeStr?: string | null): boolean {
   if (!maxDateStr || maxDateStr.trim() === '') return true;
   
   const fixture = card.upcomingFixture;
@@ -263,21 +264,33 @@ export function isCardMatchOnOrBeforeDate(card: SorareCard, maxDateStr?: string 
       return matchDay <= maxDateStr;
     }
 
-    // Calcul de la fin de journée de la date sélectionnée (23:59:59.999 UTC)
     const [year, month, day] = maxDateStr.split('-').map(Number);
     if (!year || !month || !day) return true;
 
-    const limitEndOfDayUtc = Date.UTC(year, month - 1, day, 23, 59, 59, 999);
+    // Use specific time if provided, else 23:59:59.999
+    let hours = 23;
+    let minutes = 59;
     
-    // Si le timestamp du match dépasse la fin de journée UTC de la date sélectionnée
-    if (d.getTime() > limitEndOfDayUtc) {
+    if (maxTimeStr && maxTimeStr.includes(':')) {
+       const [h, m] = maxTimeStr.split(':').map(Number);
+       if (!isNaN(h) && !isNaN(m)) {
+          hours = h;
+          minutes = m;
+       }
+    }
+
+    const limitUtc = Date.UTC(year, month - 1, day, hours, minutes, 59, 999);
+    
+    if (d.getTime() > limitUtc) {
       return false;
     }
 
-    // Vérification de la date UTC (YYYY-MM-DD)
-    const isoDateUtc = d.toISOString().substring(0, 10);
-    if (isoDateUtc > maxDateStr) {
-      return false;
+    // Si pas d'heure max spécifiée, on vérifie la date globale
+    if (!maxTimeStr) {
+      const isoDateUtc = d.toISOString().substring(0, 10);
+      if (isoDateUtc > maxDateStr) {
+        return false;
+      }
     }
 
     return true;
@@ -1960,35 +1973,66 @@ export function optimizeLineup(
       return currentList.some(p => p.id === card.id || getPlayerUniqueKey(p) === pKey);
     };
 
+    // Logique pour favoriser les joueurs proches dans le temps (max 1h)
+    let rootTime: number | null = null;
+    if (rootGk) {
+       const ptStr = rootGk.upcomingFixture?.kickoffDate || rootGk.upcomingFixture?.matchDate;
+       if (ptStr) {
+          const pt = new Date(ptStr).getTime();
+          if (!isNaN(pt)) rootTime = pt;
+       }
+    }
+
+    const timeSpreadPenalty = (card: SorareCard) => {
+      if (!filters.maxKickoffSpreadHours || rootTime === null) return 0;
+      const ptStr = card.upcomingFixture?.kickoffDate || card.upcomingFixture?.matchDate;
+      if (!ptStr) return 0;
+      const pt = new Date(ptStr).getTime();
+      if (isNaN(pt)) return 0;
+      const spreadHours = Math.abs(pt - rootTime) / (1000 * 60 * 60);
+      if (spreadHours > filters.maxKickoffSpreadHours) {
+        return -100; // Heavily penalize, but don't strictly exclude if no other choice
+      }
+      return 0;
+    };
+
+    const sortCandidatesWithTime = (a: ScoreBreakdown, b: ScoreBreakdown) => {
+       const penaltyA = timeSpreadPenalty(a.player);
+       const penaltyB = timeSpreadPenalty(b.player);
+       if (penaltyA !== penaltyB) {
+           return penaltyB - penaltyA; // 0 > -100
+       }
+       return compareCandidates(a, b);
+    };
+
     // DEF
     const defCandidates = finalEligible
       .filter(sc => sc.player.positionCode === 'DEF' && !isPlayerAlreadyUsed(sc.player))
-      .sort(compareCandidates);
+      .sort(sortCandidatesWithTime);
     const selectedDef = selectPlayerForPosition(defCandidates, currentList, false, 4.0);
     if (selectedDef) currentList.push(selectedDef);
 
     // MID
     const midCandidates = finalEligible
       .filter(sc => sc.player.positionCode === 'MID' && !isPlayerAlreadyUsed(sc.player))
-      .sort(compareCandidates);
+      .sort(sortCandidatesWithTime);
     const selectedMid = selectPlayerForPosition(midCandidates, currentList, false, 4.0);
     if (selectedMid) currentList.push(selectedMid);
 
     // FWD
     const fwdCandidates = finalEligible
       .filter(sc => sc.player.positionCode === 'FWD' && !isPlayerAlreadyUsed(sc.player))
-      .sort(compareCandidates);
+      .sort(sortCandidatesWithTime);
     const selectedFwd = selectPlayerForPosition(fwdCandidates, currentList, false, 4.0);
     if (selectedFwd) currentList.push(selectedFwd);
 
     // EXTRA : le meilleur joueur restant parmi DEF, MID, FWD (ou respectant preferredExtraPosition)
     let outfieldCandidates = finalEligible
       .filter(sc => sc.player.positionCode !== 'GK' && !isPlayerAlreadyUsed(sc.player));
-
     if (filters.preferredExtraPosition && filters.preferredExtraPosition !== 'AUTO') {
       outfieldCandidates = outfieldCandidates.filter(sc => sc.player.positionCode === filters.preferredExtraPosition);
     }
-    outfieldCandidates.sort(compareCandidates);
+    outfieldCandidates.sort(sortCandidatesWithTime);
     const selectedExtra = selectPlayerForPosition(outfieldCandidates, currentList, false, 4.0);
 
     const tempSlots = {

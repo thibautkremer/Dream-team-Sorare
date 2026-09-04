@@ -76,6 +76,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     | 'DS_L15_DESC'
   >('L5_DESC');
   const [maxMatchDate, setMaxMatchDate] = useState<string>('');
+  const [maxMatchTime, setMaxMatchTime] = useState<string>('');
   const [minWinProb, setMinWinProb] = useState<number>(0);
   const [minProjectedScore, setMinProjectedScore] = useState<number>(0);
   const [minAasL15, setMinAasL15] = useState<number>(0);
@@ -249,7 +250,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
       let matchesDate = true;
       if (maxMatchDate) {
-        matchesDate = isCardMatchOnOrBeforeDate(card, maxMatchDate);
+        matchesDate = isCardMatchOnOrBeforeDate(card, maxMatchDate, maxMatchTime);
       }
       
       let matchesWin = true;
@@ -912,28 +913,30 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         {/* Filters Grid (Always visible on desktop) */}
         <div className="mt-3 hidden md:grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
           
-          {/* Date Filter (Match jusqu'au...) */}
-          <div className="relative">
+          {/* Date & Time Filter (Match jusqu'au...) */}
+          <div className="relative flex gap-1">
             <input
               type="date"
               value={maxMatchDate}
               onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
-              onClick={(e) => {
-                try {
-                  e.currentTarget.showPicker?.();
-                } catch {
-                  // Browser opens picker natively
-                }
-              }}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
               title="Match inclus jusqu'à cette date"
             />
             {maxMatchDate && (
+              <input
+                type="time"
+                value={maxMatchTime}
+                onChange={(e) => { setMaxMatchTime(e.target.value); setCurrentPage(1); }}
+                className="w-[80px] rounded-xl border border-slate-800 bg-slate-950 px-2 py-2 text-xs text-slate-300 focus:border-emerald-400 focus:outline-none"
+                title="Heure limite (optionnelle)"
+              />
+            )}
+            {(maxMatchDate || maxMatchTime) && (
               <button
                 type="button"
-                onClick={() => { setMaxMatchDate(''); setCurrentPage(1); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs bg-slate-800 rounded px-1"
-                title="Effacer le filtre date"
+                onClick={() => { setMaxMatchDate(''); setMaxMatchTime(''); setCurrentPage(1); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs bg-slate-800 rounded px-1 z-10"
+                title="Effacer le filtre date et heure"
               >
                 ✕
               </button>
@@ -1060,7 +1063,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             <span className="text-[11px] text-slate-400">Filtres actifs :</span>
             {maxMatchDate && (
               <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
-                Match &le; {maxMatchDate}
+                Match &le; {maxMatchDate} {maxMatchTime && `à ${maxMatchTime}`}
               </span>
             )}
             {selectedStarsFilter !== 'ALL' && (
@@ -1145,7 +1148,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           )}
           {maxMatchDate && (
             <span className="rounded-md bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
-              Match &le; {maxMatchDate}
+              Match &le; {maxMatchDate} {maxMatchTime && `à ${maxMatchTime}`}
             </span>
           )}
           {selectedStarsFilter !== 'ALL' && (
@@ -2609,15 +2612,28 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 </label>
               </div>
 
-              {/* Max Date */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1">Match inclus jusqu'au (Date limite)</label>
-                <input
-                  type="date"
-                  value={maxMatchDate}
-                  onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
-                  className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
-                />
+              {/* Max Date & Time */}
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="block text-[11px] font-bold text-slate-400 mb-1">Match inclus jusqu'au</label>
+                  <input
+                    type="date"
+                    value={maxMatchDate}
+                    onChange={(e) => { setMaxMatchDate(e.target.value); setCurrentPage(1); }}
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                  />
+                </div>
+                {maxMatchDate && (
+                  <div className="w-[100px]">
+                    <label className="block text-[11px] font-bold text-slate-400 mb-1">Heure</label>
+                    <input
+                      type="time"
+                      value={maxMatchTime}
+                      onChange={(e) => { setMaxMatchTime(e.target.value); setCurrentPage(1); }}
+                      className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2.5 text-xs text-slate-200"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Win Chance */}

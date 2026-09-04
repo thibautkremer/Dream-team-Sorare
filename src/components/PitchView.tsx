@@ -934,6 +934,16 @@ export const PitchView: React.FC<PitchViewProps> = ({
                     />
                     <span className="text-xs font-medium text-slate-200">Domicile uniquement (🏠)</span>
                   </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer" title="Favorise les joueurs dont les matchs commencent presque à la même heure (max 1h d'écart)">
+                    <input
+                      type="checkbox"
+                      checked={filters.maxKickoffSpreadHours === 1}
+                      onChange={(e) => setFilters(prev => ({ ...prev, maxKickoffSpreadHours: e.target.checked ? 1 : undefined }))}
+                      className="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 h-4 w-4"
+                    />
+                    <span className="text-xs font-medium text-slate-200">Matchs groupés (Max 1h d'écart)</span>
+                  </label>
                 </div>
 
                 <button

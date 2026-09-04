@@ -242,6 +242,8 @@ export interface LineupOptimizationFilters {
   onlyWithUpcomingMatch?: boolean; // Must have an upcoming fixture in GW
   stackClub?: boolean; // Favor teammates / team stack
   maxMatchDate?: string; // YYYY-MM-DD
+  maxMatchTime?: string; // HH:MM
+  maxKickoffSpreadHours?: number; // e.g. 1 to favor players starting close together
   minWinProb?: number; // 25, 30, 35, 40, 45, 50
   scoringFocus?: ScoringFocus; // 'BALANCED' | 'AAS' | 'DS'
 }
